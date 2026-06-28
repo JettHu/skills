@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-SKILL_DIR="$ROOT/skills/workflow/agent-worktree"
+SKILL_DIR="$ROOT/skills/engineering/agent-worktree"
 SCRIPT="$SKILL_DIR/scripts/bootstrap-agent-worktree.sh"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/agent-worktree-test.XXXXXX")"
 

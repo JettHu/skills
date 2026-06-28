@@ -29,17 +29,16 @@ The installer creates symlinks, so `git pull` in this repository updates install
 
 ## Skills
 
-### Orchestration
+### Engineering
 
 | Skill | Purpose |
 | --- | --- |
-| [`ultra`](skills/orchestration/ultra/SKILL.md) | Wrap agent skills with adaptive pre-exploration, structured post-review, and `/ultra solve` issue execution. |
+| [`ultra`](skills/engineering/ultra/SKILL.md) | Wrap agent skills with adaptive pre-exploration, structured post-review, and `/ultra solve` issue execution. |
+| [`agent-worktree`](skills/engineering/agent-worktree/SKILL.md) | Create, verify, repair, and remove Agent-ready Git worktrees with local-only payload. |
 
-### Workflow
+### In Progress
 
-| Skill | Purpose |
-| --- | --- |
-| [`agent-worktree`](skills/workflow/agent-worktree/SKILL.md) | Create, verify, repair, and remove Agent-ready Git worktrees with local-only payload. |
+Experimental skills belong in `skills/in-progress/` until their trigger wording, workflow, and validation story are stable enough to move into a permanent category.
 
 ## Commands
 
@@ -65,13 +64,11 @@ tests/agent-worktree.sh
 
 ```text
 skills/
-├── orchestration/
+├── engineering/
+│   ├── agent-worktree/
 │   └── ultra/
-└── workflow/
-    └── agent-worktree/
+└── in-progress/
 ```
-
-This follows the catalog shape used by [mattpocock/skills](https://github.com/mattpocock/skills), while keeping OpenAI/Codex metadata such as `agents/openai.yaml` where useful.
 
 ## Existing Single-Skill Repos
 
