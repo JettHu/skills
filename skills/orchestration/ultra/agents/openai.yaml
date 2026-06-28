@@ -1,0 +1,6 @@
+interface:
+  display_name: "Ultra"
+  short_description: "Wrap skills with exploration and review"
+  default_prompt: "Use $ultra to run an agent skill with adaptive pre-exploration and post-review, or use /ultra solve for AFK-ready issues."
+policy:
+  allow_implicit_invocation: true

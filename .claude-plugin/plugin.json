@@ -1,0 +1,7 @@
+{
+  "name": "jett-skills",
+  "skills": [
+    "./skills/orchestration/ultra",
+    "./skills/workflow/agent-worktree"
+  ]
+}
