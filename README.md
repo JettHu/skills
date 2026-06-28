@@ -6,7 +6,15 @@ This repository is a catalog: each installable skill lives under `skills/<catego
 
 ## Quick Start
 
-Clone the catalog and link all skills into the local skill directories:
+Install from GitHub with the skills CLI:
+
+```bash
+npx skills@latest add JettHu/skills
+```
+
+The installer shows grouped choices such as `Jett Skills` and `Personal`.
+
+For local development, clone the catalog and link all skills into the local skill directories:
 
 ```bash
 gh repo clone JettHu/skills ~/workspace/skills
@@ -34,7 +42,12 @@ The installer creates symlinks, so `git pull` in this repository updates install
 | Skill | Purpose |
 | --- | --- |
 | [`ultra`](skills/engineering/ultra/SKILL.md) | Wrap agent skills with adaptive pre-exploration, structured post-review, and `/ultra solve` issue execution. |
-| [`agent-worktree`](skills/engineering/agent-worktree/SKILL.md) | Create, verify, repair, and remove Agent-ready Git worktrees with local-only payload. |
+
+### Personal
+
+| Skill | Purpose |
+| --- | --- |
+| [`agent-worktree`](skills/personal/agent-worktree/SKILL.md) | Create, verify, repair, and remove Agent-ready Git worktrees with local-only payload. |
 
 ### In Progress
 
@@ -65,8 +78,9 @@ tests/agent-worktree.sh
 ```text
 skills/
 ├── engineering/
-│   ├── agent-worktree/
 │   └── ultra/
+├── personal/
+│   └── agent-worktree/
 └── in-progress/
 ```
 

@@ -1,0 +1,21 @@
+{
+  "metadata": {
+    "pluginRoot": "./"
+  },
+  "plugins": [
+    {
+      "name": "jett-skills",
+      "source": "./",
+      "skills": [
+        "./skills/engineering/ultra"
+      ]
+    },
+    {
+      "name": "personal",
+      "source": "./",
+      "skills": [
+        "./skills/personal/agent-worktree"
+      ]
+    }
+  ]
+}

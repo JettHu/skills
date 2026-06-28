@@ -1,7 +1,6 @@
 {
   "name": "jett-skills",
   "skills": [
-    "./skills/engineering/ultra",
-    "./skills/engineering/agent-worktree"
+    "./skills/engineering/ultra"
   ]
 }

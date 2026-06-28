@@ -4,6 +4,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 python3 - "$REPO" <<'PY'
+import json
 import pathlib
 import re
 import sys
@@ -59,6 +60,58 @@ for skill_file in skill_files:
 
     if not description:
         errors.append(f"{rel}: missing description")
+
+def valid_manifest_path(value):
+    return isinstance(value, str) and value.startswith("./")
+
+def skill_path_exists(base, value, manifest_rel):
+    if not valid_manifest_path(value):
+        errors.append(f"{manifest_rel}: path must start with ./, got: {value!r}")
+        return
+
+    target = (base / value).resolve()
+    try:
+        target.relative_to(repo.resolve())
+    except ValueError:
+        errors.append(f"{manifest_rel}: path escapes repo: {value}")
+        return
+
+    if not (target / "SKILL.md").is_file():
+        errors.append(f"{manifest_rel}: missing SKILL.md for path: {value}")
+
+plugin_json = repo / ".claude-plugin" / "plugin.json"
+if plugin_json.is_file():
+    manifest_rel = plugin_json.relative_to(repo)
+    manifest = json.loads(plugin_json.read_text(encoding="utf-8"))
+    if not manifest.get("name"):
+        errors.append(f"{manifest_rel}: missing name")
+    for value in manifest.get("skills", []):
+        skill_path_exists(repo, value, manifest_rel)
+
+marketplace_json = repo / ".claude-plugin" / "marketplace.json"
+if marketplace_json.is_file():
+    manifest_rel = marketplace_json.relative_to(repo)
+    manifest = json.loads(marketplace_json.read_text(encoding="utf-8"))
+    plugin_root = manifest.get("metadata", {}).get("pluginRoot", "./")
+    if not valid_manifest_path(plugin_root):
+        errors.append(f"{manifest_rel}: metadata.pluginRoot must start with ./")
+        plugin_root = "./"
+
+    for plugin in manifest.get("plugins", []):
+        if not plugin.get("name"):
+            errors.append(f"{manifest_rel}: plugin missing name")
+        source = plugin.get("source", "./")
+        if not valid_manifest_path(source):
+            errors.append(f"{manifest_rel}: plugin source must start with ./")
+            source = "./"
+        plugin_base = (repo / plugin_root / source).resolve()
+        try:
+            plugin_base.relative_to(repo.resolve())
+        except ValueError:
+            errors.append(f"{manifest_rel}: plugin base escapes repo: {source}")
+            plugin_base = repo
+        for value in plugin.get("skills", []):
+            skill_path_exists(plugin_base, value, manifest_rel)
 
 if errors:
     for error in errors:
