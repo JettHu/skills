@@ -2,7 +2,7 @@
 set -euo pipefail
 
 DEFAULT_CONFIG_PATH=".agents/agent-worktree.env"
-DEFAULT_WORKTREE_ROOT="../.agent-worktrees"
+DEFAULT_WORKTREE_ROOT_PARENT="../.agent-worktrees"
 DEFAULT_BRANCH_PREFIX="work/"
 DEFAULT_BASE_REF="HEAD"
 DEFAULT_PAYLOAD_CANDIDATES="AGENTS.md AGENTS.override.md CLAUDE.md CONTEXT.md docs/adr .agents/skills docs/agents docs/local .scratch .env .env.local .env.development .env.development.local .env.test .env.test.local .env.production .env.production.local .envrc logs log cache .cache tmp temp .tmp node_modules .venv venv env .tox .nox .pytest_cache .mypy_cache .ruff_cache vendor .bundle target .gradle"
@@ -318,17 +318,22 @@ print_payload_suggestion() {
   detect_default_payload
 }
 
-WORKTREE_ROOT="$DEFAULT_WORKTREE_ROOT"
+default_worktree_root() {
+  printf '%s/%s\n' "$DEFAULT_WORKTREE_ROOT_PARENT" "$(basename "$source_root")"
+}
+
+WORKTREE_ROOT="$(default_worktree_root)"
 BRANCH_PREFIX="$DEFAULT_BRANCH_PREFIX"
 BASE_REF="$DEFAULT_BASE_REF"
 PAYLOAD="$(detect_default_payload)"
 MODE="$DEFAULT_MODE"
 
 load_config() {
-  local detected_payload
+  local default_root detected_payload
 
+  default_root="$(default_worktree_root)"
   detected_payload="$(detect_default_payload)"
-  WORKTREE_ROOT="$DEFAULT_WORKTREE_ROOT"
+  WORKTREE_ROOT="$default_root"
   BRANCH_PREFIX="$DEFAULT_BRANCH_PREFIX"
   BASE_REF="$DEFAULT_BASE_REF"
   PAYLOAD="$detected_payload"
@@ -339,7 +344,7 @@ load_config() {
     source "$config_file"
   fi
 
-  WORKTREE_ROOT="${WORKTREE_ROOT:-$DEFAULT_WORKTREE_ROOT}"
+  WORKTREE_ROOT="${WORKTREE_ROOT:-$default_root}"
   BRANCH_PREFIX="${BRANCH_PREFIX:-$DEFAULT_BRANCH_PREFIX}"
   BASE_REF="${BASE_REF:-$DEFAULT_BASE_REF}"
   PAYLOAD="${PAYLOAD:-$detected_payload}"
@@ -442,7 +447,7 @@ ensure_target_exclude() {
 }
 
 create_default_config() {
-  local config_worktree_root config_branch_prefix config_base_ref config_payload config_mode
+  local config_worktree_root config_branch_prefix config_base_ref config_payload config_mode default_root
 
   mkdir -p "$(dirname "$config_file")"
 
@@ -454,7 +459,8 @@ create_default_config() {
     return
   fi
 
-  config_worktree_root="${worktree_root_arg:-$DEFAULT_WORKTREE_ROOT}"
+  default_root="$(default_worktree_root)"
+  config_worktree_root="${worktree_root_arg:-$default_root}"
   config_branch_prefix="${branch_prefix_arg:-$DEFAULT_BRANCH_PREFIX}"
   config_base_ref="${base_ref_arg:-$DEFAULT_BASE_REF}"
   if [[ -n "$payload_arg" ]]; then
