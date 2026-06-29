@@ -7,7 +7,11 @@
       "name": "jett-skills",
       "source": "./",
       "skills": [
-        "./skills/engineering/ultra"
+        "./skills/engineering/ultra",
+        "./skills/engineering/ultra-diagnose",
+        "./skills/engineering/ultra-solve",
+        "./skills/engineering/ultra-to-issues",
+        "./skills/engineering/ultra-to-prd"
       ]
     },
     {

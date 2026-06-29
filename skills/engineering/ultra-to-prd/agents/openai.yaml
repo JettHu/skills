@@ -1,0 +1,6 @@
+interface:
+  display_name: "Ultra To PRD"
+  short_description: "Run to-prd through ultra"
+  default_prompt: "Use $ultra-to-prd to turn the current conversation, plan, or requirements into a PRD with ultra's preparation."
+policy:
+  allow_implicit_invocation: false
