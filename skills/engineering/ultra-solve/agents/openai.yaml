@@ -1,0 +1,6 @@
+interface:
+  display_name: "Ultra Solve"
+  short_description: "Run ultra solve"
+  default_prompt: "Use $ultra-solve to execute ready-for-agent issues through ultra solve."
+policy:
+  allow_implicit_invocation: false

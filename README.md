@@ -42,6 +42,10 @@ The installer creates symlinks, so `git pull` in this repository updates install
 | Skill | Purpose |
 | --- | --- |
 | [`ultra`](skills/engineering/ultra/SKILL.md) | Wrap agent skills with adaptive pre-exploration, structured post-review, and `/ultra solve` issue execution. |
+| [`ultra-diagnose`](skills/engineering/ultra-diagnose/SKILL.md) | Completion-friendly entry for `/ultra diagnose`. |
+| [`ultra-solve`](skills/engineering/ultra-solve/SKILL.md) | Completion-friendly entry for `/ultra solve`. |
+| [`ultra-to-issues`](skills/engineering/ultra-to-issues/SKILL.md) | Completion-friendly entry for `/ultra to-issues`. |
+| [`ultra-to-prd`](skills/engineering/ultra-to-prd/SKILL.md) | Completion-friendly entry for `/ultra to-prd`. |
 
 ### Personal
 
@@ -78,7 +82,11 @@ tests/agent-worktree.sh
 ```text
 skills/
 ├── engineering/
-│   └── ultra/
+│   ├── ultra/
+│   ├── ultra-diagnose/
+│   ├── ultra-solve/
+│   ├── ultra-to-issues/
+│   └── ultra-to-prd/
 ├── personal/
 │   └── agent-worktree/
 └── in-progress/
