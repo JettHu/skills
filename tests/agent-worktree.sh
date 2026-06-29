@@ -33,6 +33,12 @@ assert_exists() {
   [[ -e "$1" || -L "$1" ]] || fail "expected path to exist: $1"
 }
 
+assert_file_contains() {
+  local file="$1"
+  local expected="$2"
+  grep -Fq "$expected" "$file" || fail "expected $file to contain: $expected"
+}
+
 git_commit_all() {
   git -c user.name='Agent Worktree Tests' \
     -c user.email='agent-worktree-tests@example.invalid' \
@@ -59,6 +65,28 @@ assert_payload_contains() {
   local payload
   payload="$(run_script_from "$repo" suggest-payload)"
   contains_word "$payload" "$expected" || fail "expected payload to contain $expected; got: $payload"
+}
+
+test_default_project_root_fixture() {
+  log "default project worktree root"
+  local repo="$TMP_DIR/default-repo"
+  local target="$TMP_DIR/.agent-worktrees/default-repo/default-repo-context-sync"
+
+  create_repo "$repo"
+  mkdir -p "$repo/.scratch/context"
+  printf 'tracked\n' > "$repo/README.md"
+  printf 'local context\n' > "$repo/.scratch/context/task.md"
+  (cd "$repo" && git add README.md && git_commit_all 'init default fixture')
+
+  run_script_from "$repo" init --payload ".scratch" >/dev/null
+  assert_file_contains "$repo/.agents/agent-worktree.env" 'WORKTREE_ROOT="../.agent-worktrees/default-repo"'
+
+  run_script_from "$repo" create "context sync" >/dev/null
+
+  assert_exists "$target/.scratch/context/task.md"
+  run_script_from "$repo" verify "$target" >/dev/null
+  run_script_from "$repo" remove "context sync" --delete-branch >/dev/null
+  [[ ! -e "$target" ]] || fail "expected removed worktree: $target"
 }
 
 test_js_fixture() {
@@ -145,6 +173,7 @@ if [[ -n "${QUICK_VALIDATE:-}" ]]; then
   python "$QUICK_VALIDATE" "$SKILL_DIR"
 fi
 
+test_default_project_root_fixture
 test_js_fixture
 test_python_fixture
 
