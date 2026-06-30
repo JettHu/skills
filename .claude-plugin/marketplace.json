@@ -18,7 +18,8 @@
       "name": "personal",
       "source": "./",
       "skills": [
-        "./skills/personal/agent-worktree"
+        "./skills/personal/agent-worktree",
+        "./skills/personal/hermes-tweet"
       ]
     }
   ]
