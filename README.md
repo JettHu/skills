@@ -54,6 +54,7 @@ The installer creates symlinks, so `git pull` in this repository updates install
 | Skill | Purpose |
 | --- | --- |
 | [`agent-worktree`](skills/personal/agent-worktree/SKILL.md) | Scaffold Agent-ready Git worktree hooks with local payload and dependency strategy config. |
+| [`hermes-tweet`](skills/personal/hermes-tweet/SKILL.md) | Use Hermes Agent to explore, read, summarize, and draft gated X/Twitter actions through Hermes Tweet. |
 
 ### In Progress
 
@@ -98,7 +99,8 @@ skills/
 │   ├── ultra-to-spec/
 │   └── ultra-to-tickets/
 ├── personal/
-│   └── agent-worktree/
+│   ├── agent-worktree/
+│   └── hermes-tweet/
 └── in-progress/
 ```
 
