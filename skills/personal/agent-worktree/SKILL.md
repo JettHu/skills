@@ -1,6 +1,6 @@
 ---
 name: agent-worktree
-description: Bootstrap Agent-ready git worktrees with local-only payload. Use when creating, entering, repairing, verifying, or removing a worktree for an Agent, subagent, or ultra solve, especially when local instructions, docs/local, docs/agents, .scratch, repo-local skills, env files, logs, caches, databases, node_modules, Python virtualenvs, or other dependency/build caches are missing.
+description: Bootstrap Agent-ready git worktrees with local-only payload. Use when a user or workflow needs to create, enter, repair, verify, or remove a worktree that should carry local instructions, docs/local, docs/agents, .scratch, repo-local skills, env files, logs, caches, databases, node_modules, Python virtualenvs, or other dependency/build caches.
 ---
 
 # Agent Worktree
