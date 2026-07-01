@@ -25,6 +25,14 @@ bash scripts/bootstrap-agent-worktree.sh create "<name>"
 
 Completion criterion: the script reports `ready: branch=<branch> path=<path>`.
 
+When another skill already owns worktree identity, treat `create` as helper mode and pass the exact values it chose:
+
+```bash
+bash scripts/bootstrap-agent-worktree.sh create "<name>" --path "<path>" --branch "<branch>" --base-ref "<base-ref>"
+```
+
+In helper mode, do not rename, regroup, rebase, merge, clean up, or reinterpret the candidate. The caller owns workflow semantics; this skill only creates, bootstraps, verifies, or removes the requested worktree.
+
 Use `remove` when the user wants to clean up a named Agent worktree:
 
 ```bash
@@ -130,6 +138,8 @@ Use `bootstrap` only for an existing worktree created outside this skill:
 bash scripts/bootstrap-agent-worktree.sh bootstrap <target-worktree>
 ```
 
+This is the preferred helper path when another workflow already ran `git worktree add`.
+
 Use `verify` only when diagnosing an existing worktree:
 
 ```bash
@@ -142,6 +152,7 @@ Legacy shorthand still means `bootstrap <target-worktree>`.
 
 - Do not commit `.agents/agent-worktree.env` or generated payload paths unless the user explicitly changes the local-only policy.
 - Prefer `create` for normal Agent worktrees. Use `bootstrap` only when the worktree already exists and does not follow this skill's name/path convention.
+- Treat exact `--path`, `--branch`, and `--base-ref` from another skill as an integration contract, not a naming suggestion.
 - Do not run bare `remove`; use `remove <name>` or explicit `remove --current`.
 - Dirty worktrees are not removed unless the user passes `--force`.
 - Branches are not deleted unless the user passes `--delete-branch`; unmerged branches are protected unless the user also passes `--force`.

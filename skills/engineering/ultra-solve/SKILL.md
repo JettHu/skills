@@ -1,6 +1,7 @@
 ---
 name: ultra-solve
-description: Explicit completion-friendly wrapper for /ultra solve. Use only when the user invokes ultra-solve, asks for the ultra solve flow, or writes /ultra solve.
+description: Completion-friendly wrapper for /ultra solve.
+disable-model-invocation: true
 ---
 
 # Ultra Solve

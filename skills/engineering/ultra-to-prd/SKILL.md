@@ -1,6 +1,7 @@
 ---
 name: ultra-to-prd
-description: Explicit completion-friendly wrapper for /ultra to-prd. Use only when the user invokes ultra-to-prd, asks for the ultra-enhanced to-prd flow, or writes /ultra to-prd.
+description: Completion-friendly wrapper for /ultra to-prd.
+disable-model-invocation: true
 ---
 
 # Ultra To PRD

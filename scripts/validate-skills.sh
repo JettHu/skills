@@ -133,6 +133,17 @@ done < <(
     -print0
 )
 
+while IFS= read -r -d '' script; do
+  python3 -m py_compile "$script"
+  printf 'valid python: %s\n' "${script#"$REPO"/}"
+done < <(
+  find "$REPO/skills" "$REPO/tests" \
+    -type f \
+    -name '*.py' \
+    -not -path '*/node_modules/*' \
+    -print0
+)
+
 if [[ -n "${QUICK_VALIDATE:-}" ]]; then
   while IFS= read -r -d '' skill_md; do
     python "$QUICK_VALIDATE" "$(dirname "$skill_md")"

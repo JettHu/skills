@@ -1,6 +1,7 @@
 ---
 name: ultra-to-issues
-description: Explicit completion-friendly wrapper for /ultra to-issues. Use only when the user invokes ultra-to-issues, asks for the ultra-enhanced to-issues flow, or writes /ultra to-issues.
+description: Completion-friendly wrapper for /ultra to-issues.
+disable-model-invocation: true
 ---
 
 # Ultra To Issues
