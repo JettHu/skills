@@ -184,6 +184,28 @@ write_record "$REPO/.scratch/solve-records/20260701-1540-recent-merged.md" \
   "20260701-1540-recent-merged" merged solve/20260701-1540-recent-merged "$RECENT_HEAD" \
   ".scratch/caption/issues/01.md" "." true "Recent merged" passed "auto-merged"
 
+for n in $(seq 1 11); do
+  printf -v minute "%02d" "$n"
+  recent_record="$REPO/.scratch/solve-records/20260701-17${minute}-recent-${minute}.md"
+  write_record "$recent_record" \
+    "20260701-17${minute}-recent-${minute}" merged solve/20260701-1540-recent-merged "$RECENT_HEAD" \
+    ".scratch/caption/issues/01.md" "." true "Recent merged ${minute}" passed "auto-merged"
+  python3 - "$recent_record" "$minute" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+minute = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+text = text.replace(
+    "cleanup_done: true\n---",
+    f"cleanup_done: true\nmerged_at: 2026-07-01T17:{minute}:00+08:00\n---",
+    1,
+)
+path.write_text(text, encoding="utf-8")
+PY
+done
+
 write_record "$REPO/.scratch/solve-records/20260701-1545-low-risk-unavailable.md" \
   "20260701-1545-low-risk-unavailable" open solve/20260701-1545-low-risk-unavailable "$LOW_RISK_HEAD" \
   ".scratch/caption/issues/01.md" "../wt-ready" false "Low risk unavailable check" unavailable ready \
@@ -232,6 +254,19 @@ cat >"$REPO/.scratch/solve-records/20260701-1550-malformed.md" <<'EOF'
 # Missing frontmatter
 This malformed record should not hide valid records.
 EOF
+
+write_record "$REPO/.scratch/solve-records/20260701-1551-wrong-kind.md" \
+  "20260701-1551-wrong-kind" open solve/20260701-1432-caption-fix "$READY_HEAD" \
+  ".scratch/caption/issues/01.md" "../wt-ready" false "Wrong kind" passed ready
+python3 - "$REPO/.scratch/solve-records/20260701-1551-wrong-kind.md" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace("kind: solve_record", "kind: issue_note", 1)
+path.write_text(text, encoding="utf-8")
+PY
 
 python3 - "$REPO" "$SOLVE_RECORDS_SCRIPT" <<'PY'
 import importlib.util
@@ -366,6 +401,8 @@ def parse_record(path):
     missing = sorted(REQUIRED - set(data))
     if missing:
         return {"path": rel, "malformed": "missing " + ",".join(missing), "text": text}
+    if data["kind"] != "solve_record":
+        return {"path": rel, "malformed": f"invalid kind: {data['kind']}", "text": text}
     data["checks"] = status_line(section(text, "Checks"))
     data["merge"] = status_line(section(text, "Merge"))
     data["summary_status"] = status_line(section(text, "Summary"))
@@ -449,6 +486,18 @@ def has_low_risk_exception(record):
     return all(fragment in notes for fragment in required_evidence)
 
 
+def recent_sort_key(record_or_id):
+    if isinstance(record_or_id, str):
+        record = by_id[record_or_id]
+    else:
+        record = record_or_id
+    return (
+        record.get("merged_at") or record.get("created_at") or "",
+        record.get("id") or "",
+        record.get("path") or "",
+    )
+
+
 def dashboard(records):
     buckets = {
         "ready": [],
@@ -457,6 +506,7 @@ def dashboard(records):
         "recent": [],
         "stale_or_malformed": [],
     }
+    recent = []
     for record in records:
         if record.get("malformed"):
             buckets["stale_or_malformed"].append(record["path"])
@@ -472,13 +522,14 @@ def dashboard(records):
             buckets["cleanup"].append(record["id"])
             continue
         if record["state"] == "merged":
-            buckets["recent"].append(record["id"])
+            recent.append(record["id"])
             continue
         unavailable_low_risk = record["checks"] == "unavailable" and has_low_risk_exception(record)
         if record["merge"] == "ready" and (record["checks"] == "passed" or unavailable_low_risk):
             buckets["ready"].append(record["id"])
         else:
             buckets["manual"].append(record["id"])
+    buckets["recent"] = sorted(recent, key=recent_sort_key, reverse=True)[:10]
     return buckets
 
 
@@ -674,6 +725,10 @@ tool_select = {"matches": tool_module.select_records(tool_records, "caption fix"
 tool_merge_gate_ready = tool_module.merge_gate(repo, tool_by_id["20260701-1432-caption-fix"])
 tool_merge_gate_weak = tool_module.merge_gate(repo, tool_by_id["20260701-1546-weak-low-risk"])
 tool_cleanup_dirty = tool_module.cleanup_plan(repo, tool_by_id["20260701-1510-dirty-cleanup"])
+expected_recent = [
+    f"20260701-17{minute:02d}-recent-{minute:02d}"
+    for minute in range(11, 1, -1)
+]
 
 assert any(path.startswith(".scratch/caption/solve-records/") for path in [r["path"] for r in records])
 assert any(path.startswith(".scratch/solve-records/") for path in [r["path"] for r in records])
@@ -683,21 +738,32 @@ assert "20260701-1500-manual-contract" in buckets["manual"], buckets
 assert any("stale-ref" in item for item in buckets["stale_or_malformed"]), buckets
 assert any("sha-drift" in item for item in buckets["stale_or_malformed"]), buckets
 assert any("malformed" in item for item in buckets["stale_or_malformed"]), buckets
+assert any("wrong-kind" in item for item in buckets["stale_or_malformed"]), buckets
 assert any("body-conflict" in item for item in buckets["stale_or_malformed"]), buckets
 assert "20260701-1510-dirty-cleanup" in buckets["cleanup"], buckets
 assert "20260701-1515-unregistered-cleanup" in buckets["cleanup"], buckets
 assert "20260701-1520-unmerged-cleanup" in buckets["cleanup"], buckets
 assert "20260701-1530-branch-mismatch" in buckets["cleanup"], buckets
 assert "20260701-1531-branch-mismatch-real" in buckets["cleanup"], buckets
-assert "20260701-1540-recent-merged" in buckets["recent"], buckets
+assert buckets["recent"] == expected_recent, buckets["recent"]
+assert "20260701-1540-recent-merged" not in buckets["recent"], buckets
+assert "20260701-1551-wrong-kind" not in buckets["ready"] + buckets["manual"], buckets
 assert "20260701-1545-low-risk-unavailable" in buckets["ready"], buckets
 assert "20260701-1546-weak-low-risk" in buckets["manual"], buckets
 
 assert tool_dashboard["record_count"] == len(records)
 assert tool_dashboard_cli["record_count"] == len(records)
+tool_recent_ids = [item["id"] for item in tool_dashboard["buckets"]["recent"]]
+assert tool_recent_ids == expected_recent, tool_recent_ids
 tool_ready_ids = [item["id"] for item in tool_dashboard["buckets"]["ready"]]
 assert "20260701-1432-caption-fix" in tool_ready_ids, tool_dashboard["buckets"]["ready"]
 assert "20260701-1545-low-risk-unavailable" in tool_ready_ids, tool_dashboard["buckets"]["ready"]
+assert "20260701-1551-wrong-kind" not in tool_ready_ids, tool_dashboard["buckets"]["ready"]
+assert any(
+    item["id"] == "20260701-1551-wrong-kind"
+    and item.get("malformed") == "invalid kind: issue_note"
+    for item in tool_dashboard["buckets"]["stale_or_malformed"]
+), tool_dashboard["buckets"]["stale_or_malformed"]
 assert any(
     item["id"] == "20260701-1546-weak-low-risk"
     for item in tool_dashboard["buckets"]["manual"]
