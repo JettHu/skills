@@ -206,6 +206,24 @@ path.write_text(text, encoding="utf-8")
 PY
 done
 
+newer_merged_at_record="$REPO/.scratch/solve-records/20260701-1501-recent-newer-merged-at.md"
+write_record "$newer_merged_at_record" \
+  "20260701-1501-recent-newer-merged-at" merged solve/20260701-1540-recent-merged "$RECENT_HEAD" \
+  ".scratch/caption/issues/01.md" "." true "Recent newer merged_at" passed "auto-merged"
+python3 - "$newer_merged_at_record" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace(
+    "cleanup_done: true\n---",
+    "cleanup_done: true\nmerged_at: 2026-07-01T18:00:00+08:00\n---",
+    1,
+)
+path.write_text(text, encoding="utf-8")
+PY
+
 write_record "$REPO/.scratch/solve-records/20260701-1545-low-risk-unavailable.md" \
   "20260701-1545-low-risk-unavailable" open solve/20260701-1545-low-risk-unavailable "$LOW_RISK_HEAD" \
   ".scratch/caption/issues/01.md" "../wt-ready" false "Low risk unavailable check" unavailable ready \
@@ -725,9 +743,9 @@ tool_select = {"matches": tool_module.select_records(tool_records, "caption fix"
 tool_merge_gate_ready = tool_module.merge_gate(repo, tool_by_id["20260701-1432-caption-fix"])
 tool_merge_gate_weak = tool_module.merge_gate(repo, tool_by_id["20260701-1546-weak-low-risk"])
 tool_cleanup_dirty = tool_module.cleanup_plan(repo, tool_by_id["20260701-1510-dirty-cleanup"])
-expected_recent = [
+expected_recent = ["20260701-1501-recent-newer-merged-at"] + [
     f"20260701-17{minute:02d}-recent-{minute:02d}"
-    for minute in range(11, 1, -1)
+    for minute in range(11, 2, -1)
 ]
 
 assert any(path.startswith(".scratch/caption/solve-records/") for path in [r["path"] for r in records])
@@ -746,7 +764,9 @@ assert "20260701-1520-unmerged-cleanup" in buckets["cleanup"], buckets
 assert "20260701-1530-branch-mismatch" in buckets["cleanup"], buckets
 assert "20260701-1531-branch-mismatch-real" in buckets["cleanup"], buckets
 assert buckets["recent"] == expected_recent, buckets["recent"]
+assert buckets["recent"][0] == "20260701-1501-recent-newer-merged-at", buckets["recent"]
 assert "20260701-1540-recent-merged" not in buckets["recent"], buckets
+assert "20260701-1702-recent-02" not in buckets["recent"], buckets
 assert "20260701-1551-wrong-kind" not in buckets["ready"] + buckets["manual"], buckets
 assert "20260701-1545-low-risk-unavailable" in buckets["ready"], buckets
 assert "20260701-1546-weak-low-risk" in buckets["manual"], buckets
