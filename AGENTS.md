@@ -9,6 +9,10 @@ This repository is a skill catalog. Keep skill directories lean, keep reusable v
 - `.scratch/` is local issue and design working state; it is not committed by default.
 - `.evals/` stores durable validation and eval records that should survive beyond a single chat session.
 
+## Agent Communication
+
+- DO NOT send optional commentary. Keep status and final reports focused on requested work, evidence, blockers, and actionable next steps.
+
 ## Validation Policy
 
 Run deterministic tests for ordinary skill edits:
