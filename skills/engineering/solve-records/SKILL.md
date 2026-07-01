@@ -20,11 +20,21 @@ Use solve records as local markdown receipts for finished, checkable merge candi
 
 Mechanics are flexible; gates are not. Adapt commands, helper skills, preflight shape, and reporting detail to the runtime and repo evidence, but never skip live verification, manual-review triggers, required-check handling, or cleanup safety checks.
 
+Resolve `scripts/solve-records.py` relative to this skill directory, not relative to the target repo. When running from a repo shell, execute the bundled script by absolute path if needed, and pass the target checkout with `--repo`.
+
+Prefer one `dashboard` or `list` helper call per user request and reuse its JSON as a fact index. Avoid invoking the helper once per record unless a later live-verification or mutation gate specifically needs fresh target-specific evidence.
+
 ## 1. Dashboard
 
 With no prompt, list records only. Do not mutate Git, issues, branches, worktrees, or records.
 
-Discover records in both locations:
+Run the bundled read-only helper first when available:
+
+```bash
+python /path/to/solve-records/scripts/solve-records.py dashboard --repo . --json
+```
+
+Use the helper output as a fact index, not as permission to mutate. If the helper is unavailable or fails, fall back to manual discovery in both locations:
 
 - Feature-local: `.scratch/<feature>/solve-records/*.md`
 - Root-level: `.scratch/solve-records/*.md`
@@ -42,6 +52,14 @@ Show malformed records without hiding valid records. Completion criterion: every
 ## 2. Select
 
 With a prompt, infer the intent semantically instead of requiring strict subcommands.
+
+Use the helper for candidate lookup when available:
+
+```bash
+python /path/to/solve-records/scripts/solve-records.py select --repo . --query "<user wording>" --json
+```
+
+Treat helper matches as candidates. You still decide whether the user's latest wording selects one record, a bounded set, or an ambiguous set.
 
 Supported intents:
 
@@ -131,6 +149,7 @@ For explicit set operations, eligible records may merge while ineligible records
 Before mutating the base branch:
 
 - live-verify the record
+- use `merge-gate` from the helper when available, then independently apply the full gate
 - verify the base worktree is clean
 - dry-run or preflight the merge using a disposable worktree when practical
 - verify no manual-review trigger remains
@@ -166,6 +185,8 @@ Cleanup must pass all safety checks before removing anything:
 - verify the current branch equals record `head`
 - verify the worktree is clean
 - verify `head` is merged into `base` before deleting the branch
+
+Use `cleanup-plan` from the helper when available, then verify the reported facts before deleting anything.
 
 Then remove the worktree, run `git worktree prune`, and delete the branch with `git branch -d`. Use raw Git checks; `agent-worktree` may help when available but is not required.
 

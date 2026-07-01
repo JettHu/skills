@@ -44,7 +44,17 @@ Tracker updates should record state-relevant facts, not run logs. Use the tracke
 
 Group worktrees produce candidate changes. The coordinator owns integration and merge. A group worktree must not merge directly into the target branch.
 
+Normal completion is a clean committed candidate branch plus a solve record when finalization succeeds. Merge, push, deploy, and cleanup happen only when the user's latest wording explicitly asks for them or when a later solve-record command advances the candidate.
+
 Issues are assumed AFK-ready when they are in `ready-for-agent`: the issue body, acceptance criteria, and any agent brief are treated as approved input. Do not stop the whole batch to ask the user a question unless the issue selection or merge target is ambiguous and cannot be inferred safely.
+
+## Worktree Helper Boundary
+
+`/ultra solve` owns worktree identity and lifecycle semantics: issue grouping, base ref, branch name, worktree path, claim state, validation, integration, solve-record finalization, and merge gates.
+
+`agent-worktree` is an optional runtime helper for making the exact solve worktree Agent-ready. When available, solve may call it with solve-chosen identity such as `--path`, `--branch`, and `--base-ref`, or may call `bootstrap`/`verify` for an externally created worktree. The helper must not rename, regroup, rebase, merge, clean up, or reinterpret the solve candidate.
+
+If `agent-worktree` is unavailable, unsuitable for the current path, or not installed in the runtime, use raw `git worktree` commands and continue with the same user-facing solve workflow. Report the fallback briefly when it affects payload availability or validation.
 
 ## State Machine
 
@@ -166,6 +176,8 @@ Suggested names:
 - group branch: `solve/<timestamp>-<group-name>`
 - group worktree: `worktree-solve-<timestamp>-<group-name>`
 
+If using `agent-worktree`, pass the exact chosen branch, path, and base ref. If the helper cannot create or bootstrap that identity, first try raw Git for the same identity; if that also fails, mark only the affected issue/group with `tooling_unavailable`. Do not let the helper choose a different solve identity.
+
 For each issue in a group:
 
 1. Decide exploration scope:
@@ -263,6 +275,8 @@ Create a solve record only after a finished, reviewable merge candidate exists:
 Do not create solve records for claim-time state, in-progress attempts, missing requirements, failed required checks, or a human-required decision that prevents the candidate from being finished. If a finished candidate exists but needs human review before merge for product/API/security/data/architecture/rollout risk, create the record as `state: open` with `## Merge` set to `manual required`; do not auto-merge it.
 
 Checks marked `unavailable` block auto-merge unless the change is explicitly trivial and low-risk, and the record says why no meaningful check exists, why no manual-review trigger applies, and what evidence still supports the change.
+
+Do not clean up successful solve worktrees during ordinary finalization. The candidate branch and worktree remain review context until a merge/apply/land/ship or explicit cleanup request advances the solve record.
 
 During the same finalize step:
 

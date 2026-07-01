@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+SOLVE_RECORDS_SCRIPT="$REPO_ROOT/skills/engineering/solve-records/scripts/solve-records.py"
 TMPDIR_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_ROOT"' EXIT
 
@@ -231,12 +233,15 @@ cat >"$REPO/.scratch/solve-records/20260701-1550-malformed.md" <<'EOF'
 This malformed record should not hide valid records.
 EOF
 
-python3 - "$REPO" <<'PY'
+python3 - "$REPO" "$SOLVE_RECORDS_SCRIPT" <<'PY'
+import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 repo = Path(sys.argv[1]).resolve()
+tool = Path(sys.argv[2]).resolve()
 
 REQUIRED = {
     "id",
@@ -252,11 +257,16 @@ REQUIRED = {
     "cleanup_done",
 }
 
+COMMON_DIR_CACHE = {}
+REF_CACHE = {}
+REF_MAP_CACHE = {}
+REGISTERED_WORKTREES_CACHE = None
+
 
 def run_git(cwd, *args, check=True):
     result = subprocess.run(
         ["git", "-C", str(cwd), *args],
-        text=True,
+        universal_newlines=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -265,12 +275,51 @@ def run_git(cwd, *args, check=True):
     return result
 
 
+def common_dir_from_git_marker(cwd):
+    marker = cwd / ".git"
+    if marker.is_dir():
+        return marker.resolve()
+    if not marker.is_file():
+        return None
+
+    content = marker.read_text(encoding="utf-8").strip()
+    if not content.startswith("gitdir:"):
+        return None
+
+    gitdir = Path(content.split(":", 1)[1].strip())
+    if not gitdir.is_absolute():
+        gitdir = (cwd / gitdir).resolve()
+    else:
+        gitdir = gitdir.resolve()
+
+    commondir_file = gitdir / "commondir"
+    if commondir_file.is_file():
+        common = Path(commondir_file.read_text(encoding="utf-8").strip())
+        if not common.is_absolute():
+            common = (gitdir / common).resolve()
+        else:
+            common = common.resolve()
+        return common
+
+    if gitdir.parent.name == "worktrees":
+        return gitdir.parent.parent.resolve()
+    return gitdir
+
+
 def common_dir(cwd):
-    raw = run_git(cwd, "rev-parse", "--git-common-dir").stdout.strip()
-    path = Path(raw)
-    if not path.is_absolute():
-        path = Path(cwd) / path
-    return path.resolve()
+    cwd = Path(cwd).resolve()
+    cache_key = str(cwd)
+    if cache_key in COMMON_DIR_CACHE:
+        return COMMON_DIR_CACHE[cache_key]
+    path = common_dir_from_git_marker(cwd)
+    if path is None:
+        raw = run_git(cwd, "rev-parse", "--git-common-dir").stdout.strip()
+        path = Path(raw)
+        if not path.is_absolute():
+            path = cwd / path
+        path = path.resolve()
+    COMMON_DIR_CACHE[cache_key] = path
+    return path
 
 
 def section(text, name):
@@ -332,12 +381,55 @@ def discover():
     return [parse_record(path) for path in sorted(paths)]
 
 
+def ref_map():
+    if "value" in REF_MAP_CACHE:
+        return REF_MAP_CACHE["value"]
+    refs = {}
+    result = run_git(
+        repo,
+        "for-each-ref",
+        "--format=%(refname)%00%(refname:short)%00%(objectname)",
+        "refs/heads",
+        "refs/remotes",
+        "refs/tags",
+        check=False,
+    )
+    if result.returncode == 0:
+        for line in result.stdout.splitlines():
+            parts = line.split("\0")
+            if len(parts) != 3:
+                continue
+            full_name, short_name, sha = parts
+            refs[full_name] = sha
+            refs[short_name] = sha
+            if full_name.startswith("refs/heads/"):
+                refs[full_name[len("refs/heads/") :]] = sha
+            elif full_name.startswith("refs/remotes/"):
+                refs[full_name[len("refs/remotes/") :]] = sha
+            elif full_name.startswith("refs/tags/"):
+                refs[full_name[len("refs/tags/") :]] = sha
+    REF_MAP_CACHE["value"] = refs
+    return refs
+
+
+def resolve_ref(ref):
+    if ref in REF_CACHE:
+        return REF_CACHE[ref]
+    refs = ref_map()
+    if ref in refs:
+        REF_CACHE[ref] = (0, refs[ref])
+        return REF_CACHE[ref]
+    result = run_git(repo, "rev-parse", "--verify", ref, check=False)
+    REF_CACHE[ref] = (result.returncode, result.stdout.strip())
+    return REF_CACHE[ref]
+
+
 def ref_matches(record):
     for ref_key, sha_key in (("base", "base_sha"), ("head", "head_sha")):
-        result = run_git(repo, "rev-parse", "--verify", record[ref_key], check=False)
-        if result.returncode != 0:
+        returncode, live_sha = resolve_ref(record[ref_key])
+        if returncode != 0:
             return False, f"{record[ref_key]} missing"
-        if result.stdout.strip() != record[sha_key]:
+        if live_sha != record[sha_key]:
             return False, f"{ref_key} sha mismatch"
     return True, ""
 
@@ -427,8 +519,8 @@ def can_merge(record):
 def can_revalidate_base_only(record, live_base_sha, recorded_base_is_ancestor, preflight_clean, checks_rerun):
     if record.get("malformed"):
         return False
-    head_result = run_git(repo, "rev-parse", "--verify", record["head"], check=False)
-    if head_result.returncode != 0 or head_result.stdout.strip() != record["head_sha"]:
+    returncode, live_head_sha = resolve_ref(record["head"])
+    if returncode != 0 or live_head_sha != record["head_sha"]:
         return False
     if record["base_sha"] == live_base_sha:
         return True
@@ -460,11 +552,15 @@ def remote_boundary(record):
 
 
 def registered_worktrees():
+    global REGISTERED_WORKTREES_CACHE
+    if REGISTERED_WORKTREES_CACHE is not None:
+        return REGISTERED_WORKTREES_CACHE
     output = run_git(repo, "worktree", "list", "--porcelain").stdout.splitlines()
     paths = []
     for line in output:
         if line.startswith("worktree "):
             paths.append(Path(line.split(" ", 1)[1]).resolve())
+    REGISTERED_WORKTREES_CACHE = paths
     return paths
 
 
@@ -555,6 +651,30 @@ by_id = {record.get("id", record["path"]): record for record in records}
 buckets = dashboard(records)
 issue_text = (repo / ".scratch/caption/issues/01.md").read_text(encoding="utf-8")
 
+
+def run_tool(*args):
+    result = subprocess.run(
+        [sys.executable, str(tool), *args, "--repo", str(repo), "--json"],
+        universal_newlines=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+tool_spec = importlib.util.spec_from_file_location("solve_records_tool", str(tool))
+tool_module = importlib.util.module_from_spec(tool_spec)
+tool_spec.loader.exec_module(tool_module)
+tool_records = tool_module.discover(repo)
+tool_by_id = {record.get("id", record["path"]): record for record in tool_records}
+tool_dashboard = tool_module.dashboard(repo, tool_records)
+tool_dashboard_cli = run_tool("dashboard")
+tool_select = {"matches": tool_module.select_records(tool_records, "caption fix")}
+tool_merge_gate_ready = tool_module.merge_gate(repo, tool_by_id["20260701-1432-caption-fix"])
+tool_merge_gate_weak = tool_module.merge_gate(repo, tool_by_id["20260701-1546-weak-low-risk"])
+tool_cleanup_dirty = tool_module.cleanup_plan(repo, tool_by_id["20260701-1510-dirty-cleanup"])
+
 assert any(path.startswith(".scratch/caption/solve-records/") for path in [r["path"] for r in records])
 assert any(path.startswith(".scratch/solve-records/") for path in [r["path"] for r in records])
 
@@ -572,6 +692,24 @@ assert "20260701-1531-branch-mismatch-real" in buckets["cleanup"], buckets
 assert "20260701-1540-recent-merged" in buckets["recent"], buckets
 assert "20260701-1545-low-risk-unavailable" in buckets["ready"], buckets
 assert "20260701-1546-weak-low-risk" in buckets["manual"], buckets
+
+assert tool_dashboard["record_count"] == len(records)
+assert tool_dashboard_cli["record_count"] == len(records)
+tool_ready_ids = [item["id"] for item in tool_dashboard["buckets"]["ready"]]
+assert "20260701-1432-caption-fix" in tool_ready_ids, tool_dashboard["buckets"]["ready"]
+assert "20260701-1545-low-risk-unavailable" in tool_ready_ids, tool_dashboard["buckets"]["ready"]
+assert any(
+    item["id"] == "20260701-1546-weak-low-risk"
+    for item in tool_dashboard["buckets"]["manual"]
+), tool_dashboard["buckets"]["manual"]
+assert [
+    item["id"] for item in tool_select["matches"]
+] == ["20260701-1432-caption-fix"], tool_select
+assert tool_merge_gate_ready["eligible"] is True, tool_merge_gate_ready
+assert tool_merge_gate_weak["eligible"] is False, tool_merge_gate_weak
+assert "unavailable checks without low-risk evidence" in tool_merge_gate_weak["reasons"]
+assert tool_cleanup_dirty["status"] == "blocked", tool_cleanup_dirty
+assert tool_cleanup_dirty["reason"] == "dirty worktree", tool_cleanup_dirty
 
 assert select(records, "20260701-1432-caption-fix") == ["20260701-1432-caption-fix"]
 assert select(records, ".scratch/caption/solve-records/20260701-1432-caption-fix.md") == ["20260701-1432-caption-fix"]
@@ -747,11 +885,18 @@ if [[ ! -d "$TMPDIR_ROOT/wt-branch-mismatch" ]]; then
   echo "refusal fixture: branch mismatch worktree was removed" >&2
   exit 1
 fi
-git -C "$REPO" rev-parse --verify solve/20260701-1510-dirty-cleanup >/dev/null
-git -C "$REPO" rev-parse --verify solve/20260701-1520-unmerged-cleanup >/dev/null
-git -C "$REPO" rev-parse --verify solve/20260701-1530-branch-mismatch >/dev/null
-git -C "$REPO" rev-parse --verify solve/20260701-1531-branch-mismatch-target >/dev/null
-git -C "$REPO" rev-parse --verify solve/20260701-1532-branch-mismatch-worktree >/dev/null
+remaining_branches="$(git -C "$REPO" for-each-ref --format='%(refname:short)' refs/heads)"
+for branch in \
+  solve/20260701-1510-dirty-cleanup \
+  solve/20260701-1520-unmerged-cleanup \
+  solve/20260701-1530-branch-mismatch \
+  solve/20260701-1531-branch-mismatch-target \
+  solve/20260701-1532-branch-mismatch-worktree; do
+  if ! grep -Fxq "$branch" <<<"$remaining_branches"; then
+    echo "refusal fixture: branch was removed: $branch" >&2
+    exit 1
+  fi
+done
 
 SAFE_REPO="$TMPDIR_ROOT/cleanup-project"
 SAFE_WORKTREE="$TMPDIR_ROOT/wt-safe-cleanup"
@@ -808,7 +953,7 @@ if [[ -e "$SAFE_WORKTREE" ]]; then
   echo "safe cleanup fixture: worktree path still exists" >&2
   exit 1
 fi
-if git -C "$SAFE_REPO" rev-parse --verify "$SAFE_BRANCH" >/dev/null 2>&1; then
+if git -C "$SAFE_REPO" show-ref --verify --quiet "refs/heads/$SAFE_BRANCH"; then
   echo "safe cleanup fixture: branch still exists" >&2
   exit 1
 fi
@@ -836,8 +981,8 @@ if [[ -n "$(git -C "$MERGE_REPO" status --short)" ]]; then
   echo "safe merge fixture: base worktree should be clean" >&2
   exit 1
 fi
-git -C "$MERGE_REPO" rev-parse --verify master >/dev/null
-git -C "$MERGE_REPO" rev-parse --verify "$MERGE_BRANCH" >/dev/null
+git -C "$MERGE_REPO" show-ref --verify --quiet refs/heads/master
+git -C "$MERGE_REPO" show-ref --verify --quiet "refs/heads/$MERGE_BRANCH"
 if git -C "$MERGE_REPO" merge-base --is-ancestor "$MERGE_BRANCH" master; then
   echo "safe merge fixture: candidate should not be merged yet" >&2
   exit 1

@@ -9,6 +9,8 @@ Use ids aligned with the head branch slug:
 solve/20260701-1432-caption-fix
 ```
 
+A solve record points to one finished candidate branch. Do not list commits in the record; derive the commit set from Git with `base_sha..head_sha`.
+
 Required frontmatter:
 
 ```yaml

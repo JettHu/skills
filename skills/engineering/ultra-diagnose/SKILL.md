@@ -1,6 +1,7 @@
 ---
 name: ultra-diagnose
-description: Explicit completion-friendly wrapper for /ultra diagnose and /ultra diagnosing-bugs. Use only when the user invokes ultra-diagnose, asks for the ultra-enhanced diagnose flow, or writes /ultra diagnose.
+description: Completion-friendly wrapper for /ultra diagnose.
+disable-model-invocation: true
 ---
 
 # Ultra Diagnose
