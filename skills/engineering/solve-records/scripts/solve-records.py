@@ -163,6 +163,9 @@ def parse_record(repo, path):
     if missing:
         data["malformed"] = "missing " + ",".join(missing)
         return data
+    if data["kind"] != "solve_record":
+        data["malformed"] = f"invalid kind: {data['kind']}"
+        return data
 
     data["checks"] = status_line(section(text, "Checks"))
     data["merge"] = status_line(section(text, "Merge"))
@@ -410,6 +413,9 @@ def record_summary(repo, record, include_merge_gate=False):
         "id": record.get("id"),
         "title": record.get("title"),
         "state": record.get("state"),
+        "created_at": record.get("created_at"),
+        "merged_at": record.get("merged_at"),
+        "merged_sha": record.get("merged_sha"),
         "base": record.get("base"),
         "head": record.get("head"),
         "issues": record.get("issues", []),
@@ -435,6 +441,14 @@ def record_summary(repo, record, include_merge_gate=False):
     return summary
 
 
+def recent_sort_key(summary):
+    return (
+        summary.get("merged_at") or summary.get("created_at") or "",
+        summary.get("id") or "",
+        summary.get("path") or "",
+    )
+
+
 def dashboard(repo, records):
     buckets = {
         "ready": [],
@@ -444,6 +458,7 @@ def dashboard(repo, records):
         "stale_or_malformed": [],
     }
 
+    recent = []
     for record in records:
         summary = record_summary(repo, record)
         if record.get("malformed"):
@@ -464,7 +479,7 @@ def dashboard(repo, records):
             buckets["cleanup"].append(summary)
             continue
         if record["state"] == "merged":
-            buckets["recent"].append(summary)
+            recent.append(summary)
             continue
         gate = merge_gate(repo, record)
         summary["merge_gate"] = gate
@@ -472,6 +487,8 @@ def dashboard(repo, records):
             buckets["ready"].append(summary)
         else:
             buckets["manual"].append(summary)
+
+    buckets["recent"] = sorted(recent, key=recent_sort_key, reverse=True)[:10]
 
     return {
         "repo": str(repo),
