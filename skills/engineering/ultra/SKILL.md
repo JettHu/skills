@@ -5,7 +5,7 @@ description: Multi-agent enhancement wrapper for agent skills and ultra subcomma
 
 # Ultra
 
-Wrap a agent skill with adaptive pre-exploration and post-review. The target skill runs unmodified — ultra adds richer context before it and validation after.
+Wrap an agent skill with adaptive pre-exploration and post-review. The target skill runs unmodified — ultra adds richer context before it and validation after.
 
 ## Usage
 
@@ -21,7 +21,12 @@ This skill is capability-oriented. The workflow describes outcomes; parenthetica
 
 If a named tool is unavailable, use the nearest equivalent workflow (serial passes, direct file reads, manual diff inspection) and state the substitution briefly. **MUST NOT fail or block because a specific tool does not exist.**
 
-**Claude Code fast path**: `parallel codebase exploration` → Agent tool with `subagent_type=Explore`. `with web search` → Agent tool with `subagent_type=general-purpose`. Multi-reviewer code review → TeamCreate/TeamDelete.
+Fallback examples:
+- Parallel exploration or review -> run the same passes serially with available read/search tools.
+- Web-search agent -> use direct web-search/fetch tools when available; if unavailable and research is optional or low-value, state the skip.
+- Team review -> run a manual two-lens review: completeness, then consistency.
+
+Example runtime mappings, not requirements: `parallel codebase exploration` -> Agent tool with `subagent_type=Explore`; `with web search` -> Agent tool with `subagent_type=general-purpose`; multi-reviewer code review -> TeamCreate/TeamDelete.
 
 ## Workflow
 
@@ -33,7 +38,7 @@ If the first argument is `solve`, follow [solve.md](solve.md) and stop this wrap
 
 Extract the target skill name from arguments. Look up its profile in [PROFILES.md](PROFILES.md).
 
-Before lookup, resolve compatibility aliases from [PROFILES.md](PROFILES.md) `Skill aliases`. Use the canonical name for profile lookup. When invoking the target skill later, prefer the user's requested name if it exists locally; otherwise invoke the canonical name. State the alias resolution briefly.
+Before lookup, resolve compatibility aliases from [PROFILES.md](PROFILES.md) `Skill aliases`. Use the canonical name for profile lookup. When invoking the target skill later, prefer the user's requested name only if it resolves to an available installed skill in the current runtime; otherwise invoke the canonical name. State the alias resolution briefly.
 
 Project-local guidance from `AGENTS.md`, `CONTEXT.md`, ADRs, issue briefs, or tracker conventions should guide the actual run when present; profiles provide portable defaults.
 
@@ -81,7 +86,7 @@ Within the total cap, adapt the exploration roles to the specific task — don't
 - A to-prd task in an unfamiliar domain might need a "competitor analysis" agent
 - An architecture task spanning multiple subsystems might need agents split by subsystem
 
-Cap at 3 pre-exploration agents total. Run them in parallel.
+Cap at 3 pre-exploration agents total. Run them in parallel when available; otherwise run the same passes serially.
 
 ### 4. Invoke the target skill
 
@@ -89,7 +94,7 @@ Invoke the target skill unmodified, passing through any remaining arguments (e.g
 
 ### 5. Post-review
 
-**When `review: true`** — spawn 2 review agents in parallel after the skill completes:
+**When `review: true`** — run two review passes after the skill completes, in parallel when available:
 
 - **Completeness reviewer**: Cross-reference the skill's output against pre-exploration findings (or conversation context). Flag anything surfaced that the output doesn't address. Pay special attention to *scope blindness* — issues or edge cases raised during exploration that the skill output silently dropped.
 - **Consistency reviewer**: Check that the output uses correct domain vocabulary (CONTEXT.md), respects ADRs, and follows project conventions. Flag *convention drift* — where the output introduces patterns, naming, or structures that deviate from established project conventions without justification.
@@ -98,7 +103,9 @@ Present findings as a brief checklist of potential gaps. Don't auto-fix — let 
 
 **When `code_review: true`** — only if the skill produced code changes:
 
-Check for changes using:
+If `base_sha` was not recorded in step 1, do not silently skip review. Report that the change-detection baseline is missing and use the safest fixed point available (for example, an explicit user-supplied base or the current branch merge-base).
+
+Check for changes using these read-only checks:
 
 ```bash
 git diff <base_sha> HEAD --quiet 2>/dev/null &&
@@ -106,7 +113,7 @@ git diff --quiet &&
 git diff --cached --quiet
 ```
 
-This catches both committed and uncommitted changes. If all three commands succeed (no changes at all), skip the review.
+This catches committed changes (`git diff <base_sha> HEAD`), unstaged changes (`git diff`), and staged changes (`git diff --cached`). If all three commands succeed (no changes at all), skip the review.
 
 If changes exist, pin and report the review range before starting review. Prefer an explicit fixed point when the user supplied one; otherwise use `base_sha`. Pass reviewers the diff command, commit list, and any staged/uncommitted diff status so all review passes inspect the same change set.
 

@@ -19,7 +19,7 @@ Each profile controls which ultra steps are **available by default** for a targe
 
 ## Skill aliases
 
-Resolve these aliases before profile lookup. Use the canonical profile for ultra behavior; when invoking the target skill, prefer the requested name if it exists locally, otherwise use the canonical name.
+Resolve these aliases before profile lookup. Use the canonical profile for ultra behavior; when invoking the target skill, prefer the requested name only if it resolves to an available installed skill in the current runtime; otherwise use the canonical name.
 
 | Requested name | Canonical profile | Notes |
 |----------------|-------------------|-------|
