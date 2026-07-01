@@ -33,10 +33,29 @@ assert_exists() {
   [[ -e "$1" || -L "$1" ]] || fail "expected path to exist: $1"
 }
 
+assert_not_exists() {
+  [[ ! -e "$1" && ! -L "$1" ]] || fail "expected path to be absent: $1"
+}
+
 assert_file_contains() {
   local file="$1"
   local expected="$2"
   grep -Fq "$expected" "$file" || fail "expected $file to contain: $expected"
+}
+
+assert_file_not_contains() {
+  local file="$1"
+  local unexpected="$2"
+  ! grep -Fq "$unexpected" "$file" || fail "expected $file not to contain: $unexpected"
+}
+
+assert_count() {
+  local file="$1"
+  local expected="$2"
+  local count="$3"
+  local actual
+  actual="$(grep -Fxc "$expected" "$file" || true)"
+  [[ "$actual" == "$count" ]] || fail "expected $expected count $count in $file, got $actual"
 }
 
 git_commit_all() {
@@ -51,6 +70,9 @@ create_repo() {
   git -C "$repo" init -q
   git -C "$repo" config user.name 'Agent Worktree Tests'
   git -C "$repo" config user.email 'agent-worktree-tests@example.invalid'
+  printf 'tracked\n' > "$repo/README.md"
+  git -C "$repo" add README.md
+  (cd "$repo" && git_commit_all 'init fixture')
 }
 
 run_script_from() {
@@ -59,110 +81,220 @@ run_script_from() {
   (cd "$repo" && bash "$SCRIPT" "$@")
 }
 
-assert_payload_contains() {
+run_script_expect_fail() {
   local repo="$1"
-  local expected="$2"
-  local payload
-  payload="$(run_script_from "$repo" suggest-payload)"
-  contains_word "$payload" "$expected" || fail "expected payload to contain $expected; got: $payload"
+  shift
+  local output
+  set +e
+  output="$(cd "$repo" && bash "$SCRIPT" "$@" 2>&1)"
+  local status=$?
+  set -e
+  [[ "$status" -ne 0 ]] || fail "expected command to fail: $*"
+  printf '%s\n' "$output"
 }
 
-test_default_project_root_fixture() {
-  log "default project worktree root"
-  local repo="$TMP_DIR/default-repo"
-  local target="$TMP_DIR/.agent-worktrees/default-repo/default-repo-context-sync"
+hook_file_for() {
+  git -C "$1" rev-parse --path-format=absolute --git-path hooks/post-checkout
+}
+
+exclude_file_for() {
+  git -C "$1" rev-parse --path-format=absolute --git-path info/exclude
+}
+
+status_must_not_list_payload() {
+  local repo="$1"
+  local payload="$2"
+  local status
+  status="$(git -C "$repo" status --short --untracked-files=all)"
+  if grep -Fq "$payload" <<<"$status"; then
+    printf '%s\n' "$status" >&2
+    fail "git status should not list payload path: $payload"
+  fi
+}
+
+test_init_hook_and_native_worktree_add() {
+  log "init hook and native worktree add"
+  local repo="$TMP_DIR/native-repo"
+  local target="$TMP_DIR/native-worktree"
+  local suggestion output hook source_exclude target_exclude
 
   create_repo "$repo"
-  mkdir -p "$repo/.scratch/context"
-  printf 'tracked\n' > "$repo/README.md"
-  printf 'local context\n' > "$repo/.scratch/context/task.md"
-  (cd "$repo" && git add README.md && git_commit_all 'init default fixture')
+  mkdir -p "$repo/.scratch/issues" "$repo/docs/local"
+  printf 'Status: ready-for-agent\n' > "$repo/.scratch/issues/01.md"
+  printf 'local docs\n' > "$repo/docs/local/README.md"
+  printf 'TOKEN=local\n' > "$repo/.env.local"
+
+  suggestion="$(run_script_from "$repo" suggest-payload)"
+  contains_word "$suggestion" ".scratch" || fail "expected suggestion to include .scratch: $suggestion"
+  contains_word "$suggestion" "docs/local" || fail "expected suggestion to include docs/local: $suggestion"
+  contains_word "$suggestion" ".env.local" || fail "expected suggestion to include .env.local: $suggestion"
+
+  output="$(run_script_from "$repo" init --payload ".scratch docs/local .env.local")"
+  assert_file_contains "$repo/.agents/agent-worktree.env" 'PAYLOAD=".scratch docs/local .env.local"'
+  assert_file_contains "$repo/.agents/agent-worktree.env" 'MODE="link"'
+  grep -Fq 'hook: installed' <<<"$output" || fail "expected installed hook status: $output"
+
+  hook="$(hook_file_for "$repo")"
+  assert_file_contains "$hook" '# --- agent-worktree managed block begin ---'
+  assert_file_contains "$hook" '# --- agent-worktree managed block end ---'
+  assert_file_not_contains "$hook" "$SKILL_DIR"
+  assert_count "$hook" '# --- agent-worktree managed block begin ---' 1
+  sh -n "$hook"
+
+  source_exclude="$(exclude_file_for "$repo")"
+  assert_file_contains "$source_exclude" '/.agents/agent-worktree.env'
+  assert_file_contains "$source_exclude" '/.scratch'
+  assert_file_contains "$source_exclude" '/.scratch/'
+  assert_file_contains "$source_exclude" '/docs/local'
+  assert_file_contains "$source_exclude" '/.env.local'
+  status_must_not_list_payload "$repo" ".scratch"
+  status_must_not_list_payload "$repo" ".agents/agent-worktree.env"
+
+  git -C "$repo" worktree add -b hook/native "$target" HEAD >/dev/null 2>&1
+  assert_exists "$target/.scratch/issues/01.md"
+  assert_exists "$target/docs/local/README.md"
+  assert_exists "$target/.env.local"
+  [[ -L "$target/.scratch" ]] || fail "expected .scratch to be a symlink"
+  [[ "$(cd "$(readlink "$target/.scratch")" && pwd -P)" == "$(cd "$repo/.scratch" && pwd -P)" ]] || fail "unexpected .scratch symlink target"
+
+  target_exclude="$(exclude_file_for "$target")"
+  assert_file_contains "$target_exclude" '/.scratch'
+  assert_file_contains "$target_exclude" '/.scratch/'
+  assert_file_contains "$target_exclude" '/docs/local'
+  assert_file_contains "$target_exclude" '/.env.local'
+  status_must_not_list_payload "$target" ".scratch"
+
+  git -C "$target" checkout -b hook/native-repair >/dev/null 2>&1
+  assert_count "$target_exclude" '/.scratch' 1
+  assert_count "$target_exclude" '/docs/local' 1
+}
+
+test_reconfigure_disable_and_old_command_refusal() {
+  log "reconfigure disable and old command refusal"
+  local repo="$TMP_DIR/reconfigure-repo"
+  local target="$TMP_DIR/disabled-worktree"
+  local active_target="$TMP_DIR/active-before-disable"
+  local hook output failed
+
+  create_repo "$repo"
+  mkdir -p "$repo/.scratch" "$repo/docs/local"
+  printf 'scratch\n' > "$repo/.scratch/task.md"
+  printf 'docs\n' > "$repo/docs/local/README.md"
+
+  hook="$(hook_file_for "$repo")"
+  mkdir -p "$(dirname "$hook")"
+  cat > "$hook" <<'EOF'
+#!/bin/sh
+printf '' >/dev/null
+exit 0
+EOF
+  chmod +x "$hook"
 
   run_script_from "$repo" init --payload ".scratch" >/dev/null
-  assert_file_contains "$repo/.agents/agent-worktree.env" 'WORKTREE_ROOT="../.agent-worktrees/default-repo"'
+  assert_file_contains "$hook" "printf '' >/dev/null"
+  assert_file_contains "$hook" "exit 0"
+  assert_count "$hook" '# --- agent-worktree managed block begin ---' 1
+  git -C "$repo" worktree add -b hook/active-before-disable "$active_target" HEAD >/dev/null 2>&1
+  assert_exists "$active_target/.scratch/task.md"
 
-  run_script_from "$repo" create "context sync" >/dev/null
+  run_script_from "$repo" add-payload docs/local docs/local >/dev/null
+  assert_file_contains "$repo/.agents/agent-worktree.env" 'PAYLOAD=".scratch docs/local"'
 
-  assert_exists "$target/.scratch/context/task.md"
-  run_script_from "$repo" verify "$target" >/dev/null
-  run_script_from "$repo" remove "context sync" --delete-branch >/dev/null
-  [[ ! -e "$target" ]] || fail "expected removed worktree: $target"
+  run_script_from "$repo" remove-payload .scratch >/dev/null
+  assert_file_contains "$repo/.agents/agent-worktree.env" 'PAYLOAD="docs/local"'
+  assert_file_not_contains "$repo/.agents/agent-worktree.env" 'PAYLOAD=".scratch'
+
+  output="$(run_script_from "$repo" set-mode copy)"
+  assert_file_contains "$repo/.agents/agent-worktree.env" 'MODE="copy"'
+  grep -Fq 'MODE=copy creates worktree-local payload copies' <<<"$output" || fail "expected copy-mode warning"
+
+  run_script_from "$repo" reinstall-hook >/dev/null
+  assert_count "$hook" '# --- agent-worktree managed block begin ---' 1
+
+  failed="$(run_script_expect_fail "$repo" init --payload 'bad$name')"
+  grep -Fq 'invalid repo-relative payload path' <<<"$failed" || fail "expected invalid payload refusal: $failed"
+
+  printf 'MODE="$(unterminated\n' > "$repo/.agents/agent-worktree.env"
+  run_script_from "$repo" disable >/dev/null
+  assert_file_contains "$hook" "printf '' >/dev/null"
+  assert_file_contains "$hook" "exit 0"
+  assert_file_not_contains "$hook" '# --- agent-worktree managed block begin ---'
+
+  git -C "$repo" worktree add -b hook/disabled "$target" HEAD >/dev/null 2>&1
+  assert_not_exists "$target/docs/local"
+
+  failed="$(run_script_expect_fail "$repo" create example)"
+  grep -Fq 'use native git worktree add' <<<"$failed" || fail "expected native Git refusal: $failed"
 }
 
-test_js_fixture() {
-  log "js fixture"
-  local repo="$TMP_DIR/js-repo"
-  local worktrees="$TMP_DIR/js-worktrees"
-  local target="$worktrees/js-repo-payment-retry"
+test_custom_config_path() {
+  log "custom config path"
+  local repo="$TMP_DIR/custom-config-repo"
+  local target="$TMP_DIR/custom-config-worktree"
+  local hook
 
   create_repo "$repo"
-  mkdir -p "$repo/.scratch/payment/issues" "$repo/logs" "$repo/web/node_modules/demo"
-  printf '{"scripts":{"test":"node --test"}}\n' > "$repo/package.json"
-  printf '# Agent instructions\n' > "$repo/AGENTS.md"
-  printf 'status: ready-for-agent\n' > "$repo/.scratch/payment/issues/01-retry.md"
-  printf 'debug log\n' > "$repo/logs/current.log"
-  printf 'module cache\n' > "$repo/web/node_modules/demo/index.js"
-  (cd "$repo" && git add package.json && git_commit_all 'init js fixture')
+  mkdir -p "$repo/.scratch"
+  printf 'custom\n' > "$repo/.scratch/task.md"
 
-  assert_payload_contains "$repo" "AGENTS.md"
-  assert_payload_contains "$repo" ".scratch"
-  assert_payload_contains "$repo" "logs"
-  assert_payload_contains "$repo" "web/node_modules"
+  run_script_from "$repo" init --config .agents/custom-agent-worktree.env --payload ".scratch" >/dev/null
+  assert_file_contains "$repo/.agents/custom-agent-worktree.env" 'PAYLOAD=".scratch"'
+  hook="$(hook_file_for "$repo")"
+  assert_file_contains "$hook" '.agents/custom-agent-worktree.env'
+  assert_file_not_contains "$hook" '.agents/agent-worktree.env"'
 
-  run_script_from "$repo" init \
-    --worktree-root "$worktrees" \
-    --payload "AGENTS.md .scratch logs web/node_modules" >/dev/null
-  run_script_from "$repo" create "payment retry" >/dev/null
-
-  assert_exists "$target/AGENTS.md"
-  assert_exists "$target/.scratch/payment/issues/01-retry.md"
-  assert_exists "$target/logs/current.log"
-  assert_exists "$target/web/node_modules/demo/index.js"
-  run_script_from "$repo" verify "$target" >/dev/null
-
-  run_script_from "$repo" remove "payment retry" --delete-branch >/dev/null
-  [[ ! -e "$target" ]] || fail "expected removed worktree: $target"
+  git -C "$repo" worktree add -b hook/custom-config "$target" HEAD >/dev/null 2>&1
+  assert_exists "$target/.scratch/task.md"
 }
 
-test_python_fixture() {
-  log "python fixture"
-  local repo="$TMP_DIR/python-repo"
-  local worktrees="$TMP_DIR/python-worktrees"
-  local target="$worktrees/python-repo-queue-worker"
+test_copy_mode() {
+  log "copy mode"
+  local repo="$TMP_DIR/copy-repo"
+  local target="$TMP_DIR/copy-worktree"
+  local output
 
   create_repo "$repo"
-  mkdir -p "$repo/docs/local" "$repo/.venv/bin" "$repo/.pytest_cache" "$repo/tmp"
-  printf '[project]\nname = "fixture"\n' > "$repo/pyproject.toml"
-  printf '# Agent instructions\n' > "$repo/AGENTS.md"
-  printf 'DB_URL=sqlite:///tmp/local.sqlite\n' > "$repo/.envrc"
-  printf 'local docs\n' > "$repo/docs/local/README.md"
-  printf 'python executable placeholder\n' > "$repo/.venv/bin/python"
-  printf 'cache\n' > "$repo/.pytest_cache/README"
-  printf 'sqlite placeholder\n' > "$repo/tmp/local.sqlite"
-  (cd "$repo" && git add pyproject.toml && git_commit_all 'init python fixture')
+  printf 'TOKEN=copy\n' > "$repo/.env.local"
 
-  assert_payload_contains "$repo" "AGENTS.md"
-  assert_payload_contains "$repo" "docs/local"
-  assert_payload_contains "$repo" ".envrc"
-  assert_payload_contains "$repo" ".venv"
-  assert_payload_contains "$repo" ".pytest_cache"
-  assert_payload_contains "$repo" "tmp"
+  output="$(run_script_from "$repo" init --payload ".env.local" --copy)"
+  grep -Fq 'MODE=copy creates worktree-local payload copies' <<<"$output" || fail "expected copy-mode warning"
 
-  run_script_from "$repo" init \
-    --worktree-root "$worktrees" \
-    --payload "AGENTS.md docs/local .envrc .venv .pytest_cache tmp" >/dev/null
-  run_script_from "$repo" create "queue worker" >/dev/null
+  git -C "$repo" worktree add -b hook/copy "$target" HEAD >/dev/null 2>&1
+  assert_exists "$target/.env.local"
+  [[ ! -L "$target/.env.local" ]] || fail "expected copy mode to create a real file"
+  [[ "$(cat "$target/.env.local")" == "TOKEN=copy" ]] || fail "unexpected copied file content"
+}
 
-  assert_exists "$target/AGENTS.md"
-  assert_exists "$target/docs/local/README.md"
-  assert_exists "$target/.envrc"
-  assert_exists "$target/.venv/bin/python"
-  assert_exists "$target/.pytest_cache/README"
-  assert_exists "$target/tmp/local.sqlite"
-  run_script_from "$repo" verify "$target" >/dev/null
+test_partial_failure_recovery() {
+  log "partial failure recovery"
+  local repo="$TMP_DIR/partial-repo"
+  local target="$TMP_DIR/partial-worktree"
+  local hook_log target_exclude
 
-  (cd "$target" && bash "$SCRIPT" remove --current --delete-branch >/dev/null)
-  [[ ! -e "$target" ]] || fail "expected removed current worktree: $target"
+  create_repo "$repo"
+  mkdir -p "$repo/.scratch"
+  printf 'scratch\n' > "$repo/.scratch/task.md"
+
+  run_script_from "$repo" init --payload ".scratch .missing" >/dev/null
+  git -C "$repo" worktree add -b hook/partial "$target" HEAD >/dev/null 2>&1
+
+  assert_exists "$target/.scratch/task.md"
+  assert_not_exists "$target/.missing"
+  hook_log="$(git -C "$target" rev-parse --git-path agent-worktree-hook.log)"
+  assert_file_contains "$hook_log" "missing source payload: .missing"
+
+  mkdir -p "$repo/.missing"
+  printf 'recovered\n' > "$repo/.missing/value.txt"
+  run_script_from "$repo" init --payload ".scratch .missing" >/dev/null
+
+  assert_exists "$target/.missing/value.txt"
+  target_exclude="$(exclude_file_for "$target")"
+  assert_count "$target_exclude" '/.missing' 1
+
+  rm -rf "$target/.missing"
+  git -C "$target" checkout -b hook/partial-repair >/dev/null 2>&1
+  assert_exists "$target/.missing/value.txt"
+  assert_count "$target_exclude" '/.missing' 1
 }
 
 log "bash syntax"
@@ -173,8 +305,10 @@ if [[ -n "${QUICK_VALIDATE:-}" ]]; then
   python "$QUICK_VALIDATE" "$SKILL_DIR"
 fi
 
-test_default_project_root_fixture
-test_js_fixture
-test_python_fixture
+test_init_hook_and_native_worktree_add
+test_reconfigure_disable_and_old_command_refusal
+test_custom_config_path
+test_copy_mode
+test_partial_failure_recovery
 
 log "ok"

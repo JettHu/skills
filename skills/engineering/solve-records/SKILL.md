@@ -186,9 +186,9 @@ Cleanup must pass all safety checks before removing anything:
 - verify the worktree is clean
 - verify `head` is merged into `base` before deleting the branch
 
-Use `cleanup-plan` from the helper when available, then verify the reported facts before deleting anything.
+Use `cleanup-plan` from the bundled solve-records helper when available, then verify the reported facts before deleting anything.
 
-Then remove the worktree, run `git worktree prune`, and delete the branch with `git branch -d`. Use raw Git checks; `agent-worktree` may help when available but is not required.
+Then remove the worktree, run `git worktree prune`, and delete the branch with `git branch -d`. Use raw Git checks and native Git cleanup commands; do not require or invoke `agent-worktree` for solve resource cleanup.
 
 If any safety check fails, do not delete anything. Update or report `Cleanup: blocked` with the exact remaining resource and reason.
 

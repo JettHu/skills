@@ -1,6 +1,6 @@
 interface:
   display_name: "Agent Worktree"
-  short_description: "Prepare Agent-ready git worktrees"
-  default_prompt: "Use $agent-worktree to create, verify, repair, or remove an Agent-ready git worktree with local payload."
+  short_description: "Scaffold Agent-ready worktree hooks"
+  default_prompt: "Use $agent-worktree to enable or reconfigure repo-level Agent-ready worktree hooks."
 policy:
   allow_implicit_invocation: true

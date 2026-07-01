@@ -1,158 +1,102 @@
 ---
 name: agent-worktree
-description: Bootstrap Agent-ready git worktrees with local-only payload. Use when a user or workflow needs to create, enter, repair, verify, or remove a worktree that should carry local instructions, docs/local, docs/agents, .scratch, repo-local skills, env files, logs, caches, databases, node_modules, Python virtualenvs, or other dependency/build caches.
+description: Scaffold repo-level Agent-ready worktree hooks. Use only when enabling, reconfiguring, reinstalling, disabling, or uninstalling the repo-local hook or its payload/mode config; use native git worktree add for ordinary worktree creation.
 ---
 
 # Agent Worktree
 
-Prepare a git worktree so it is Agent-ready. The leading word is **bootstrap**: make the target worktree see the same local payload as the source checkout while keeping those files ignored by Git.
+Scaffold a repo so future native Git worktrees become Agent-ready automatically. The leading word is **scaffold**: install or update repo-local hook/config, then leave daily worktree creation to Git.
 
-Local worktree payload means repo-local instructions, skills, issue files, scratch plans, reference docs, and local runtime/debug resources that affect Agent behavior or local execution but are intentionally not tracked by Git. A normal Git worktree already gets tracked files, but it does not get ignored or untracked local payload. This skill carries only the extra local payload that a worktree would otherwise miss.
+Daily interface:
+
+```bash
+git worktree add <path> <branch-or-ref>
+```
+
+This skill does not choose solve branch names, worktree paths, base refs, grouping, validation, merge behavior, or cleanup behavior. `/ultra solve` owns solve workflow semantics. `$solve-records cleanup` owns solve resource cleanup.
 
 ## Bundled Script
 
-Resolve `scripts/bootstrap-agent-worktree.sh` relative to this skill directory, not relative to the target repo. When running from a repo shell, execute the bundled script by absolute path if needed. Unless `--source` is passed, the script uses the current Git repo as the source checkout; `remove --current` may run inside the target worktree and will use the primary worktree as the source.
+Resolve `scripts/bootstrap-agent-worktree.sh` relative to this skill directory, not relative to the target repo. The script scaffolds:
+
+- `.agents/agent-worktree.env`
+- a self-contained managed block in `git rev-parse --git-path hooks/post-checkout`
+- source checkout `info/exclude` entries for config and payload paths
+
+The installed hook must not call back into this skill directory or any personal skill path.
 
 ## Default Path
 
-Use `create` when the user wants a named Agent worktree:
+If `.agents/agent-worktree.env` is missing and the user did not explicitly request defaults or provide exact payload/mode values:
+
+1. Run `suggest-payload`.
+2. Show the proposed payload and mode.
+3. Ask the user to confirm, remove paths, add paths, or switch mode before writing config.
+
+Skip the review only when the user explicitly says to use defaults, requests non-interactive setup, provides exact config values, or asks to reinstall an already configured hook.
+
+After confirmation or explicit defaults:
 
 ```bash
-bash scripts/bootstrap-agent-worktree.sh create "<name>"
+bash scripts/bootstrap-agent-worktree.sh init --payload "<paths>" --mode link
 ```
 
-`create` is ensure-style. It creates the branch-backed worktree when missing. If the expected worktree already exists on the expected branch, it verifies first, bootstraps only when needed, and verifies again before reporting ready.
+Completion criterion: the script reports final payload, mode, and hook status; `.agents/agent-worktree.env` exists; the `post-checkout` hook contains exactly one managed block; source `info/exclude` hides the config and payload paths.
 
-Completion criterion: the script reports `ready: branch=<branch> path=<path>`.
+## Reconfigure
 
-When another skill already owns worktree identity, treat `create` as helper mode and pass the exact values it chose:
+Map natural-language requests to these commands. They update env/hook/exclude only; they do not create, bootstrap, verify, remove, or delete worktrees.
 
 ```bash
-bash scripts/bootstrap-agent-worktree.sh create "<name>" --path "<path>" --branch "<branch>" --base-ref "<base-ref>"
+bash scripts/bootstrap-agent-worktree.sh add-payload docs/local .scratch
+bash scripts/bootstrap-agent-worktree.sh remove-payload node_modules
+bash scripts/bootstrap-agent-worktree.sh regenerate-payload
+bash scripts/bootstrap-agent-worktree.sh set-mode link
+bash scripts/bootstrap-agent-worktree.sh set-mode copy
+bash scripts/bootstrap-agent-worktree.sh reinstall-hook
 ```
 
-In helper mode, do not rename, regroup, rebase, merge, clean up, or reinterpret the candidate. The caller owns workflow semantics; this skill only creates, bootstraps, verifies, or removes the requested worktree.
+`MODE=copy` is supported but must warn that copied payload edits are worktree-local and are lost when the worktree is removed. Prefer `MODE=link` for mutable Agent context such as `.scratch`, local docs, env files, dependency caches, and debug state.
 
-Use `remove` when the user wants to clean up a named Agent worktree:
+## Disable Or Uninstall
+
+Use either command when the user asks to disable, remove, or uninstall the Agent-ready worktree hook:
 
 ```bash
-bash scripts/bootstrap-agent-worktree.sh remove "<name>"
+bash scripts/bootstrap-agent-worktree.sh disable
+bash scripts/bootstrap-agent-worktree.sh uninstall
 ```
 
-Use `--current` only when the user explicitly wants to remove the worktree that contains the current shell:
+Completion criterion: only the managed hook block is removed, user hook content remains, and no payload files, solve records, issues, PRDs, or project content are deleted.
+
+## Hook Contract
+
+The managed block anchors are stable:
 
 ```bash
-bash scripts/bootstrap-agent-worktree.sh remove --current
+# --- agent-worktree managed block begin ---
+# --- agent-worktree managed block end ---
 ```
 
-Completion criterion: the script reports `removed worktree: <path>`. Branches are kept unless the user passes `--delete-branch`.
+The hook is reconciliation-style:
 
-## First-Time Config
+- Run only in linked worktrees during branch checkouts, including `git worktree add`.
+- Read `.agents/agent-worktree.env` from the source checkout.
+- Link or copy each valid repo-relative payload path into the target worktree.
+- Add target `info/exclude` entries idempotently before payload paths can appear in Git status.
+- Leave existing target paths intact.
+- Skip or log missing payload sources without blocking other payload paths.
+- Recover partial failures on a later hook trigger or by rerunning `$agent-worktree`.
+- Keep normal successful execution quiet.
+- Log exceptional details to `git rev-parse --git-path agent-worktree-hook.log`.
 
-If `.agents/agent-worktree.env` is missing and the user asks to set up or choose defaults, ask only for the worktree root, branch prefix, base ref, payload, and link/copy mode. Treat a bare `init` request as interactive setup, not permission to write the config immediately. Run `suggest-payload`, show the proposed values, and ask the user to confirm, remove, or add paths before running `init`. Skip this review only when the user explicitly says to use defaults, requests non-interactive init, provides exact config values, or asks to create a worktree immediately.
+## Validation
 
-Use these defaults when the user wants to proceed without tuning:
+For ordinary edits, run:
 
 ```bash
-WORKTREE_ROOT="../.agent-worktrees/<current-project-name>"
-BRANCH_PREFIX="work/"
-BASE_REF="HEAD"
-# Generated by init from common untracked local worktree payload paths found in this repo.
-PAYLOAD="<repo-local generated paths>"
-MODE="link"
+tests/agent-worktree.sh
+scripts/validate-skills.sh
 ```
 
-The generated config writes the source checkout directory name in place of `<current-project-name>`.
-
-`suggest-payload` prints one raw space-separated candidate `PAYLOAD` line by checking common local worktree payload paths and returning only paths that exist in the source checkout and are not already tracked by Git. Tracked paths do not belong in the suggested payload because Git already provides them in every worktree. `init` uses the same candidate when config is missing.
-
-The candidate includes stable Agent/project context such as `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `CONTEXT.md`, `docs/adr`, `.agents/skills`, `docs/agents`, `docs/local`, and `.scratch`. It also includes common local runtime/debug resources when present, such as `.env`, `.env.*`, `.envrc`, `node_modules`, `.venv`, `venv`, `env`, `.tox`, `.nox`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `vendor`, `.bundle`, `target`, `.gradle`, `logs`, `log`, `cache`, `.cache`, `tmp`, `temp`, `.tmp`, `*.db`, `*.sqlite`, and `*.sqlite3` at the repo root or shallow project directories.
-
-Treat the generated payload as an init-time draft for this repo, not a per-worktree task guess. For an interactive setup, run `suggest-payload`, show the generated `PAYLOAD`, and let the user confirm, remove, or add paths before relying on it. Keep `docs/local` and `.scratch` when this repo uses them as durable local knowledge or the local issue tracker. Keep dependency trees, virtualenvs, and build caches only when sharing installed dependencies or generated state across worktrees is intended; they can make worktrees runnable faster, but may be large, stale, platform-specific, or package-manager-specific. If the user gives an exact list, run `init --payload "<paths>"`.
-
-If the user asks to create a worktree immediately, do not stop for configuration; run `create`, which creates the repo-local config automatically.
-
-## Options
-
-For `init`, `create`, and `remove <name>`:
-
-```bash
---worktree-root <path>   # override configured worktree parent
---branch-prefix <prefix> # override configured prefix
-```
-
-For `create` and `remove <name>`:
-
-```bash
---path <path>            # exact worktree path
---branch <branch>        # exact branch name
-```
-
-For `init` and `create`:
-
-```bash
---base-ref <ref>         # override configured base ref for newly created worktrees
-```
-
-For `init`, `create`, `bootstrap`, and `verify`:
-
-```bash
---payload <paths>        # override configured/generated payload for this run; init writes it only when config is missing
-```
-
-For `create` and externally-created worktrees:
-
-```bash
---copy                   # copy local context instead of linking it
-```
-
-For `remove`:
-
-```bash
---delete-branch          # delete the worktree branch after removing the worktree
---dry-run                # show what remove would do without changing anything
---force                  # allow dirty removal; with --delete-branch, use branch -D
-```
-
-## Support Commands
-
-Use `init` after first-time config review, or when the config already exists, to create or show the repo-local config and source checkout ignore rules:
-
-```bash
-bash scripts/bootstrap-agent-worktree.sh init
-```
-
-If the config is missing, `init` writes it. Do not run it before user confirmation unless the user requested defaults, non-interactive init, exact values, or immediate worktree creation.
-
-Use `suggest-payload` before interactive setup when the user wants to review local context paths:
-
-```bash
-bash scripts/bootstrap-agent-worktree.sh suggest-payload
-```
-
-Completion criterion: the command prints only the suggested payload string, with no log prefix or missing-path details.
-
-Use `bootstrap` only for an existing worktree created outside this skill:
-
-```bash
-bash scripts/bootstrap-agent-worktree.sh bootstrap <target-worktree>
-```
-
-This is the preferred helper path when another workflow already ran `git worktree add`.
-
-Use `verify` only when diagnosing an existing worktree:
-
-```bash
-bash scripts/bootstrap-agent-worktree.sh verify <target-worktree>
-```
-
-Legacy shorthand still means `bootstrap <target-worktree>`.
-
-## Guardrails
-
-- Do not commit `.agents/agent-worktree.env` or generated payload paths unless the user explicitly changes the local-only policy.
-- Prefer `create` for normal Agent worktrees. Use `bootstrap` only when the worktree already exists and does not follow this skill's name/path convention.
-- Treat exact `--path`, `--branch`, and `--base-ref` from another skill as an integration contract, not a naming suggestion.
-- Do not run bare `remove`; use `remove <name>` or explicit `remove --current`.
-- Dirty worktrees are not removed unless the user passes `--force`.
-- Branches are not deleted unless the user passes `--delete-branch`; unmerged branches are protected unless the user also passes `--force`.
+Use model evals only when changing invocation behavior or cross-skill solve orchestration, not for small wording or deterministic fixture updates.

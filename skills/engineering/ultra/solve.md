@@ -53,9 +53,11 @@ Issues are assumed AFK-ready when they are in `ready-for-agent`: the issue body,
 
 `/ultra solve` owns worktree identity and lifecycle semantics: issue grouping, base ref, branch name, worktree path, claim state, validation, integration, solve-record finalization, and merge gates.
 
-Use raw `git worktree` as the baseline. If the runtime has an Agent-ready worktree helper, solve may delegate only the mechanical create/bootstrap/verify/remove work for the exact solve-chosen identity. The helper must not rename, regroup, rebase, merge, clean up, or reinterpret the solve candidate.
+Use native `git worktree add` as the normal creation interface for assigned solve worktrees. If the repo has an `agent-worktree` post-checkout hook installed, Agent payload injection is a repo-local side effect of that native Git operation.
 
-If no helper is available or it is unsuitable for the current path, continue with raw `git worktree` commands and the same user-facing solve workflow. Report the fallback briefly only when it affects local payload availability or validation.
+Do not depend on the `agent-worktree` scaffolding skill being loaded after repo initialization. `agent-worktree` must not choose solve branch names, worktree paths, base refs, grouping, merge behavior, cleanup behavior, or validation policy.
+
+When adopting an existing worktree, verify the expected path, branch, and base/current context with raw Git checks. Missing Agent payload is local setup drift; report it only when it affects execution or validation, and continue to use the same solve workflow.
 
 ## State Machine
 
@@ -160,6 +162,7 @@ Before writing ANY implementation file, the coordinator must verify and report:
 - [ ] Group branch(es) created from the target branch when known, otherwise from the declared base HEAD
 - [ ] Current working directory is the assigned group worktree, not the invocation checkout
 - [ ] `git rev-parse --show-toplevel` equals the assigned group worktree path
+- [ ] Base/current context matches the solve assignment before implementation commits
 - [ ] `git status --short --branch` shows the assigned group branch
 
 Do not edit code, tests, docs, config, migrations, or generated artifacts until this gate passes.
@@ -177,7 +180,13 @@ Suggested names:
 - group branch: `solve/<timestamp>-<group-name>`
 - group worktree: `worktree-solve-<timestamp>-<group-name>`
 
-If using an Agent-ready worktree helper, pass the exact chosen branch, path, and base ref. If the helper cannot create or bootstrap that identity, first try raw Git for the same identity; if that also fails, mark only the affected issue/group with `tooling_unavailable`. Do not let the helper choose a different solve identity.
+Create the assigned worktree with native Git, for example:
+
+```bash
+git worktree add -b "<group-branch>" "<group-worktree-path>" "<base-ref>"
+```
+
+If the repo-level Agent-ready hook is installed, payload bootstrap happens automatically during `git worktree add`. Solve should not call `agent-worktree` to create, bootstrap, verify, or remove solve worktrees. If native Git cannot create the exact assigned identity, mark only the affected issue/group with `tooling_unavailable`.
 
 For each issue in a group:
 
