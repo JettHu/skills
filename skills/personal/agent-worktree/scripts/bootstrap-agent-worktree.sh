@@ -866,6 +866,9 @@ remove_worktree() {
       branch=""
     fi
 
+    # Leave the soon-to-be-removed worktree before deleting it so later shell
+    # and Git cleanup never run from a missing current directory.
+    cd "$source_root"
     remove_worktree_path "$target_root" "$branch"
     return
   fi

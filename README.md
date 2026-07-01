@@ -41,6 +41,7 @@ The installer creates symlinks, so `git pull` in this repository updates install
 
 | Skill | Purpose |
 | --- | --- |
+| [`solve-records`](skills/engineering/solve-records/SKILL.md) | List, explain, merge, and clean up local solve records for finished `/ultra solve` candidates. |
 | [`ultra`](skills/engineering/ultra/SKILL.md) | Wrap agent skills with adaptive pre-exploration, structured post-review, and `/ultra solve` issue execution. |
 | [`ultra-diagnose`](skills/engineering/ultra-diagnose/SKILL.md) | Completion-friendly entry for `/ultra diagnose`. |
 | [`ultra-solve`](skills/engineering/ultra-solve/SKILL.md) | Completion-friendly entry for `/ultra solve`. |
@@ -77,11 +78,18 @@ Run the agent-worktree integration fixture:
 tests/agent-worktree.sh
 ```
 
+Run the solve-records behavior fixture:
+
+```bash
+tests/solve-records.sh
+```
+
 ## Layout
 
 ```text
 skills/
 ├── engineering/
+│   ├── solve-records/
 │   ├── ultra/
 │   ├── ultra-diagnose/
 │   ├── ultra-solve/

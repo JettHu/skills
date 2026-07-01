@@ -1,6 +1,6 @@
 # Ultra Solve
 
-`/ultra solve` is a subcommand of `/ultra`. It picks up AFK-ready issues, coordinates execution worktrees, integrates results, validates the final branch, updates issue state, and optionally merges when the user explicitly asks for it.
+`/ultra solve` is a subcommand of `/ultra`. It picks up AFK-ready issues, coordinates execution worktrees, integrates results, validates the final branch, creates solve records for finished candidates, updates issue state, and optionally merges when the user explicitly asks for it.
 
 It has its own state machine and coordination workflow, so handle it before normal target-skill profile lookup.
 
@@ -14,7 +14,7 @@ Use tracker verbs, not hard-coded frontmatter fields, so local markdown trackers
 - set issue state
 - add or remove issue flags
 - record issue-state-relevant notes, decisions, or blocker reasons
-- link branches, worktrees, commits, PRs, or validation runs
+- link branches, worktrees, commits, PRs, solve records, or validation runs
 - close completed issues
 
 Current mutation support is local markdown trackers, such as `.scratch/<feature>/issues/*.md` or `.scratch/<feature>/issue.md`. If the tracker is remote and no adapter is available, you may read issue context, but stop before claim/update/close operations and report that a remote tracker adapter is needed.
@@ -34,11 +34,12 @@ Tracker updates should record state-relevant facts, not run logs. Use the tracke
 
 ## Core Semantics
 
-`/ultra solve` is the coordinator. It must keep four surfaces consistent:
+`/ultra solve` is the coordinator. It must keep five surfaces consistent:
 
 - issue tracker state
 - group worktrees and branches
 - validation evidence
+- solve records
 - final target branch
 
 Group worktrees produce candidate changes. The coordinator owns integration and merge. A group worktree must not merge directly into the target branch.
@@ -232,10 +233,8 @@ Run the repo-appropriate validation commands in the integration worktree. Prefer
 If final validation passes:
 
 - ensure the integration worktree is clean and all intended changes are committed
-- mark completed issues `completed`
-- preserve `agent-decision` on completed low-risk decisions
-- link implementation and validation evidence where the tracker convention needs it
-- remove `solve-in-progress`
+- capture the current `base`, `base_sha`, `head`, `head_sha`, issue paths, worktree path, checks status, and validation evidence for solve record creation
+- proceed to finalization before marking linked issues completed
 
 If final validation fails:
 
@@ -245,13 +244,46 @@ If final validation fails:
 - do not merge
 - retain `solve-in-progress` only when the branch/worktree is intentionally left for a human to resume
 
-### 9. Merge If Requested
+If no meaningful automated check exists or the environment cannot run it, do not call that a pass. When the candidate is otherwise complete, finalization may create a solve record with checks marked `unavailable`; auto-merge remains blocked unless the change is explicitly trivial and low-risk, and the record says why no meaningful check exists, why no manual-review trigger applies, and what evidence still supports the change.
+
+Do not create a solve record for failed required checks. Failed required checks keep work in issue/attempt blocker state, not in the maintainer-facing solve-record queue.
+
+### 8.5 Finalize Solve Record
+
+Create a solve record only after a finished, reviewable merge candidate exists:
+
+- clean, comparable `head`
+- known `base` and `head` refs
+- recorded `base_sha` and `head_sha`
+- linked issue paths
+- checks status and validation evidence
+- merge-gate disposition
+- worktree and cleanup resource notes
+
+Do not create solve records for claim-time state, in-progress attempts, missing requirements, failed required checks, or a human-required decision that prevents the candidate from being finished. If a finished candidate exists but needs human review before merge for product/API/security/data/architecture/rollout risk, create the record as `state: open` with `## Merge` set to `manual required`; do not auto-merge it.
+
+Checks marked `unavailable` block auto-merge unless the change is explicitly trivial and low-risk, and the record says why no meaningful check exists, why no manual-review trigger applies, and what evidence still supports the change.
+
+During the same finalize step:
+
+- create the solve record in `.scratch/<feature>/solve-records/` or `.scratch/solve-records/`
+- mark linked issues `completed`
+- preserve `agent-decision` on completed low-risk decisions
+- append only a solve-record backlink to each issue; do not duplicate record state in the issue
+- link implementation and validation evidence where the tracker convention needs it
+- remove `solve-in-progress`
+
+The issue `completed` state means acceptance criteria are implemented and verified. The solve record `merged` state means the candidate entered the base branch. Cleanup status remains on the solve record.
+
+### 9. Merge Solve Records If Requested
 
 Merge only when the user explicitly asked to merge, apply, land, push, or equivalent.
 
 The target branch must be explicit or safely inferred from tracker/project context. If ambiguous, ask before merging.
 
-All merge gates must pass:
+Route requested merge/apply/ship/land wording through the same solve-record gate used by `$solve-records`. Merge eligible records one by one, in dependency order. Explicit set wording such as `all ready records` may process the bounded set one record at a time, but ineligible records must be skipped with reasons. Do not silently merge dependencies unless the user explicitly approves the wider operation.
+
+All record merge gates must pass:
 
 1. No selected issue remains `needs-info`, `ready-for-human`, or pending human review for `agent-decision`.
 2. Every group passed its local validation.
@@ -259,6 +291,12 @@ All merge gates must pass:
 4. The integration worktree started from the latest target branch and is clean after committed integration changes.
 5. All eligible group branches are integrated and final validation passed.
 6. No semantic conflict was force-resolved.
+7. The solve record was re-read and live Git state still matches recorded `base_sha` and `head_sha`, or the record was revalidated before merge. A changed `head_sha` blocks merge until fresh validation updates the record. A changed `base_sha` may be revalidated only when the recorded base is an ancestor of the live base, the head still matches, preflight merge is clean, and checks are rerun or the unavailable-check low-risk exception is restated against the live base.
+8. The record has no manual-review trigger, stale check, stale ref, missing dependency, or unavailable check without the low-risk exception evidence.
+
+If merge succeeds, update the solve record as merged and attempt safe cleanup. If cleanup fails after the merge, do not roll back the code merge; keep the record merged with `cleanup_done: false` and report cleanup blockers.
+
+If merge fails or conflicts before completion, abort the merge when possible, keep the solve record open, write `manual required` in the record, and do not clean up the candidate branch/worktree.
 
 Do not show a full diff by default. Show the issue list, group branches, validation commands and results, pending blockers, and final target branch.
 

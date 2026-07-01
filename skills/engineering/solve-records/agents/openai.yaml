@@ -1,0 +1,4 @@
+interface:
+  display_name: "Solve Records"
+  short_description: "Manage local solve records"
+  default_prompt: "Use $solve-records to list local solve records and safely merge or clean up finished candidates."
