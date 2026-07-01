@@ -72,7 +72,7 @@ Gate:
 - [ ] Dependencies merged or not required
 - [ ] Conflict resolution not needed or completed safely
 Reason:
-- <why merge is allowed or blocked>
+- <why merge is allowed, performed, or blocked>
 
 ## Resources
 Base: `<base>`

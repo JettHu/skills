@@ -24,13 +24,14 @@ Tracker updates should record state-relevant facts, not run logs. Use the tracke
 ## Invocation
 
 ```text
-/ultra solve [issue-id... | --all] [message]
+/ultra solve [issue-id... | --all] [--auto-merge] [message]
 ```
 
 - Explicit issue ids: solve only those issues.
 - `--all`: solve every issue currently ready for agent work.
+- `--auto-merge`: after finished solve records are created, merge eligible records into the local base branch one by one through the merge gate. It does not fetch, push, deploy, or broaden the selected issue set.
 - Free-form message: infer the relevant issues from the conversation and tracker, then state the selection before claiming.
-- Merge/apply wording: merge only after the solve pipeline succeeds and the merge gates pass.
+- Merge/apply/ship/land wording: treat as auto-merge intent after the solve pipeline succeeds and the merge gates pass.
 
 ## Core Semantics
 
@@ -44,17 +45,17 @@ Tracker updates should record state-relevant facts, not run logs. Use the tracke
 
 Group worktrees produce candidate changes. The coordinator owns integration and merge. A group worktree must not merge directly into the target branch.
 
-Normal completion is a clean committed candidate branch plus a solve record when finalization succeeds. Merge, push, deploy, and cleanup happen only when the user's latest wording explicitly asks for them or when a later solve-record command advances the candidate.
+Default completion, when no `--auto-merge` or merge/apply/ship/land intent is present, is a clean committed candidate branch plus a solve record. Push, deploy, and cleanup happen only when the user's latest wording explicitly asks for them or when a later solve-record command advances the candidate.
 
 Issues are assumed AFK-ready when they are in `ready-for-agent`: the issue body, acceptance criteria, and any agent brief are treated as approved input. Do not stop the whole batch to ask the user a question unless the issue selection or merge target is ambiguous and cannot be inferred safely.
 
-## Worktree Helper Boundary
+## Worktree Boundary
 
 `/ultra solve` owns worktree identity and lifecycle semantics: issue grouping, base ref, branch name, worktree path, claim state, validation, integration, solve-record finalization, and merge gates.
 
-`agent-worktree` is an optional runtime helper for making the exact solve worktree Agent-ready. When available, solve may call it with solve-chosen identity such as `--path`, `--branch`, and `--base-ref`, or may call `bootstrap`/`verify` for an externally created worktree. The helper must not rename, regroup, rebase, merge, clean up, or reinterpret the solve candidate.
+Use raw `git worktree` as the baseline. If the runtime has an Agent-ready worktree helper, solve may delegate only the mechanical create/bootstrap/verify/remove work for the exact solve-chosen identity. The helper must not rename, regroup, rebase, merge, clean up, or reinterpret the solve candidate.
 
-If `agent-worktree` is unavailable, unsuitable for the current path, or not installed in the runtime, use raw `git worktree` commands and continue with the same user-facing solve workflow. Report the fallback briefly when it affects payload availability or validation.
+If no helper is available or it is unsuitable for the current path, continue with raw `git worktree` commands and the same user-facing solve workflow. Report the fallback briefly only when it affects local payload availability or validation.
 
 ## State Machine
 
@@ -176,7 +177,7 @@ Suggested names:
 - group branch: `solve/<timestamp>-<group-name>`
 - group worktree: `worktree-solve-<timestamp>-<group-name>`
 
-If using `agent-worktree`, pass the exact chosen branch, path, and base ref. If the helper cannot create or bootstrap that identity, first try raw Git for the same identity; if that also fails, mark only the affected issue/group with `tooling_unavailable`. Do not let the helper choose a different solve identity.
+If using an Agent-ready worktree helper, pass the exact chosen branch, path, and base ref. If the helper cannot create or bootstrap that identity, first try raw Git for the same identity; if that also fails, mark only the affected issue/group with `tooling_unavailable`. Do not let the helper choose a different solve identity.
 
 For each issue in a group:
 
@@ -223,7 +224,7 @@ Fix blocking review findings before integration, then commit the fixes to the re
 
 ### 7. Integrate
 
-Create one integration worktree from the latest target branch. The integration worktree is mandatory whenever more than one group exists or a merge/apply was requested; it is still recommended for a single non-trivial group.
+Create one integration worktree from the latest target branch. The integration worktree is mandatory whenever more than one group exists, `--auto-merge` is present, or merge/apply/ship/land was requested; it is still recommended for a single non-trivial group.
 
 Suggested names:
 
@@ -276,7 +277,7 @@ Do not create solve records for claim-time state, in-progress attempts, missing 
 
 Checks marked `unavailable` block auto-merge unless the change is explicitly trivial and low-risk, and the record says why no meaningful check exists, why no manual-review trigger applies, and what evidence still supports the change.
 
-Do not clean up successful solve worktrees during ordinary finalization. The candidate branch and worktree remain review context until a merge/apply/land/ship or explicit cleanup request advances the solve record.
+Do not clean up successful solve worktrees during ordinary finalization. The candidate branch and worktree remain review context until auto-merge, merge/apply/ship/land, or an explicit cleanup request advances the solve record.
 
 During the same finalize step:
 
@@ -289,13 +290,13 @@ During the same finalize step:
 
 The issue `completed` state means acceptance criteria are implemented and verified. The solve record `merged` state means the candidate entered the base branch. Cleanup status remains on the solve record.
 
-### 9. Merge Solve Records If Requested
+### 9. Auto-Merge Solve Records If Requested
 
-Merge only when the user explicitly asked to merge, apply, land, push, or equivalent.
+Auto-merge only when the user explicitly provided `--auto-merge` or asked to merge, apply, ship, land, or equivalent.
 
 The target branch must be explicit or safely inferred from tracker/project context. If ambiguous, ask before merging.
 
-Route requested merge/apply/ship/land wording through the same solve-record gate used by `$solve-records`. Merge eligible records one by one, in dependency order. Explicit set wording such as `all ready records` may process the bounded set one record at a time, but ineligible records must be skipped with reasons. Do not silently merge dependencies unless the user explicitly approves the wider operation.
+Route requested auto-merge/merge/apply/ship/land wording through the same solve-record gate used by `$solve-records`. Merge eligible records one by one, in dependency order. Explicit set wording such as `all ready records` may process the bounded set one record at a time, but ineligible records must be skipped with reasons. Do not silently merge dependencies unless the user explicitly approves the wider operation.
 
 All record merge gates must pass:
 
