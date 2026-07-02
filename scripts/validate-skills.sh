@@ -137,7 +137,7 @@ while IFS= read -r -d '' script; do
   python3 -m py_compile "$script"
   printf 'valid python: %s\n' "${script#"$REPO"/}"
 done < <(
-  find "$REPO/skills" "$REPO/tests" \
+  find "$REPO/scripts" "$REPO/skills" "$REPO/tests" \
     -type f \
     -name '*.py' \
     -not -path '*/node_modules/*' \
