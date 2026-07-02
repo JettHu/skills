@@ -9,6 +9,23 @@ This repository is a skill catalog. Keep skill directories lean, keep reusable v
 - `.scratch/` is local issue and design working state; it is not committed by default.
 - `.evals/` stores durable validation and eval records that should survive beyond a single chat session.
 
+## Catalog Buckets And Promotion
+
+- `skills/engineering/` is the promoted bucket for stable, broadly reusable engineering skills.
+- `skills/personal/` is for local setup or personal workflow skills. It may be exposed through the personal marketplace plugin, but it is not part of the promoted engineering set.
+- `skills/in-progress/` is for drafts. Do not add in-progress skills to the promoted plugin entry, top-level stable README table, or future human docs until they are promoted.
+- A skill is stable enough to promote only when its invocation mode is explicit, trigger wording is settled, the workflow is repeatable, the resource layout is lean, side-effecting behavior has deterministic validation or a durable eval record, and installer discovery has been checked when manifests or trigger wording changed.
+- Promoting a skill into `engineering/` requires syncing the top-level `README.md`, `skills/engineering/README.md`, `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, and the skill's `agents/openai.yaml`.
+
+## Invocation Policy
+
+- Every skill should intentionally be either user-invoked or model-invoked.
+- User-invoked skills set `disable-model-invocation: true` in `SKILL.md` and `policy.allow_implicit_invocation: false` in `agents/openai.yaml`.
+- Model-invoked skills omit `disable-model-invocation` and set `policy.allow_implicit_invocation: true` in `agents/openai.yaml` when autonomous use is useful.
+- The `ultra-*` skills are user-invoked completion-friendly entrypoints. Keep them explicit and delegation-only.
+- `ultra` is the core orchestration dependency that wrappers and the model may invoke.
+- `solve-records` stays model-invoked because users may call it directly and `/ultra solve` finalization, merge, and cleanup flows need to reach it.
+
 ## Agent Communication
 
 - DO NOT send optional commentary. Keep status and final reports focused on requested work, evidence, blockers, and actionable next steps.
@@ -42,3 +59,10 @@ An eval should be executable by one Agent session end to end: create isolated te
 The `ultra-*` skills are thin wrapper entrypoints. Keep them explicit and delegation-only; put orchestration behavior in `skills/engineering/ultra/`.
 
 `/ultra solve` creates solve records only after finished, reviewable candidates exist. Failed required checks do not create initial solve records. `$solve-records` owns listing, explaining, merge/ship/land gates, record-only closure, and safe cleanup semantics.
+
+Do not split `skills/engineering/ultra/solve.md` just because it is large. Before extracting reference-only material, evaluate the candidate split with concrete evidence:
+
+- The extracted reference has one clear owning concept, a named read condition, and either multiple consumers or a large conditional section that ordinary runs can skip.
+- `solve.md` remains the coordinator runbook; extracted files do not create a second state machine or alternate merge policy.
+- `$solve-records` and `/ultra solve` still agree on record creation, live verification, merge gates, unavailable-check handling, and cleanup safety.
+- Deterministic fixtures and `scripts/validate-skills.sh` pass after the split. If the split changes model behavior around orchestration, merge policy, or solve-record finalization, add or update an `.evals/` record.
