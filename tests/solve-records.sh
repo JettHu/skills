@@ -743,6 +743,7 @@ tool_select = {"matches": tool_module.select_records(tool_records, "caption fix"
 tool_merge_gate_ready = tool_module.merge_gate(repo, tool_by_id["20260701-1432-caption-fix"])
 tool_merge_gate_weak = tool_module.merge_gate(repo, tool_by_id["20260701-1546-weak-low-risk"])
 tool_cleanup_dirty = tool_module.cleanup_plan(repo, tool_by_id["20260701-1510-dirty-cleanup"])
+tool_landing_ready = tool_module.landing_plan(repo, tool_by_id["20260701-1432-caption-fix"])
 expected_recent = ["20260701-1501-recent-newer-merged-at"] + [
     f"20260701-17{minute:02d}-recent-{minute:02d}"
     for minute in range(11, 2, -1)
@@ -796,6 +797,10 @@ assert tool_merge_gate_weak["eligible"] is False, tool_merge_gate_weak
 assert "unavailable checks without low-risk evidence" in tool_merge_gate_weak["reasons"]
 assert tool_cleanup_dirty["status"] == "blocked", tool_cleanup_dirty
 assert tool_cleanup_dirty["reason"] == "dirty worktree", tool_cleanup_dirty
+assert tool_landing_ready["status"] == "ready", tool_landing_ready
+assert tool_landing_ready["landing_type"] == "fast-forward", tool_landing_ready
+assert tool_landing_ready["landing_sha"] == by_id["20260701-1432-caption-fix"]["head_sha"], tool_landing_ready
+assert "caption.txt" in tool_landing_ready["write_surface"], tool_landing_ready
 
 assert select(records, "20260701-1432-caption-fix") == ["20260701-1432-caption-fix"]
 assert select(records, ".scratch/caption/solve-records/20260701-1432-caption-fix.md") == ["20260701-1432-caption-fix"]
@@ -1083,3 +1088,341 @@ fi
 git -C "$MERGE_REPO" merge-base --is-ancestor "$MERGE_HEAD_SHA" master
 
 echo "solve-records safe merge fixture passed"
+
+plan_json() {
+  local repo="$1"
+  local record="$2"
+  local landing_sha="${3:-}"
+  if [[ -n "$landing_sha" ]]; then
+    python3 "$SOLVE_RECORDS_SCRIPT" landing-plan --repo "$repo" --record "$record" --landing-sha "$landing_sha" --json
+  else
+    python3 "$SOLVE_RECORDS_SCRIPT" landing-plan --repo "$repo" --record "$record" --json
+  fi
+}
+
+plan_field() {
+  local json="$1"
+  local field="$2"
+  python3 - "$json" "$field" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1])
+for part in sys.argv[2].split("."):
+    data = data[part]
+if isinstance(data, bool):
+    print("true" if data else "false")
+elif isinstance(data, list):
+    print("\n".join(str(item) for item in data))
+else:
+    print(data)
+PY
+}
+
+plan_reason_contains() {
+  local json="$1"
+  local needle="$2"
+  python3 - "$json" "$needle" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1])
+needle = sys.argv[2]
+if not any(needle in reason for reason in data.get("reasons", [])):
+    raise SystemExit(f"missing reason: {needle}; got {data.get('reasons')}")
+PY
+}
+
+write_landing_record() {
+  local repo="$1"
+  local id="$2"
+  local base_sha="$3"
+  local head="$4"
+  local head_sha="$5"
+  local worktree="$6"
+  local title="$7"
+  mkdir -p "$repo/.scratch/solve-records"
+  cat >"$repo/.scratch/solve-records/$id.md" <<EOF
+---
+id: $id
+kind: solve_record
+state: open
+base: master
+base_sha: $base_sha
+head: $head
+head_sha: $head_sha
+issues:
+  - .scratch/example/issues/01.md
+worktree: $worktree
+created_at: 2026-07-02T15:18:00+08:00
+cleanup_done: false
+---
+
+# Solve Record: $title
+
+## Summary
+Status: open
+Next action: merge
+
+## Issues
+- \`.scratch/example/issues/01.md\` - completed
+
+## Changes
+- $title
+
+## Checks
+Status: passed
+- \`fixture\` - passed
+
+## Merge
+Status: ready
+Gate:
+- [ ] Required checks passed
+Reason:
+- fixture reason
+
+## Resources
+Base: \`master\`
+Base SHA: \`$base_sha\`
+Head: \`$head\`
+Head SHA: \`$head_sha\`
+Worktree: \`$worktree\`
+Cleanup: pending
+
+## Notes
+- fixture
+EOF
+}
+
+init_landing_repo() {
+  local repo="$1"
+  git init -b master "$repo" >/dev/null
+  git -C "$repo" config user.email "solve-records@example.test"
+  git -C "$repo" config user.name "Solve Records Test"
+  printf 'base\n' >"$repo/app.txt"
+  git -C "$repo" add app.txt
+  git -C "$repo" commit -m "base" >/dev/null
+}
+
+FF_REPO="$TMPDIR_ROOT/landing-ff-project"
+FF_BRANCH="solve/20260702-1518-landing-ff"
+FF_WORKTREE="$TMPDIR_ROOT/wt-landing-ff"
+init_landing_repo "$FF_REPO"
+FF_BASE_SHA="$(git -C "$FF_REPO" rev-parse master)"
+git -C "$FF_REPO" checkout -b "$FF_BRANCH" master >/dev/null 2>&1
+printf 'fast forward\n' >"$FF_REPO/ff.txt"
+git -C "$FF_REPO" add ff.txt
+git -C "$FF_REPO" commit -m "fast-forward landing candidate" >/dev/null
+FF_HEAD_SHA="$(git -C "$FF_REPO" rev-parse "$FF_BRANCH")"
+git -C "$FF_REPO" checkout master >/dev/null 2>&1
+git -C "$FF_REPO" worktree add "$FF_WORKTREE" "$FF_BRANCH" >/dev/null 2>&1
+write_landing_record "$FF_REPO" "20260702-1518-landing-ff" "$FF_BASE_SHA" "$FF_BRANCH" "$FF_HEAD_SHA" "../wt-landing-ff" "Fast-forward landing"
+ff_plan="$(plan_json "$FF_REPO" "20260702-1518-landing-ff")"
+if [[ "$(plan_field "$ff_plan" status)" != "ready" ]]; then
+  echo "landing fixture: fast-forward should be ready" >&2
+  exit 1
+fi
+if [[ "$(plan_field "$ff_plan" landing_type)" != "fast-forward" ]]; then
+  echo "landing fixture: fast-forward type mismatch" >&2
+  exit 1
+fi
+git -C "$FF_REPO" merge --ff-only "$(plan_field "$ff_plan" landing_sha)" >/dev/null
+if [[ "$(cat "$FF_REPO/ff.txt")" != "fast forward" ]]; then
+  echo "landing fixture: fast-forward file missing" >&2
+  exit 1
+fi
+
+DIRTY_SAFE_REPO="$TMPDIR_ROOT/landing-dirty-safe-project"
+DIRTY_SAFE_BRANCH="solve/20260702-1519-dirty-safe"
+DIRTY_SAFE_WORKTREE="$TMPDIR_ROOT/wt-landing-dirty-safe"
+init_landing_repo "$DIRTY_SAFE_REPO"
+printf 'tracked note\n' >"$DIRTY_SAFE_REPO/notes.txt"
+git -C "$DIRTY_SAFE_REPO" add notes.txt
+git -C "$DIRTY_SAFE_REPO" commit -m "add tracked note" >/dev/null
+DIRTY_SAFE_BASE_SHA="$(git -C "$DIRTY_SAFE_REPO" rev-parse master)"
+git -C "$DIRTY_SAFE_REPO" checkout -b "$DIRTY_SAFE_BRANCH" master >/dev/null 2>&1
+printf 'candidate\n' >"$DIRTY_SAFE_REPO/candidate.txt"
+git -C "$DIRTY_SAFE_REPO" add candidate.txt
+git -C "$DIRTY_SAFE_REPO" commit -m "dirty-safe candidate" >/dev/null
+DIRTY_SAFE_HEAD_SHA="$(git -C "$DIRTY_SAFE_REPO" rev-parse "$DIRTY_SAFE_BRANCH")"
+git -C "$DIRTY_SAFE_REPO" checkout master >/dev/null 2>&1
+git -C "$DIRTY_SAFE_REPO" worktree add "$DIRTY_SAFE_WORKTREE" "$DIRTY_SAFE_BRANCH" >/dev/null 2>&1
+printf 'local dirty note\n' >"$DIRTY_SAFE_REPO/notes.txt"
+write_landing_record "$DIRTY_SAFE_REPO" "20260702-1519-dirty-safe" "$DIRTY_SAFE_BASE_SHA" "$DIRTY_SAFE_BRANCH" "$DIRTY_SAFE_HEAD_SHA" "../wt-landing-dirty-safe" "Dirty base preserved landing"
+dirty_safe_plan="$(plan_json "$DIRTY_SAFE_REPO" "20260702-1519-dirty-safe")"
+if [[ "$(plan_field "$dirty_safe_plan" status)" != "ready" ]]; then
+  echo "landing fixture: disjoint dirty base should be ready" >&2
+  exit 1
+fi
+git -C "$DIRTY_SAFE_REPO" merge --ff-only "$(plan_field "$dirty_safe_plan" landing_sha)" >/dev/null
+if [[ "$(cat "$DIRTY_SAFE_REPO/notes.txt")" != "local dirty note" ]]; then
+  echo "landing fixture: dirty file was not preserved" >&2
+  exit 1
+fi
+if [[ "$(cat "$DIRTY_SAFE_REPO/candidate.txt")" != "candidate" ]]; then
+  echo "landing fixture: candidate file missing after dirty-safe landing" >&2
+  exit 1
+fi
+
+DIRTY_BLOCK_REPO="$TMPDIR_ROOT/landing-dirty-block-project"
+DIRTY_BLOCK_BRANCH="solve/20260702-1520-dirty-block"
+DIRTY_BLOCK_WORKTREE="$TMPDIR_ROOT/wt-landing-dirty-block"
+init_landing_repo "$DIRTY_BLOCK_REPO"
+DIRTY_BLOCK_BASE_SHA="$(git -C "$DIRTY_BLOCK_REPO" rev-parse master)"
+git -C "$DIRTY_BLOCK_REPO" checkout -b "$DIRTY_BLOCK_BRANCH" master >/dev/null 2>&1
+printf 'candidate app\n' >"$DIRTY_BLOCK_REPO/app.txt"
+git -C "$DIRTY_BLOCK_REPO" add app.txt
+git -C "$DIRTY_BLOCK_REPO" commit -m "dirty-overlap candidate" >/dev/null
+DIRTY_BLOCK_HEAD_SHA="$(git -C "$DIRTY_BLOCK_REPO" rev-parse "$DIRTY_BLOCK_BRANCH")"
+git -C "$DIRTY_BLOCK_REPO" checkout master >/dev/null 2>&1
+git -C "$DIRTY_BLOCK_REPO" worktree add "$DIRTY_BLOCK_WORKTREE" "$DIRTY_BLOCK_BRANCH" >/dev/null 2>&1
+printf 'local app\n' >"$DIRTY_BLOCK_REPO/app.txt"
+write_landing_record "$DIRTY_BLOCK_REPO" "20260702-1520-dirty-block" "$DIRTY_BLOCK_BASE_SHA" "$DIRTY_BLOCK_BRANCH" "$DIRTY_BLOCK_HEAD_SHA" "../wt-landing-dirty-block" "Dirty overlap refusal"
+dirty_block_plan="$(plan_json "$DIRTY_BLOCK_REPO" "20260702-1520-dirty-block")"
+if [[ "$(plan_field "$dirty_block_plan" status)" != "blocked" ]]; then
+  echo "landing fixture: dirty overlap should block" >&2
+  exit 1
+fi
+plan_reason_contains "$dirty_block_plan" "dirty base path overlaps landing write surface"
+
+UNTRACKED_REPO="$TMPDIR_ROOT/landing-untracked-block-project"
+UNTRACKED_BRANCH="solve/20260702-1521-untracked-block"
+UNTRACKED_WORKTREE="$TMPDIR_ROOT/wt-landing-untracked-block"
+init_landing_repo "$UNTRACKED_REPO"
+UNTRACKED_BASE_SHA="$(git -C "$UNTRACKED_REPO" rev-parse master)"
+git -C "$UNTRACKED_REPO" checkout -b "$UNTRACKED_BRANCH" master >/dev/null 2>&1
+printf 'tracked by candidate\n' >"$UNTRACKED_REPO/generated.txt"
+git -C "$UNTRACKED_REPO" add generated.txt
+git -C "$UNTRACKED_REPO" commit -m "untracked-overwrite candidate" >/dev/null
+UNTRACKED_HEAD_SHA="$(git -C "$UNTRACKED_REPO" rev-parse "$UNTRACKED_BRANCH")"
+git -C "$UNTRACKED_REPO" checkout master >/dev/null 2>&1
+git -C "$UNTRACKED_REPO" worktree add "$UNTRACKED_WORKTREE" "$UNTRACKED_BRANCH" >/dev/null 2>&1
+printf 'local untracked\n' >"$UNTRACKED_REPO/generated.txt"
+write_landing_record "$UNTRACKED_REPO" "20260702-1521-untracked-block" "$UNTRACKED_BASE_SHA" "$UNTRACKED_BRANCH" "$UNTRACKED_HEAD_SHA" "../wt-landing-untracked-block" "Untracked overwrite refusal"
+untracked_plan="$(plan_json "$UNTRACKED_REPO" "20260702-1521-untracked-block")"
+if [[ "$(plan_field "$untracked_plan" status)" != "blocked" ]]; then
+  echo "landing fixture: untracked overwrite should block" >&2
+  exit 1
+fi
+plan_reason_contains "$untracked_plan" "untracked base path would be overwritten"
+
+HARD_STOP_REPO="$TMPDIR_ROOT/landing-hard-stop-project"
+HARD_STOP_BRANCH="solve/20260702-1521-hard-stop"
+HARD_STOP_WORKTREE="$TMPDIR_ROOT/wt-landing-hard-stop"
+init_landing_repo "$HARD_STOP_REPO"
+HARD_STOP_BASE_SHA="$(git -C "$HARD_STOP_REPO" rev-parse master)"
+git -C "$HARD_STOP_REPO" checkout -b "$HARD_STOP_BRANCH" master >/dev/null 2>&1
+printf '{"scripts":{}}\n' >"$HARD_STOP_REPO/package.json"
+git -C "$HARD_STOP_REPO" add package.json
+git -C "$HARD_STOP_REPO" commit -m "hard-stop manifest candidate" >/dev/null
+HARD_STOP_HEAD_SHA="$(git -C "$HARD_STOP_REPO" rev-parse "$HARD_STOP_BRANCH")"
+git -C "$HARD_STOP_REPO" checkout master >/dev/null 2>&1
+git -C "$HARD_STOP_REPO" worktree add "$HARD_STOP_WORKTREE" "$HARD_STOP_BRANCH" >/dev/null 2>&1
+write_landing_record "$HARD_STOP_REPO" "20260702-1521-hard-stop" "$HARD_STOP_BASE_SHA" "$HARD_STOP_BRANCH" "$HARD_STOP_HEAD_SHA" "../wt-landing-hard-stop" "Hard-stop manifest refusal"
+hard_stop_plan="$(plan_json "$HARD_STOP_REPO" "20260702-1521-hard-stop")"
+if [[ "$(plan_field "$hard_stop_plan" status)" != "blocked" ]]; then
+  echo "landing fixture: hard-stop manifest should block" >&2
+  exit 1
+fi
+plan_reason_contains "$hard_stop_plan" "mandatory hard-stop pattern requires manual review"
+if ! grep -Fxq "package.json" <<<"$(plan_field "$hard_stop_plan" hard_stop_paths)"; then
+  echo "landing fixture: hard-stop path missing" >&2
+  exit 1
+fi
+
+NONFF_REPO="$TMPDIR_ROOT/landing-nonff-project"
+NONFF_BRANCH="solve/20260702-1522-nonff"
+NONFF_WORKTREE="$TMPDIR_ROOT/wt-landing-nonff-candidate"
+NONFF_LANDING_WORKTREE="$TMPDIR_ROOT/wt-landing-nonff"
+NONFF_LANDING_BRANCH="landing/20260702-1522-nonff"
+init_landing_repo "$NONFF_REPO"
+NONFF_OLD_BASE_SHA="$(git -C "$NONFF_REPO" rev-parse master)"
+git -C "$NONFF_REPO" checkout -b "$NONFF_BRANCH" master >/dev/null 2>&1
+printf 'candidate\n' >"$NONFF_REPO/nonff.txt"
+git -C "$NONFF_REPO" add nonff.txt
+git -C "$NONFF_REPO" commit -m "nonff candidate" >/dev/null
+NONFF_HEAD_SHA="$(git -C "$NONFF_REPO" rev-parse "$NONFF_BRANCH")"
+git -C "$NONFF_REPO" checkout master >/dev/null 2>&1
+printf 'base advanced\n' >"$NONFF_REPO/base-advanced.txt"
+git -C "$NONFF_REPO" add base-advanced.txt
+git -C "$NONFF_REPO" commit -m "advance base" >/dev/null
+NONFF_LIVE_BASE_SHA="$(git -C "$NONFF_REPO" rev-parse master)"
+git -C "$NONFF_REPO" worktree add "$NONFF_WORKTREE" "$NONFF_BRANCH" >/dev/null 2>&1
+write_landing_record "$NONFF_REPO" "20260702-1522-nonff" "$NONFF_OLD_BASE_SHA" "$NONFF_BRANCH" "$NONFF_HEAD_SHA" "../wt-landing-nonff-candidate" "Non-fast-forward landing"
+nonff_stale_plan="$(plan_json "$NONFF_REPO" "20260702-1522-nonff")"
+plan_reason_contains "$nonff_stale_plan" "base sha mismatch"
+write_landing_record "$NONFF_REPO" "20260702-1522-nonff" "$NONFF_LIVE_BASE_SHA" "$NONFF_BRANCH" "$NONFF_HEAD_SHA" "../wt-landing-nonff-candidate" "Non-fast-forward landing"
+nonff_plan="$(plan_json "$NONFF_REPO" "20260702-1522-nonff")"
+if [[ "$(plan_field "$nonff_plan" status)" != "needs_landing_construction" ]]; then
+  echo "landing fixture: non-ff should require disposable construction" >&2
+  exit 1
+fi
+git -C "$NONFF_REPO" worktree add -b "$NONFF_LANDING_BRANCH" "$NONFF_LANDING_WORKTREE" master >/dev/null 2>&1
+git -C "$NONFF_LANDING_WORKTREE" merge --no-ff "$NONFF_BRANCH" -m "landing nonff candidate" >/dev/null
+NONFF_LANDING_SHA="$(git -C "$NONFF_LANDING_WORKTREE" rev-parse HEAD)"
+nonff_landing_plan="$(plan_json "$NONFF_REPO" "20260702-1522-nonff" "$NONFF_LANDING_SHA")"
+if [[ "$(plan_field "$nonff_landing_plan" status)" != "ready" ]]; then
+  echo "landing fixture: provided non-ff landing sha should be ready" >&2
+  exit 1
+fi
+git -C "$NONFF_REPO" merge --ff-only "$NONFF_LANDING_SHA" >/dev/null
+if [[ "$(cat "$NONFF_REPO/nonff.txt")" != "candidate" ]]; then
+  echo "landing fixture: non-ff candidate file missing" >&2
+  exit 1
+fi
+
+MECH_REPO="$TMPDIR_ROOT/landing-mechanical-project"
+MECH_BRANCH="solve/20260702-1523-mechanical"
+MECH_WORKTREE="$TMPDIR_ROOT/wt-landing-mechanical-candidate"
+MECH_LANDING_WORKTREE="$TMPDIR_ROOT/wt-landing-mechanical"
+MECH_LANDING_BRANCH="landing/20260702-1523-mechanical"
+init_landing_repo "$MECH_REPO"
+MECH_OLD_BASE_SHA="$(git -C "$MECH_REPO" rev-parse master)"
+git -C "$MECH_REPO" checkout -b "$MECH_BRANCH" master >/dev/null 2>&1
+printf 'candidate side\n' >"$MECH_REPO/app.txt"
+git -C "$MECH_REPO" add app.txt
+git -C "$MECH_REPO" commit -m "mechanical candidate" >/dev/null
+MECH_HEAD_SHA="$(git -C "$MECH_REPO" rev-parse "$MECH_BRANCH")"
+git -C "$MECH_REPO" checkout master >/dev/null 2>&1
+printf 'base side\n' >"$MECH_REPO/app.txt"
+git -C "$MECH_REPO" add app.txt
+git -C "$MECH_REPO" commit -m "advance base side" >/dev/null
+MECH_LIVE_BASE_SHA="$(git -C "$MECH_REPO" rev-parse master)"
+git -C "$MECH_REPO" worktree add "$MECH_WORKTREE" "$MECH_BRANCH" >/dev/null 2>&1
+write_landing_record "$MECH_REPO" "20260702-1523-mechanical" "$MECH_LIVE_BASE_SHA" "$MECH_BRANCH" "$MECH_HEAD_SHA" "../wt-landing-mechanical-candidate" "Mechanical conflict landing"
+mech_plan="$(plan_json "$MECH_REPO" "20260702-1523-mechanical")"
+if [[ "$(plan_field "$mech_plan" status)" != "needs_landing_construction" ]]; then
+  echo "landing fixture: mechanical conflict should require disposable construction" >&2
+  exit 1
+fi
+git -C "$MECH_REPO" worktree add -b "$MECH_LANDING_BRANCH" "$MECH_LANDING_WORKTREE" master >/dev/null 2>&1
+set +e
+git -C "$MECH_LANDING_WORKTREE" merge --no-ff "$MECH_BRANCH" -m "landing mechanical candidate" >/dev/null 2>&1
+mech_merge_rc=$?
+set -e
+if [[ "$mech_merge_rc" -eq 0 ]]; then
+  echo "landing fixture: mechanical conflict did not conflict" >&2
+  exit 1
+fi
+printf 'base side\ncandidate side\n' >"$MECH_LANDING_WORKTREE/app.txt"
+git -C "$MECH_LANDING_WORKTREE" add app.txt
+git -C "$MECH_LANDING_WORKTREE" commit -m "resolve mechanical conflict" >/dev/null
+MECH_LANDING_SHA="$(git -C "$MECH_LANDING_WORKTREE" rev-parse HEAD)"
+mech_landing_plan="$(plan_json "$MECH_REPO" "20260702-1523-mechanical" "$MECH_LANDING_SHA")"
+if [[ "$(plan_field "$mech_landing_plan" status)" != "ready" ]]; then
+  echo "landing fixture: resolved mechanical landing sha should be ready" >&2
+  exit 1
+fi
+git -C "$MECH_REPO" merge --ff-only "$MECH_LANDING_SHA" >/dev/null
+if [[ "$(cat "$MECH_REPO/app.txt")" != $'base side\ncandidate side' ]]; then
+  echo "landing fixture: mechanical resolution content mismatch" >&2
+  exit 1
+fi
+if git -C "$MECH_REPO" merge-base --is-ancestor "$MECH_BRANCH" master; then
+  :
+else
+  echo "landing fixture: mechanical head not contained in landed base" >&2
+  exit 1
+fi
+
+echo "solve-records landing fixture passed"

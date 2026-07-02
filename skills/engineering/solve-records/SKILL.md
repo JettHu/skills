@@ -13,7 +13,7 @@ Use solve records as local markdown receipts for finished, checkable merge candi
 | --- | --- |
 | no prompt | read-only dashboard |
 | ambiguous state-changing prompt | show candidates and stop |
-| merge / ship / land | live-verify, then merge one eligible record |
+| merge / ship / land | live-verify, construct `landing_sha`, then fast-forward base |
 | unavailable checks | manual required unless the low-risk exception is explicit |
 | cleanup | delete only registered, clean, merged solve worktrees/branches |
 | abandoned / replaced | close the record only; do not change issue state |
@@ -146,25 +146,67 @@ Process records one by one, in dependency order. Do not merge unmerged dependenc
 
 For explicit set operations, eligible records may merge while ineligible records are skipped with reasons. Never let one eligible member of a set make another member eligible.
 
-Before mutating the base branch:
+Before mutating the base branch, construct a verified `landing_sha`.
+
+Gate the record first:
 
 - live-verify the record
 - use `merge-gate` from the helper when available, then independently apply the full gate
-- verify the base worktree is clean
-- dry-run or preflight the merge using a disposable worktree when practical
+- verify the candidate worktree is clean
 - verify no manual-review trigger remains
 - verify required checks passed, or the unavailable-check low-risk exception is recorded
 
-If a mechanical conflict appears, resolve it on the candidate/head side or a disposable copy, then rerun checks and retry. Do not resolve conflicts in the user's base worktree. If resolving safely requires product, API, security, data, architecture, or rollout judgment, keep the record open and mark manual required.
+Construct `landing_sha`:
+
+- Fast-forward candidate: if live base is an ancestor of head, set `landing_sha=<head_sha>`.
+- Non-fast-forward clean merge: create a disposable worktree or equivalent throwaway merge environment from live base, merge head there, run required validation there, and set `landing_sha=<merge_commit_sha>`.
+- Mechanical conflict: resolve only in the disposable environment. Use `resolving-merge-conflicts` when available; otherwise apply the inline contract below. Run required validation there and set `landing_sha=<resolved_merge_commit_sha>` only after the merge result is clean and committed.
+
+Inline conflict contract when the skill is unavailable:
+
+- inspect the merge state and conflicting files
+- read both sides' commits, linked issues, docs, or other primary sources to understand intent
+- preserve both intents where possible
+- choose one side only when it matches the merge goal and record the tradeoff
+- do not invent new behavior
+- stop as `manual required` when resolution requires product, API, security, data, architecture, rollout, or other human judgment
+
+After `landing_sha` exists, run the dirty-base landing gate. Use `landing-plan` from the helper when available, then verify the reported facts:
+
+```bash
+python /path/to/solve-records/scripts/solve-records.py landing-plan --repo . --record <id> --landing-sha <landing_sha> --json
+```
+
+Required proof:
+
+- the base worktree is on the expected base ref
+- live base is an ancestor of `landing_sha`
+- `landing_sha` contains head
+- final landing write surface is `git diff --name-only <live_base>..<landing_sha>`
+- dirty and untracked base paths are listed
+- dirty and untracked base paths are disjoint from the final landing write surface
+- mandatory hard-stop patterns were reviewed
+
+Mandatory hard-stop pattern hits require `manual required` unless the user explicitly approved proceeding and the record captures why. Review at least lockfiles and dependency manifests, migrations or schemas, CI/build/rollout config, and skill or Agent invocation metadata such as `SKILL.md`, `agents/openai.yaml`, `.claude-plugin/**`, `AGENTS.md`, or `CLAUDE.md`.
+
+The helper reports these as `hard_stop_paths` and blocks by default; explicit user approval is a human decision, not a helper override.
+
+If the dirty-base gate passes, land with:
+
+```bash
+git merge --ff-only <landing_sha>
+```
+
+The user's base worktree must never be used for conflict resolution. A dirty-base exception only preserves unrelated local files; it does not relax cleanup safety or semantic-review gates.
 
 After a successful merge:
 
-- update `state: merged`, `merged_at`, and `merged_sha`
-- write the merge rationale in `## Merge`
+- update `state: merged`, `merged_at`, and `merged_sha` to the landed `landing_sha`
+- write the merge rationale in `## Merge`, including any dirty-base preservation evidence
 - attempt safe cleanup
 - if cleanup fails, keep the merge, keep `state: merged`, keep `cleanup_done: false`, and report blockers
 
-If merge fails before completion, abort any in-progress merge when possible, keep `state: open`, write `manual required`, and do not clean up the candidate branch or worktree.
+If landing construction or the dirty-base gate fails before merge, abort any in-progress disposable merge when possible, keep `state: open`, write `manual required` with the smallest actionable reason, and do not clean up the candidate branch or worktree.
 
 ## 7. Close
 

@@ -31,6 +31,28 @@ WORKTREE_CLEAN_CACHE = {}
 ANCESTOR_CACHE = {}
 
 
+HARD_STOP_BASENAMES = {
+    "package.json",
+    "Cargo.toml",
+    "Cargo.lock",
+    "pyproject.toml",
+    "uv.lock",
+    "poetry.lock",
+    "go.mod",
+    "go.sum",
+    "Gemfile",
+    "Gemfile.lock",
+    "pom.xml",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "schema.sql",
+    "SKILL.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+}
+
+
 def run_git(cwd, *args, check=True):
     result = subprocess.run(
         ["git", "-C", str(cwd), *args],
@@ -283,6 +305,90 @@ def worktree_clean_check(repo, record):
     return WORKTREE_CLEAN_CACHE[cache_key]
 
 
+def diff_paths(repo, before, after):
+    result = run_git(repo, "diff", "--name-only", f"{before}..{after}", check=False)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "git diff failed")
+    return sorted(path for path in set(result.stdout.splitlines()) if path)
+
+
+def status_paths(repo):
+    result = run_git(repo, "status", "--porcelain=v1", "--untracked-files=all", check=False)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "git status failed")
+
+    dirty = []
+    untracked = []
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+        status = line[:2]
+        raw_path = line[3:]
+        paths = raw_path.split(" -> ") if " -> " in raw_path else [raw_path]
+        if status == "??":
+            untracked.extend(paths)
+        else:
+            dirty.extend(paths)
+
+    return sorted(set(dirty)), sorted(set(untracked))
+
+
+def paths_overlap(left, right):
+    for left_path in left:
+        left_norm = left_path.strip("/")
+        for right_path in right:
+            right_norm = right_path.strip("/")
+            if not left_norm or not right_norm:
+                continue
+            if (
+                left_norm == right_norm
+                or left_norm.startswith(right_norm + "/")
+                or right_norm.startswith(left_norm + "/")
+            ):
+                return True
+    return False
+
+
+def hard_stop_paths(paths):
+    hits = []
+    for path in paths:
+        normalized = path.strip("/")
+        basename = Path(normalized).name
+        if not normalized:
+            continue
+        if basename in HARD_STOP_BASENAMES or basename.endswith(".lock"):
+            hits.append(path)
+            continue
+        if (
+            normalized.startswith(".github/")
+            or normalized.startswith(".claude-plugin/")
+            or normalized.startswith(".codex-plugin/")
+            or normalized.endswith("/agents/openai.yaml")
+            or "/migrations/" in f"/{normalized}/"
+            or "/schema/" in f"/{normalized}/"
+            or normalized.startswith("prisma/schema.prisma")
+            or basename.startswith("Dockerfile")
+            or basename.startswith("docker-compose")
+            or basename.startswith("build.gradle")
+        ):
+            hits.append(path)
+    return sorted(set(hits))
+
+
+def current_branch(repo):
+    result = run_git(repo, "branch", "--show-current", check=False)
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def live_ref_sha(repo, ref):
+    returncode, stdout, stderr = resolve_ref(repo, ref)
+    if returncode != 0:
+        raise RuntimeError(stderr or f"{ref} missing")
+    return stdout
+
+
 def merge_gate(repo, record):
     reasons = []
 
@@ -316,6 +422,96 @@ def merge_gate(repo, record):
         "eligible": not reasons,
         "reasons": reasons,
     }
+
+
+def landing_plan(repo, record, landing_sha=None):
+    gate = merge_gate(repo, record)
+    result = {
+        "id": record.get("id"),
+        "path": record.get("path"),
+        "status": "blocked",
+        "reasons": list(gate["reasons"]),
+        "merge_gate": gate,
+    }
+    if result["reasons"]:
+        return result
+
+    base_branch = current_branch(repo)
+    expected_base = record["base"]
+    if base_branch != expected_base:
+        result["reasons"].append(f"base worktree is on {base_branch or '<detached>'}, expected {expected_base}")
+        return result
+
+    live_base_sha = live_ref_sha(repo, record["base"])
+    live_head_sha = live_ref_sha(repo, record["head"])
+    merge_base = run_git(repo, "merge-base", "--is-ancestor", live_base_sha, live_head_sha, check=False)
+
+    if landing_sha:
+        landing_ref = landing_sha
+        returncode, resolved_landing, stderr = resolve_ref(repo, landing_ref)
+        if returncode != 0:
+            result["reasons"].append(stderr or f"landing sha missing: {landing_ref}")
+            return result
+        landing_sha = resolved_landing
+        base_reaches_landing = run_git(
+            repo, "merge-base", "--is-ancestor", live_base_sha, landing_sha, check=False
+        )
+        head_reaches_landing = run_git(
+            repo, "merge-base", "--is-ancestor", live_head_sha, landing_sha, check=False
+        )
+        if base_reaches_landing.returncode != 0:
+            result["reasons"].append("landing sha is not a descendant of base")
+        if head_reaches_landing.returncode != 0:
+            result["reasons"].append("landing sha does not contain head")
+        if result["reasons"]:
+            return result
+        landing_type = "provided-landing"
+    elif merge_base.returncode == 0:
+        landing_sha = live_head_sha
+        landing_type = "fast-forward"
+    else:
+        result.update(
+            {
+                "status": "needs_landing_construction",
+                "reasons": ["non-fast-forward requires a disposable landing commit"],
+                "landing_type": "disposable-worktree-required",
+                "live_base_sha": live_base_sha,
+                "live_head_sha": live_head_sha,
+            }
+        )
+        return result
+
+    write_surface = diff_paths(repo, live_base_sha, landing_sha)
+    dirty_paths, untracked_paths = status_paths(repo)
+    dirty_overlap = paths_overlap(dirty_paths, write_surface)
+    untracked_overlap = paths_overlap(untracked_paths, write_surface)
+    hard_stops = hard_stop_paths(write_surface)
+
+    reasons = []
+    if dirty_overlap:
+        reasons.append("dirty base path overlaps landing write surface")
+    if untracked_overlap:
+        reasons.append("untracked base path would be overwritten")
+    if hard_stops:
+        reasons.append("mandatory hard-stop pattern requires manual review")
+
+    result.update(
+        {
+            "status": "blocked" if reasons else "ready",
+            "reasons": reasons,
+            "landing_type": landing_type,
+            "landing_sha": landing_sha,
+            "live_base_sha": live_base_sha,
+            "live_head_sha": live_head_sha,
+            "write_surface": write_surface,
+            "dirty_paths": dirty_paths,
+            "untracked_paths": untracked_paths,
+            "dirty_overlap": dirty_overlap,
+            "untracked_overlap": untracked_overlap,
+            "hard_stop_paths": hard_stops,
+        }
+    )
+    return result
 
 
 def registered_worktree_info(repo):
@@ -596,6 +792,11 @@ def main(argv):
     cleanup_parser.add_argument("--record", required=True)
     add_common(cleanup_parser)
 
+    landing_parser = subparsers.add_parser("landing-plan")
+    landing_parser.add_argument("--record", required=True)
+    landing_parser.add_argument("--landing-sha")
+    add_common(landing_parser)
+
     args = parser.parse_args(argv)
 
     try:
@@ -613,6 +814,9 @@ def main(argv):
         elif args.command == "cleanup-plan":
             record = find_record(records, args.record)
             emit(cleanup_plan(repo, record), args.json)
+        elif args.command == "landing-plan":
+            record = find_record(records, args.record)
+            emit(landing_plan(repo, record, args.landing_sha), args.json)
     except RuntimeError as exc:
         print(f"solve-records: {exc}", file=sys.stderr)
         return 2

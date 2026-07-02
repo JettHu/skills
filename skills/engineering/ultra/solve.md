@@ -305,7 +305,7 @@ Auto-merge only when the user explicitly provided `--auto-merge` or asked to mer
 
 The target branch must be explicit or safely inferred from tracker/project context. If ambiguous, ask before merging.
 
-Route requested auto-merge/merge/apply/ship/land wording through the same solve-record gate used by `$solve-records`. Merge eligible records one by one, in dependency order. Explicit set wording such as `all ready records` may process the bounded set one record at a time, but ineligible records must be skipped with reasons. Do not silently merge dependencies unless the user explicitly approves the wider operation.
+Route requested auto-merge/merge/apply/ship/land wording through the same solve-record landing gate used by `$solve-records`. Merge eligible records one by one, in dependency order. Explicit set wording such as `all ready records` may process the bounded set one record at a time, but ineligible records must be skipped with reasons. Do not silently merge dependencies unless the user explicitly approves the wider operation.
 
 All record merge gates must pass:
 
@@ -318,9 +318,13 @@ All record merge gates must pass:
 7. The solve record was re-read and live Git state still matches recorded `base_sha` and `head_sha`, or the record was revalidated before merge. A changed `head_sha` blocks merge until fresh validation updates the record. A changed `base_sha` may be revalidated only when the recorded base is an ancestor of the live base, the head still matches, preflight merge is clean, and checks are rerun or the unavailable-check low-risk exception is restated against the live base.
 8. The record has no manual-review trigger, stale check, stale ref, missing dependency, or unavailable check without the low-risk exception evidence.
 
-If merge succeeds, update the solve record as merged and attempt safe cleanup. If cleanup fails after the merge, do not roll back the code merge; keep the record merged with `cleanup_done: false` and report cleanup blockers.
+The landing gate constructs `landing_sha` before touching the user's base worktree. Fast-forward candidates use head as `landing_sha`; non-fast-forward candidates and mechanical conflicts must be merged or resolved in a disposable worktree or equivalent throwaway environment. Semantic conflict resolution still stops as `manual required`.
 
-If merge fails or conflicts before completion, abort the merge when possible, keep the solve record open, write `manual required` in the record, and do not clean up the candidate branch/worktree.
+After `landing_sha` exists, the base worktree may only advance with `git merge --ff-only <landing_sha>` or an equivalent ref-safe fast-forward. Dirty or untracked base paths are allowed only when the final landing write surface is proven disjoint from those paths. `/ultra solve --auto-merge` must not fetch, push, deploy, broaden selected issues, or silently merge dependencies.
+
+If merge succeeds, update the solve record to `state: merged`, set `merged_at` and `merged_sha` to the landed `landing_sha`, write a concise merge rationale, and then attempt safe cleanup. If cleanup fails after the merge, do not roll back the code merge; keep the record merged with `cleanup_done: false` and report cleanup blockers.
+
+If merge fails or conflicts before completion, abort the merge when possible, keep the solve record open, write `manual required` in the record, do not clean up the candidate branch/worktree, and do not roll linked issues back from `completed` unless the candidate itself is invalidated.
 
 Do not show a full diff by default. Show the issue list, group branches, validation commands and results, pending blockers, and final target branch.
 

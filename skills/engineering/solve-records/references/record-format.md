@@ -66,13 +66,18 @@ Gate:
 - [ ] Required checks passed
 - [ ] Worktree clean
 - [ ] Base/head match recorded SHAs or record was revalidated
-- [ ] Head merges cleanly into base
+- [ ] Landing SHA constructed before base mutation
+- [ ] Landing validation passed
+- [ ] Final landing write surface reviewed
+- [ ] Base dirty and untracked paths reviewed as non-overlapping
+- [ ] Mandatory hard-stop patterns reviewed
 - [ ] No manual-review trigger detected
 - [ ] Low-risk agent decisions recorded or none
 - [ ] Dependencies merged or not required
 - [ ] Conflict resolution not needed or completed safely
 Reason:
 - <why merge is allowed, performed, or blocked>
+- Landing: <fast-forward | merge-commit | resolved-merge-commit | blocked>, `<landing_sha or none>`
 
 ## Resources
 Base: `<base>`
