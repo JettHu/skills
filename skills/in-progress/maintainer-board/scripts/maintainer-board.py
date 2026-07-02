@@ -22,6 +22,21 @@ ISSUE_BUCKETS = [
 ]
 
 SOLVE_RECORD_BUCKETS = ["ready", "manual", "cleanup", "recent", "stale_or_malformed"]
+DEFAULT_VISIBLE_ITEMS = 5
+DEFAULT_HTML_PATH = Path(".scratch/maintainer-board/index.html")
+SOLVE_RECORD_REQUIRED = {
+    "id",
+    "kind",
+    "state",
+    "base",
+    "base_sha",
+    "head",
+    "head_sha",
+    "issues",
+    "worktree",
+    "created_at",
+    "cleanup_done",
+}
 
 
 def run_git(cwd, *args, check=True):
@@ -44,8 +59,12 @@ def repo_root(path):
     return Path(result.stdout.strip()).resolve()
 
 
-def repo_self_root():
-    return Path(__file__).resolve().parents[1]
+def find_solve_records_helper():
+    for parent in Path(__file__).resolve().parents:
+        helper_path = parent / "skills/engineering/solve-records/scripts/solve-records.py"
+        if helper_path.is_file():
+            return helper_path
+    return None
 
 
 def normalize_key(key):
@@ -285,6 +304,10 @@ def ref_map(repo):
         refs[short_name] = sha
         if full_name.startswith("refs/heads/"):
             refs[full_name[len("refs/heads/") :]] = sha
+        elif full_name.startswith("refs/remotes/"):
+            refs[full_name[len("refs/remotes/") :]] = sha
+        elif full_name.startswith("refs/tags/"):
+            refs[full_name[len("refs/tags/") :]] = sha
     return refs
 
 
@@ -361,6 +384,267 @@ def add_issue_git_warnings(repo, issues):
     return all_warnings
 
 
+def section(text, name):
+    marker = f"## {name}\n"
+    start = text.find(marker)
+    if start == -1:
+        return ""
+    start += len(marker)
+    end = text.find("\n## ", start)
+    if end == -1:
+        end = len(text)
+    return text[start:end]
+
+
+def status_line(block):
+    for line in block.splitlines():
+        if line.startswith("Status:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def is_true(value):
+    return str(value).lower() == "true"
+
+
+def sha_matches(live, recorded):
+    return bool(recorded) and (live == recorded or live.startswith(recorded))
+
+
+def resolve_ref(repo, ref):
+    refs = ref_map(repo)
+    if ref in refs:
+        return 0, refs[ref], ""
+    result = run_git(repo, "rev-parse", "--verify", ref, check=False)
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+
+def ref_check(repo, record):
+    for ref_key, sha_key in (("base", "base_sha"), ("head", "head_sha")):
+        if not record.get(ref_key):
+            return False, f"{ref_key} missing"
+        returncode, stdout, _stderr = resolve_ref(repo, record[ref_key])
+        if returncode != 0:
+            return False, f"{record[ref_key]} missing"
+        if not sha_matches(stdout, record.get(sha_key)):
+            return False, f"{ref_key} sha mismatch"
+    return True, ""
+
+
+def has_low_risk_exception(record):
+    notes = record.get("notes", "")
+    required_evidence = [
+        "low-risk",
+        "no meaningful automated check exists",
+        "no manual-review trigger",
+        "evidence:",
+    ]
+    return all(fragment in notes for fragment in required_evidence)
+
+
+def body_frontmatter_conflict(record):
+    summary_status = record.get("summary_status")
+    if summary_status and summary_status != record.get("state"):
+        return "body/frontmatter status conflict"
+    return ""
+
+
+def worktree_clean_check(repo, record):
+    worktree = (repo / record["worktree"]).resolve()
+    if not worktree.exists():
+        return False, "worktree missing"
+    status = run_git(worktree, "status", "--short", "--untracked-files=all", check=False)
+    if status.returncode != 0:
+        return False, "worktree is not a Git checkout"
+    if status.stdout.strip():
+        return False, "worktree dirty"
+    return True, ""
+
+
+def parse_solve_record(repo, path):
+    text = path.read_text(encoding="utf-8")
+    rel = str(path.relative_to(repo))
+    frontmatter, body = split_frontmatter(text)
+    record = {"path": rel, "text": text}
+    if frontmatter is None:
+        record["malformed"] = "missing frontmatter"
+        return record
+
+    record.update(frontmatter)
+    missing = sorted(SOLVE_RECORD_REQUIRED - set(record))
+    if missing:
+        record["malformed"] = "missing " + ",".join(missing)
+        return record
+    if record["kind"] != "solve_record":
+        record["malformed"] = f"invalid kind: {record['kind']}"
+        return record
+
+    record["checks"] = status_line(section(body, "Checks"))
+    record["merge"] = status_line(section(body, "Merge"))
+    record["summary_status"] = status_line(section(body, "Summary"))
+    record["notes"] = section(body, "Notes").lower()
+    record["changes"] = section(body, "Changes")
+    record["title"] = first_heading(body)
+    return record
+
+
+def discover_solve_records(repo):
+    paths = []
+    paths.extend(repo.glob(".scratch/solve-records/*.md"))
+    paths.extend(repo.glob(".scratch/*/solve-records/*.md"))
+    return [parse_solve_record(repo, path) for path in sorted(paths)]
+
+
+def solve_record_merge_gate(repo, record):
+    reasons = []
+    if record.get("malformed"):
+        reasons.append(record["malformed"])
+    elif body_frontmatter_conflict(record):
+        reasons.append(body_frontmatter_conflict(record))
+    else:
+        refs_ok, ref_reason = ref_check(repo, record)
+        if not refs_ok:
+            reasons.append(ref_reason)
+        if record.get("state") != "open":
+            reasons.append(f"state is {record.get('state')}")
+        if record.get("merge") != "ready":
+            reasons.append(f"merge status is {record.get('merge') or '<missing>'}")
+        if record.get("external_provider") or record.get("external_url"):
+            reasons.append("remote-primary record")
+        if record.get("checks") == "unavailable":
+            if not has_low_risk_exception(record):
+                reasons.append("unavailable checks without low-risk evidence")
+        elif record.get("checks") != "passed":
+            reasons.append(f"checks status is {record.get('checks') or '<missing>'}")
+        if not reasons:
+            clean, clean_reason = worktree_clean_check(repo, record)
+            if not clean:
+                reasons.append(clean_reason)
+
+    return {
+        "id": record.get("id"),
+        "path": record.get("path"),
+        "eligible": not reasons,
+        "reasons": reasons,
+    }
+
+
+def cleanup_plan(repo, record):
+    if record.get("malformed"):
+        status = "blocked"
+        reason = record["malformed"]
+    elif record.get("state") not in {"merged", "closed"}:
+        status = "not_applicable"
+        reason = f"state is {record.get('state')}"
+    elif is_true(record.get("cleanup_done")):
+        status = "done"
+        reason = ""
+    else:
+        worktree = (repo / record.get("worktree", "")).resolve()
+        if worktree == repo.resolve():
+            status = "blocked"
+            reason = "worktree is repo root"
+        elif not worktree.exists():
+            status = "blocked"
+            reason = "worktree missing"
+        else:
+            status = "pending"
+            reason = ""
+
+    return {
+        "id": record.get("id"),
+        "path": record.get("path"),
+        "status": status,
+        "reason": reason,
+        "worktree": record.get("worktree"),
+        "head": record.get("head"),
+    }
+
+
+def solve_record_summary(repo, record, include_merge_gate=False):
+    summary = {
+        "path": record.get("path"),
+        "id": record.get("id"),
+        "title": record.get("title"),
+        "state": record.get("state"),
+        "created_at": record.get("created_at"),
+        "merged_at": record.get("merged_at"),
+        "merged_sha": record.get("merged_sha"),
+        "base": record.get("base"),
+        "head": record.get("head"),
+        "issues": record.get("issues", []),
+        "worktree": record.get("worktree"),
+        "checks": record.get("checks"),
+        "merge": record.get("merge"),
+        "cleanup_done": record.get("cleanup_done"),
+        "external_provider": record.get("external_provider"),
+        "external_url": record.get("external_url"),
+    }
+    if record.get("malformed"):
+        summary["malformed"] = record["malformed"]
+    else:
+        refs_ok, ref_reason = ref_check(repo, record)
+        summary["refs_ok"] = refs_ok
+        summary["ref_reason"] = ref_reason
+        summary["low_risk_exception"] = has_low_risk_exception(record)
+        conflict = body_frontmatter_conflict(record)
+        if conflict:
+            summary["body_conflict"] = conflict
+        if include_merge_gate:
+            summary["merge_gate"] = solve_record_merge_gate(repo, record)
+    return summary
+
+
+def recent_sort_key(summary):
+    return (
+        summary.get("merged_at") or summary.get("created_at") or "",
+        summary.get("id") or "",
+        summary.get("path") or "",
+    )
+
+
+def fallback_solve_records_dashboard(repo):
+    records = discover_solve_records(repo)
+    buckets = {bucket: [] for bucket in SOLVE_RECORD_BUCKETS}
+    recent = []
+
+    for record in records:
+        summary = solve_record_summary(repo, record)
+        if record.get("malformed"):
+            buckets["stale_or_malformed"].append(summary)
+            continue
+        conflict = body_frontmatter_conflict(record)
+        if conflict:
+            summary["stale_reason"] = conflict
+            buckets["stale_or_malformed"].append(summary)
+            continue
+        refs_ok, ref_reason = ref_check(repo, record)
+        if not refs_ok and record["state"] == "open":
+            summary["stale_reason"] = ref_reason
+            buckets["stale_or_malformed"].append(summary)
+            continue
+        if record["state"] in {"merged", "closed"} and not is_true(record["cleanup_done"]):
+            summary["cleanup_plan"] = cleanup_plan(repo, record)
+            buckets["cleanup"].append(summary)
+            continue
+        if record["state"] == "merged":
+            recent.append(summary)
+            continue
+        gate = solve_record_merge_gate(repo, record)
+        summary["merge_gate"] = gate
+        if gate["eligible"]:
+            buckets["ready"].append(summary)
+        else:
+            buckets["manual"].append(summary)
+
+    buckets["recent"] = sorted(recent, key=recent_sort_key, reverse=True)[:10]
+    return {
+        "repo": str(repo),
+        "record_count": len(records),
+        "buckets": buckets,
+    }
+
+
 def bucket_items(items, buckets):
     result = {bucket: [] for bucket in buckets}
     for item in items:
@@ -369,20 +653,14 @@ def bucket_items(items, buckets):
 
 
 def load_solve_records_dashboard(repo):
-    helper_path = repo_self_root() / "skills/engineering/solve-records/scripts/solve-records.py"
-    if not helper_path.is_file():
-        return {
-            "repo": str(repo),
-            "record_count": 0,
-            "buckets": {bucket: [] for bucket in SOLVE_RECORD_BUCKETS},
-            "error": f"solve-records helper not found: {helper_path}",
-        }
-
-    spec = importlib.util.spec_from_file_location("solve_records_helper", helper_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    records = module.discover(repo)
-    return module.dashboard(repo, records)
+    helper_path = find_solve_records_helper()
+    if helper_path:
+        spec = importlib.util.spec_from_file_location("solve_records_helper", helper_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        records = module.discover(repo)
+        return module.dashboard(repo, records)
+    return fallback_solve_records_dashboard(repo)
 
 
 def build_snapshot(repo):
@@ -410,16 +688,39 @@ def build_snapshot(repo):
     }
 
 
-def compact_meta(item, keys):
-    parts = []
-    for key in keys:
-        value = item.get(key)
-        if not value:
+def render_pill(value, css_class=""):
+    if not value:
+        return ""
+    class_names = ["pill"]
+    if css_class:
+        class_names.append(css_class)
+    class_names.append(f"label-{slugify(value)}")
+    class_attr = " ".join(class_names)
+    return f"<span class='{class_attr}'>{html.escape(str(value))}</span>"
+
+
+def slugify(value):
+    value = str(value).strip().lower()
+    value = re.sub(r"[^a-z0-9]+", "-", value).strip("-")
+    return value or "unknown"
+
+
+def render_pills(values):
+    return "".join(render_pill(value) for value in values if value)
+
+
+def render_detail_rows(rows):
+    rendered = []
+    for label, value in rows:
+        if value in (None, "", []):
             continue
         if isinstance(value, list):
-            value = ", ".join(str(part) for part in value)
-        parts.append(f"{key.replace('_', ' ')}: {value}")
-    return parts
+            value = "\n".join(str(item) for item in value)
+        escaped = html.escape(str(value)).replace("\n", "<br>")
+        rendered.append(f"<dt>{html.escape(label)}</dt><dd>{escaped}</dd>")
+    if not rendered:
+        return ""
+    return f"<dl class='details-grid'>{''.join(rendered)}</dl>"
 
 
 def render_warning_list(warnings):
@@ -432,7 +733,7 @@ def render_warning_list(warnings):
     return f"<ul class='warnings'>{items}</ul>"
 
 
-def render_issue_card(issue):
+def render_issue_card(issue, hidden=False):
     search = " ".join(
         str(value)
         for value in [
@@ -444,43 +745,47 @@ def render_issue_card(issue):
             " ".join(issue["flags"]),
         ]
     )
-    meta = compact_meta(
-        issue,
-        [
-            "status",
-            "category",
-            "feature",
-            "created",
-            "metadata_format",
-            "solve_branch",
-            "solve_worktree",
-        ],
-    )
-    flags = "".join(f"<span class='pill'>{html.escape(flag)}</span>" for flag in issue["flags"])
-    links = []
-    if issue["parent"]:
-        links.append(f"parent: {issue['parent']}")
-    for blocker in issue["blocked_by"]:
-        links.append(f"blocked by: {blocker}")
-    for record in issue["solve_records"]:
-        links.append(f"solve record: {record}")
-    link_html = "".join(f"<div class='path'>{html.escape(link)}</div>" for link in links)
     checklist = issue["checklist"]
     checklist_text = f"{checklist['done']}/{checklist['total']} checklist" if checklist["total"] else "no checklist"
-    meta_html = "".join(f"<span>{html.escape(part)}</span>" for part in meta)
+    warning_text = f"{len(issue['warnings'])} warning" if len(issue["warnings"]) == 1 else f"{len(issue['warnings'])} warnings"
+    top_pills = [
+        issue["status"],
+        issue["category"],
+        issue["feature"],
+        checklist_text,
+        warning_text if issue["warnings"] else "",
+        *issue["flags"],
+    ]
+    detail_rows = [
+        ("Path", issue["path"]),
+        ("Status", issue["status"]),
+        ("Category", issue["category"]),
+        ("Feature", issue["feature"]),
+        ("Created", issue["created"]),
+        ("Metadata format", issue["metadata_format"]),
+        ("Parent", issue["parent"]),
+        ("Blocked by", issue["blocked_by"]),
+        ("Solve branch", issue["solve_branch"]),
+        ("Solve worktree", issue["solve_worktree"]),
+        ("Solve records", issue["solve_records"]),
+        ("Checklist", checklist_text),
+    ]
+    hidden_attr = " data-overflow='true' hidden" if hidden else ""
     return f"""
-<article class="card issue-card" data-search="{html.escape(search.lower())}">
+<article class="card issue-card" data-search="{html.escape(search.lower())}"{hidden_attr}>
   <h3>{html.escape(issue['title'])}</h3>
   <div class="path">{html.escape(issue['path'])}</div>
-  <div class="meta">{meta_html}<span>{html.escape(checklist_text)}</span></div>
-  <div class="pills">{flags}</div>
-  {link_html}
-  {render_warning_list(issue['warnings'])}
+  <div class="pills">{render_pills(top_pills)}</div>
+  <details class="card-details">
+    <summary>Details</summary>
+    {render_detail_rows(detail_rows)}
+    {render_warning_list(issue['warnings'])}
+  </details>
 </article>
 """
 
 
-def render_record_card(record):
+def render_record_card(record, hidden=False):
     search = " ".join(
         str(value)
         for value in [
@@ -492,46 +797,59 @@ def render_record_card(record):
             record.get("base", ""),
         ]
     )
-    meta = compact_meta(
-        record,
-        [
-            "state",
-            "checks",
-            "merge",
-            "cleanup_done",
-            "base",
-            "head",
-            "worktree",
-        ],
-    )
-    details = []
-    for issue in record.get("issues", []):
-        details.append(f"issue: {issue}")
-    if record.get("stale_reason"):
-        details.append(f"stale: {record['stale_reason']}")
-    if record.get("malformed"):
-        details.append(f"malformed: {record['malformed']}")
-    if record.get("ref_reason"):
-        details.append(f"refs: {record['ref_reason']}")
-    meta_html = "".join(f"<span>{html.escape(part)}</span>" for part in meta)
-    detail_html = "".join(f"<div class='path'>{html.escape(detail)}</div>" for detail in details)
+    cleanup = "cleanup done" if str(record.get("cleanup_done")).lower() == "true" else "cleanup pending"
+    top_pills = [
+        record.get("state"),
+        record.get("checks"),
+        record.get("merge"),
+        cleanup if record.get("cleanup_done") else "",
+    ]
+    detail_rows = [
+        ("Path", record.get("path")),
+        ("ID", record.get("id")),
+        ("State", record.get("state")),
+        ("Checks", record.get("checks")),
+        ("Merge", record.get("merge")),
+        ("Cleanup", cleanup if record.get("cleanup_done") else ""),
+        ("Base", record.get("base")),
+        ("Head", record.get("head")),
+        ("Worktree", record.get("worktree")),
+        ("Issues", record.get("issues", [])),
+        ("Stale reason", record.get("stale_reason")),
+        ("Malformed", record.get("malformed")),
+        ("Refs", record.get("ref_reason")),
+    ]
+    hidden_attr = " data-overflow='true' hidden" if hidden else ""
     return f"""
-<article class="card record-card" data-search="{html.escape(search.lower())}">
+<article class="card record-card" data-search="{html.escape(search.lower())}"{hidden_attr}>
   <h3>{html.escape(record.get('title') or record.get('id') or record.get('path') or 'solve record')}</h3>
   <div class="path">{html.escape(record.get('path', ''))}</div>
-  <div class="meta">{meta_html}</div>
-  {detail_html}
+  <div class="pills">{render_pills(top_pills)}</div>
+  <details class="card-details">
+    <summary>Details</summary>
+    {render_detail_rows(detail_rows)}
+  </details>
 </article>
 """
 
 
 def render_bucket(title, items, renderer):
-    cards = "".join(renderer(item) for item in items)
+    cards = "".join(
+        renderer(item, hidden=index >= DEFAULT_VISIBLE_ITEMS)
+        for index, item in enumerate(items)
+    )
     empty = "<p class='empty'>none</p>" if not items else ""
+    hidden_count = max(0, len(items) - DEFAULT_VISIBLE_ITEMS)
+    show_more = (
+        f"<button class='show-more' type='button' data-hidden-count='{hidden_count}'>Show {hidden_count} more</button>"
+        if hidden_count
+        else ""
+    )
     return f"""
-<section class="bucket">
+<section class="bucket" data-expanded="false">
   <header><h2>{html.escape(title)}</h2><span>{len(items)}</span></header>
   <div class="cards">{cards}{empty}</div>
+  {show_more}
 </section>
 """
 
@@ -625,11 +943,20 @@ def render_html(snapshot):
       border-bottom: 1px solid var(--line);
       padding-bottom: 6px;
     }}
+    .lane-scroll {{
+      overflow-x: auto;
+      padding-bottom: 8px;
+      scrollbar-gutter: stable;
+    }}
     .grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(330px, 380px);
+      grid-template-rows: 1fr;
       gap: 12px;
       align-items: start;
+      width: max-content;
+      min-width: 100%;
     }}
     .bucket {{
       background: #eef1f5;
@@ -671,29 +998,103 @@ def render_html(snapshot):
       font-size: 11px;
       overflow-wrap: anywhere;
     }}
-    .meta {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 5px;
-      margin: 7px 0;
-    }}
-    .meta span, .pill {{
+    .pill {{
       border: 1px solid var(--line);
       border-radius: 999px;
       padding: 1px 7px;
       color: var(--muted);
       background: #fbfcfd;
       font-size: 11px;
+      font-weight: 620;
+    }}
+    .label-ready-for-agent,
+    .label-ready,
+    .label-passed,
+    .label-completed,
+    .label-cleanup-done {{
+      color: #116329;
+      background: #dafbe1;
+      border-color: #aceebb;
+    }}
+    .label-solve-in-progress,
+    .label-open,
+    .label-feature {{
+      color: #0969da;
+      background: #ddf4ff;
+      border-color: #b6e3ff;
+    }}
+    .label-ready-for-human,
+    .label-needs-info,
+    .label-manual-required,
+    .label-unavailable,
+    .label-cleanup-pending,
+    .label-documentation {{
+      color: #9a6700;
+      background: #fff8c5;
+      border-color: #f0d98c;
+    }}
+    .label-agent-decision,
+    .label-stale,
+    .label-stale-or-malformed,
+    .label-bug {{
+      color: #cf222e;
+      background: #ffebe9;
+      border-color: #ffcecb;
+    }}
+    .label-merged,
+    .label-auto-merged {{
+      color: #8250df;
+      background: #fbefff;
+      border-color: #eac4ff;
     }}
     .pills {{ display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; }}
+    .card-details {{
+      margin-top: 7px;
+      border-top: 1px solid var(--line);
+      padding-top: 6px;
+    }}
+    .card-details summary {{
+      cursor: pointer;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 650;
+    }}
+    .details-grid {{
+      display: grid;
+      grid-template-columns: minmax(86px, max-content) minmax(0, 1fr);
+      gap: 5px 10px;
+      margin: 7px 0 0;
+    }}
+    .details-grid dt {{
+      color: var(--muted);
+      font-size: 11px;
+    }}
+    .details-grid dd {{
+      margin: 0;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+    }}
     .warnings {{
       margin: 7px 0 0;
       padding-left: 18px;
       color: var(--red);
     }}
     .warn-code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
+    .show-more {{
+      width: calc(100% - 16px);
+      margin: 0 8px 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--blue);
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+      padding: 6px 8px;
+    }}
     .empty {{ margin: 0; color: var(--muted); padding: 6px 2px; }}
-    .hidden {{ display: none !important; }}
   </style>
 </head>
 <body>
@@ -710,19 +1111,44 @@ def render_html(snapshot):
   <h2 class="section-title">Solve Record Summary</h2>
   <div class="summary">{record_summary}</div>
   <h2 class="section-title">Issues</h2>
-  <div class="grid">{issue_sections}</div>
+  <div class="lane-scroll"><div class="grid">{issue_sections}</div></div>
   <h2 class="section-title">Solve Records</h2>
-  <div class="grid">{record_sections}</div>
+  <div class="lane-scroll"><div class="grid">{record_sections}</div></div>
 </main>
 <script>
   const search = document.getElementById('search');
   const cards = [...document.querySelectorAll('.card')];
-  search.addEventListener('input', () => {{
+  const buttons = [...document.querySelectorAll('.show-more')];
+  function applyLimit() {{
     const query = search.value.trim().toLowerCase();
-    for (const card of cards) {{
-      card.classList.toggle('hidden', query && !card.dataset.search.includes(query));
+    for (const button of buttons) {{
+      button.hidden = Boolean(query);
     }}
+    for (const card of cards) {{
+      const matches = !query || card.dataset.search.includes(query);
+      if (query) {{
+        card.hidden = !matches;
+        continue;
+      }}
+      const bucket = card.closest('.bucket');
+      const limited = card.dataset.overflow === 'true' && bucket.dataset.expanded !== 'true';
+      card.hidden = limited;
+    }}
+  }}
+  for (const button of buttons) {{
+    const hiddenCount = button.dataset.hiddenCount;
+    button.addEventListener('click', () => {{
+      const bucket = button.closest('.bucket');
+      const expanded = bucket.dataset.expanded === 'true';
+      bucket.dataset.expanded = expanded ? 'false' : 'true';
+      button.textContent = expanded ? `Show ${{hiddenCount}} more` : 'Show fewer';
+      applyLimit();
+    }});
+  }}
+  search.addEventListener('input', () => {{
+    applyLimit();
   }});
+  applyLimit();
 </script>
 </body>
 </html>
@@ -737,23 +1163,34 @@ def write_html(snapshot, output_path):
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_html(snapshot), encoding="utf-8")
+    return path.resolve()
 
 
 def main(argv):
     parser = argparse.ArgumentParser(description="Generate a local maintainer board snapshot")
-    parser.add_argument("--repo", default=".", help="repository to scan")
+    parser.add_argument("--repo", default=".", help="repository to scan; defaults to the current Git repo")
     parser.add_argument("--json", action="store_true", help="emit JSON to stdout")
-    parser.add_argument("--html", help="write static HTML to this path")
+    parser.add_argument(
+        "--html",
+        nargs="?",
+        const="",
+        help="write static HTML; defaults to <repo>/.scratch/maintainer-board/index.html",
+    )
     args = parser.parse_args(argv)
-
-    if not args.json and not args.html:
-        parser.error("choose at least one output mode: --json or --html <path>")
 
     try:
         repo = repo_root(args.repo)
         snapshot = build_snapshot(repo)
-        if args.html:
-            write_html(snapshot, args.html)
+        html_output = None
+        if args.html is not None:
+            html_output = Path(args.html) if args.html else repo / DEFAULT_HTML_PATH
+        elif not args.json:
+            html_output = repo / DEFAULT_HTML_PATH
+
+        if html_output:
+            written_path = write_html(snapshot, html_output)
+            if not args.json:
+                print(written_path)
         if args.json:
             emit_json(snapshot)
     except RuntimeError as exc:

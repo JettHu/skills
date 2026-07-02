@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-BOARD_SCRIPT="$REPO_ROOT/scripts/maintainer-board.py"
+BOARD_SCRIPT="$REPO_ROOT/skills/in-progress/maintainer-board/scripts/maintainer-board.py"
 TMPDIR_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_ROOT"' EXIT
 
@@ -112,6 +112,16 @@ Created: 2026-07-02
 # Completed unlinked issue
 EOF
 
+for n in 1 2 3 4 5; do
+  cat >"$REPO/.scratch/feature-a/issues/06-extra-completed-$n.md" <<EOF
+Status: completed
+Category: documentation
+Created: 2026-07-02
+
+# Extra completed unlinked issue $n
+EOF
+done
+
 cat >"$REPO/.scratch/feature-a/issues/07-missing-worktree.md" <<'EOF'
 Status: ready-for-agent
 Flags: solve-in-progress
@@ -211,26 +221,40 @@ write_record "$REPO/.scratch/solve-records/20260702-recent.md" \
 
 JSON_OUT="$TMPDIR_ROOT/board.json"
 HTML_OUT="$TMPDIR_ROOT/board.html"
+DEFAULT_HTML_OUT="$(git -C "$REPO" rev-parse --show-toplevel)/.scratch/maintainer-board/index.html"
+FALLBACK_JSON_OUT="$TMPDIR_ROOT/fallback-board.json"
+STANDALONE_SCRIPT="$TMPDIR_ROOT/standalone/maintainer-board.py"
 
 python3 "$BOARD_SCRIPT" --repo "$REPO" --json >"$JSON_OUT"
-python3 "$BOARD_SCRIPT" --repo "$REPO" --html "$HTML_OUT"
+python3 "$BOARD_SCRIPT" --repo "$REPO" --html "$HTML_OUT" >"$TMPDIR_ROOT/html-path.txt"
+DEFAULT_STDOUT="$(cd "$REPO" && python3 "$BOARD_SCRIPT")"
+mkdir -p "$(dirname "$STANDALONE_SCRIPT")"
+cp "$BOARD_SCRIPT" "$STANDALONE_SCRIPT"
+python3 "$STANDALONE_SCRIPT" --repo "$REPO" --json >"$FALLBACK_JSON_OUT"
 
-python3 - "$JSON_OUT" "$HTML_OUT" <<'PY'
+if [[ "$DEFAULT_STDOUT" != "$DEFAULT_HTML_OUT" ]]; then
+  echo "expected default HTML path '$DEFAULT_HTML_OUT', got '$DEFAULT_STDOUT'" >&2
+  exit 1
+fi
+
+python3 - "$JSON_OUT" "$HTML_OUT" "$DEFAULT_HTML_OUT" "$FALLBACK_JSON_OUT" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 html = Path(sys.argv[2]).read_text(encoding="utf-8")
+default_html = Path(sys.argv[3]).read_text(encoding="utf-8")
+fallback = json.loads(Path(sys.argv[4]).read_text(encoding="utf-8"))
 
 assert data["schema_version"] == "maintainer-board/v1"
-assert data["issues"]["count"] == 8
+assert data["issues"]["count"] == 13
 assert data["issues"]["counts"]["ready_for_agent"] == 2
 assert data["issues"]["counts"]["claimed_or_in_progress"] == 2
 assert data["issues"]["counts"]["needs_human"] == 1
 assert data["issues"]["counts"]["blocked_or_dependent"] == 1
 assert data["issues"]["counts"]["completed_with_solve_record"] == 1
-assert data["issues"]["counts"]["completed_without_solve_record"] == 1
+assert data["issues"]["counts"]["completed_without_solve_record"] == 6
 
 ready = data["issues"]["buckets"]["ready_for_agent"]
 assert {issue["metadata_format"] for issue in ready} == {"header", "frontmatter"}
@@ -259,6 +283,17 @@ assert "Ready issue" in html
 assert "Ready record" in html
 assert "Filter cards" in html
 assert "missing_solve_branch" in html
+assert "Show 1 more" in html
+assert "card-details" in html
+assert "lane-scroll" in html
+assert "grid-auto-flow: column" in html
+assert "label-ready-for-agent" in html
+assert "label-needs-info" in html
+assert "label-manual-required" in html
+assert "status:" not in html.lower()
+assert default_html == html
+assert fallback["issues"]["counts"] == data["issues"]["counts"]
+assert fallback["solve_records"]["counts"] == data["solve_records"]["counts"]
 PY
 
 python3 -m py_compile "$BOARD_SCRIPT"

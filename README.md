@@ -84,21 +84,6 @@ Run the solve-records behavior fixture:
 tests/solve-records.sh
 ```
 
-Generate the local maintainer board trial snapshot:
-
-```bash
-python3 scripts/maintainer-board.py --repo . --json
-python3 scripts/maintainer-board.py --repo . --html .scratch/maintainer-board/index.html
-```
-
-The maintainer board is a repo-local, read-only trial tool. It scans explicit
-`.scratch` issue metadata and local solve records, performs lightweight Git
-drift checks, and writes JSON or static HTML. It does not call an Agent or
-model, run tests/builds/installer discovery, merge, clean up, or mutate issue
-state. Open the generated HTML for local inspection; future Agent sessions can
-read the JSON snapshot as their fact index. `$solve-records` remains the
-workflow for advancing finished candidates.
-
 ## Layout
 
 ```text

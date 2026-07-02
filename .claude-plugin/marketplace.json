@@ -21,6 +21,13 @@
       "skills": [
         "./skills/personal/agent-worktree"
       ]
+    },
+    {
+      "name": "in-progress",
+      "source": "./",
+      "skills": [
+        "./skills/in-progress/maintainer-board"
+      ]
     }
   ]
 }

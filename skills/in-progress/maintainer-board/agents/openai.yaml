@@ -1,0 +1,6 @@
+interface:
+  display_name: "Maintainer Board"
+  short_description: "Generate a local issues and solve-records HTML board"
+  default_prompt: "Use $maintainer-board to generate the local maintainer board for the current repository and return the HTML path."
+policy:
+  allow_implicit_invocation: true
