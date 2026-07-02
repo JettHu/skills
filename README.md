@@ -52,7 +52,7 @@ The installer creates symlinks, so `git pull` in this repository updates install
 
 | Skill | Purpose |
 | --- | --- |
-| [`agent-worktree`](skills/personal/agent-worktree/SKILL.md) | Create, verify, repair, and remove Agent-ready Git worktrees with local-only payload. |
+| [`agent-worktree`](skills/personal/agent-worktree/SKILL.md) | Scaffold Agent-ready Git worktree hooks with local payload and dependency strategy config. |
 
 ### In Progress
 

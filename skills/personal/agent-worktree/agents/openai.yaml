@@ -1,6 +1,6 @@
 interface:
   display_name: "Agent Worktree"
-  short_description: "Scaffold Agent-ready worktree hooks"
+  short_description: "Scaffold Agent-ready worktree hooks with dependency strategy config"
   default_prompt: "Use $agent-worktree to enable or reconfigure repo-level Agent-ready worktree hooks."
 policy:
   allow_implicit_invocation: true
