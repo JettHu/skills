@@ -286,6 +286,18 @@ def body_frontmatter_conflict(record):
     return ""
 
 
+def resource_field(record, label):
+    prefix = f"{label}:"
+    for line in section(record.get("text", ""), "Resources").splitlines():
+        if not line.startswith(prefix):
+            continue
+        value = line.split(":", 1)[1].strip()
+        if len(value) >= 2 and value[0] == value[-1] == "`":
+            return value[1:-1]
+        return value
+    return ""
+
+
 def worktree_clean_check(repo, record):
     worktree = (repo / record["worktree"]).resolve()
     cache_key = str(worktree)
@@ -619,6 +631,7 @@ def record_summary(repo, record, include_merge_gate=False):
         "checks": record.get("checks"),
         "merge": record.get("merge"),
         "cleanup_done": record.get("cleanup_done"),
+        "resource_cleanup": resource_field(record, "Cleanup"),
         "external_provider": record.get("external_provider"),
         "external_url": record.get("external_url"),
     }

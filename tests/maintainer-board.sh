@@ -33,9 +33,11 @@ CLAIM_HEAD="$(make_branch solve/claim claim.txt claim)"
 READY_HEAD="$(make_branch solve/ready ready.txt ready)"
 MANUAL_HEAD="$(make_branch solve/manual manual.txt manual)"
 RECENT_HEAD="$(make_branch solve/recent recent.txt recent)"
+ADOPTED_HEAD="$(make_branch feature/adopted-current adopted.txt adopted)"
 
 git -C "$REPO" worktree add "$TMPDIR_ROOT/wt-claim" solve/claim >/dev/null 2>&1
 git -C "$REPO" worktree add "$TMPDIR_ROOT/wt-ready" solve/ready >/dev/null 2>&1
+git -C "$REPO" worktree add "$TMPDIR_ROOT/wt-adopted-current" feature/adopted-current >/dev/null 2>&1
 
 mkdir -p "$REPO/.scratch/feature-a/issues"
 mkdir -p "$REPO/.scratch/feature-a/solve-records"
@@ -154,6 +156,7 @@ write_record() {
   local title="$8"
   local checks="$9"
   local merge="${10}"
+  local cleanup_resource="${11:-pending}"
   mkdir -p "$(dirname "$path")"
   cat >"$path" <<EOF
 ---
@@ -200,7 +203,7 @@ Base SHA: \`$BASE_SHA\`
 Head: \`$head\`
 Head SHA: \`$head_sha\`
 Worktree: \`$worktree\`
-Cleanup: pending
+Cleanup: $cleanup_resource
 
 ## Notes
 - fixture
@@ -218,6 +221,10 @@ write_record "$REPO/.scratch/solve-records/20260702-stale.md" \
 
 write_record "$REPO/.scratch/solve-records/20260702-recent.md" \
   "20260702-recent" merged solve/recent "$RECENT_HEAD" "." true "Recent record" passed "auto-merged"
+
+write_record "$REPO/.scratch/feature-a/solve-records/20260703-adopted-current.md" \
+  "20260703-adopted-current" open feature/adopted-current "$ADOPTED_HEAD" "../wt-adopted-current" true "Adopted current branch" passed "manual required" \
+  "done; adopted worktree and candidate branch are user-owned"
 
 JSON_OUT="$TMPDIR_ROOT/board.json"
 HTML_OUT="$TMPDIR_ROOT/board.html"
@@ -272,15 +279,26 @@ ready_issue = next(issue for issue in ready if issue["title"] == "Ready issue")
 assert ready_issue["checklist"] == {"total": 2, "done": 1, "open": 1}
 
 records = data["solve_records"]
-assert records["count"] == 4
+assert records["count"] == 5
 assert records["counts"]["ready"] == 1
-assert records["counts"]["manual"] == 1
+assert records["counts"]["manual"] == 2
 assert records["counts"]["recent"] == 1
 assert records["counts"]["stale_or_malformed"] == 1
+adopted = next(
+    record for record in records["buckets"]["manual"] if record["id"] == "20260703-adopted-current"
+)
+assert adopted["base"] == "master"
+assert adopted["head"] == "feature/adopted-current"
+assert "user-owned" in adopted["resource_cleanup"]
 
 assert "Maintainer Board" in html
 assert "Ready issue" in html
 assert "Ready record" in html
+assert "Adopted current branch" in html
+assert "Landing branch (base)" in html
+assert "Candidate branch (head)" in html
+assert "Cleanup ownership" in html
+assert "user-owned adopted resources" in html
 assert "Filter cards" in html
 assert "missing_solve_branch" in html
 assert "Show 1 more" in html

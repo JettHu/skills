@@ -54,11 +54,33 @@ WEAK_LOW_RISK_HEAD="$(make_branch solve/20260701-1546-weak-low-risk weak-low-ris
 CLOSE_HEAD="$(make_branch solve/20260701-1555-abandoned abandoned.txt abandoned)"
 REMOTE_HEAD="$(make_branch solve/20260701-1600-remote-pr remote.txt remote)"
 CONFLICT_HEAD="$(make_branch solve/20260701-1605-body-conflict body-conflict.txt body-conflict)"
+ADOPTED_CURRENT_HEAD="$(make_branch feature/adopted-current adopted-current.txt adopted-current)"
+PROTECTED_BASELINE_HEAD="$(make_branch solve/20260703-1745-protected-baseline protected-baseline.txt protected-baseline)"
+
+git -C "$REPO" checkout -b feature/adopted-integration master >/dev/null 2>&1
+git -C "$REPO" checkout -b solve/20260703-1745-group-a feature/adopted-integration >/dev/null 2>&1
+printf 'group a\n' >"$REPO/group-a.txt"
+git -C "$REPO" add group-a.txt
+git -C "$REPO" commit -m "group a candidate" >/dev/null
+GROUP_A_HEAD="$(git -C "$REPO" rev-parse solve/20260703-1745-group-a)"
+git -C "$REPO" checkout -b solve/20260703-1745-group-b feature/adopted-integration >/dev/null 2>&1
+printf 'group b\n' >"$REPO/group-b.txt"
+git -C "$REPO" add group-b.txt
+git -C "$REPO" commit -m "group b candidate" >/dev/null
+GROUP_B_HEAD="$(git -C "$REPO" rev-parse solve/20260703-1745-group-b)"
+git -C "$REPO" checkout feature/adopted-integration >/dev/null 2>&1
+git -C "$REPO" merge --no-ff solve/20260703-1745-group-a -m "integrate group a" >/dev/null
+git -C "$REPO" merge --no-ff solve/20260703-1745-group-b -m "integrate group b" >/dev/null
+ADOPTED_INTEGRATION_HEAD="$(git -C "$REPO" rev-parse feature/adopted-integration)"
+git -C "$REPO" checkout master >/dev/null 2>&1
 
 git -C "$REPO" worktree add "$TMPDIR_ROOT/wt-ready" solve/20260701-1432-caption-fix >/dev/null 2>&1
 git -C "$REPO" worktree add "$TMPDIR_ROOT/wt-dirty" solve/20260701-1510-dirty-cleanup >/dev/null 2>&1
 git -C "$REPO" worktree add "$TMPDIR_ROOT/wt-unmerged" solve/20260701-1520-unmerged-cleanup >/dev/null 2>&1
 git -C "$REPO" worktree add "$TMPDIR_ROOT/wt-branch-mismatch" solve/20260701-1532-branch-mismatch-worktree >/dev/null 2>&1
+git -C "$REPO" worktree add "$TMPDIR_ROOT/wt-adopted-current" feature/adopted-current >/dev/null 2>&1
+git -C "$REPO" worktree add "$TMPDIR_ROOT/wt-protected-baseline" solve/20260703-1745-protected-baseline >/dev/null 2>&1
+git -C "$REPO" worktree add "$TMPDIR_ROOT/wt-adopted-integration" feature/adopted-integration >/dev/null 2>&1
 printf 'dirty\n' >>"$TMPDIR_ROOT/wt-dirty/dirty.txt"
 
 mkdir -p "$REPO/.scratch/caption/issues"
@@ -77,6 +99,17 @@ Status: completed
 - `../solve-records/20260701-1432-caption-fix.md`
 EOF
 printf 'Status: completed\n\n# Manual issue\n' >"$REPO/.scratch/caption/issues/02.md"
+cat >"$REPO/.scratch/caption/issues/03-adopted-current.md" <<'EOF'
+Status: completed
+
+# Adopted current issue
+
+## Comments
+
+### Solve Record
+
+- `../solve-records/20260703-1745-adopted-current.md`
+EOF
 
 write_record() {
   local path="$1"
@@ -91,6 +124,7 @@ write_record() {
   local checks="${10}"
   local merge="${11}"
   local notes="${12:-fixture}"
+  local cleanup_resource="${13:-pending}"
   mkdir -p "$(dirname "$path")"
   cat >"$path" <<EOF
 ---
@@ -137,7 +171,7 @@ Base SHA: \`$BASE_SHA\`
 Head: \`$head\`
 Head SHA: \`$head_sha\`
 Worktree: \`$worktree\`
-Cleanup: pending
+Cleanup: $cleanup_resource
 
 ## Notes
 - $notes
@@ -267,6 +301,27 @@ text = path.read_text(encoding="utf-8")
 text = text.replace("## Summary\nStatus: open", "## Summary\nStatus: merged", 1)
 path.write_text(text, encoding="utf-8")
 PY
+
+write_record "$REPO/.scratch/caption/solve-records/20260703-1745-adopted-current.md" \
+  "20260703-1745-adopted-current" open feature/adopted-current "$ADOPTED_CURRENT_HEAD" \
+  ".scratch/caption/issues/03-adopted-current.md" "../wt-adopted-current" true "Adopted current dev branch" passed "manual required" \
+  "adopted worktree and candidate branch are user-owned; development environment validation pending" \
+  "done; adopted worktree and candidate branch are user-owned"
+
+write_record "$REPO/.scratch/caption/solve-records/20260703-1745-adopted-cleanup.md" \
+  "20260703-1745-adopted-cleanup" merged feature/adopted-current "$ADOPTED_CURRENT_HEAD" \
+  ".scratch/caption/issues/03-adopted-current.md" "../wt-adopted-current" true "Adopted cleanup preserved" passed "auto-merged" \
+  "adopted worktree and candidate branch are user-owned" \
+  "done; adopted worktree and candidate branch are user-owned"
+
+write_record "$REPO/.scratch/caption/solve-records/20260703-1745-protected-baseline.md" \
+  "20260703-1745-protected-baseline" open solve/20260703-1745-protected-baseline "$PROTECTED_BASELINE_HEAD" \
+  ".scratch/caption/issues/01.md" "../wt-protected-baseline" false "Protected baseline isolated fallback" passed ready
+
+write_record "$REPO/.scratch/caption/solve-records/20260703-1745-adopted-integration.md" \
+  "20260703-1745-adopted-integration" open feature/adopted-integration "$ADOPTED_INTEGRATION_HEAD" \
+  ".scratch/caption/issues/01.md" "../wt-adopted-integration" false "Adopted integration target" passed ready \
+  "temporary group branches integrated into adopted candidate branch"
 
 cat >"$REPO/.scratch/solve-records/20260701-1550-malformed.md" <<'EOF'
 # Missing frontmatter
@@ -743,6 +798,7 @@ tool_select = {"matches": tool_module.select_records(tool_records, "caption fix"
 tool_merge_gate_ready = tool_module.merge_gate(repo, tool_by_id["20260701-1432-caption-fix"])
 tool_merge_gate_weak = tool_module.merge_gate(repo, tool_by_id["20260701-1546-weak-low-risk"])
 tool_cleanup_dirty = tool_module.cleanup_plan(repo, tool_by_id["20260701-1510-dirty-cleanup"])
+tool_cleanup_adopted = tool_module.cleanup_plan(repo, tool_by_id["20260703-1745-adopted-cleanup"])
 tool_landing_ready = tool_module.landing_plan(repo, tool_by_id["20260701-1432-caption-fix"])
 expected_recent = ["20260701-1501-recent-newer-merged-at"] + [
     f"20260701-17{minute:02d}-recent-{minute:02d}"
@@ -771,6 +827,51 @@ assert "20260701-1702-recent-02" not in buckets["recent"], buckets
 assert "20260701-1551-wrong-kind" not in buckets["ready"] + buckets["manual"], buckets
 assert "20260701-1545-low-risk-unavailable" in buckets["ready"], buckets
 assert "20260701-1546-weak-low-risk" in buckets["manual"], buckets
+assert "20260703-1745-adopted-current" in buckets["manual"], buckets
+assert "20260703-1745-protected-baseline" in buckets["ready"], buckets
+assert "20260703-1745-adopted-integration" in buckets["ready"], buckets
+assert "20260703-1745-adopted-cleanup" not in buckets["cleanup"], buckets
+
+default_isolated = by_id["20260701-1432-caption-fix"]
+assert default_isolated["head"].startswith("solve/"), default_isolated
+
+adopted_current = by_id["20260703-1745-adopted-current"]
+assert adopted_current["head"] == "feature/adopted-current", adopted_current
+assert not adopted_current["head"].startswith("solve/"), adopted_current
+assert adopted_current["base"] == "master", adopted_current
+assert adopted_current["merge"] == "manual required", adopted_current
+assert "development environment validation pending" in adopted_current["notes"], adopted_current
+assert run_git(
+    repo,
+    "show-ref",
+    "--verify",
+    "--quiet",
+    "refs/heads/solve/20260703-1745-adopted-current",
+    check=False,
+).returncode != 0
+
+protected_baseline = by_id["20260703-1745-protected-baseline"]
+assert protected_baseline["base"] == "master", protected_baseline
+assert protected_baseline["head"].startswith("solve/"), protected_baseline
+
+adopted_integration = by_id["20260703-1745-adopted-integration"]
+assert adopted_integration["head"] == "feature/adopted-integration", adopted_integration
+assert run_git(
+    repo,
+    "merge-base",
+    "--is-ancestor",
+    "solve/20260703-1745-group-a",
+    adopted_integration["head"],
+    check=False,
+).returncode == 0
+assert run_git(
+    repo,
+    "merge-base",
+    "--is-ancestor",
+    "solve/20260703-1745-group-b",
+    adopted_integration["head"],
+    check=False,
+).returncode == 0
 
 assert tool_dashboard["record_count"] == len(records)
 assert tool_dashboard_cli["record_count"] == len(records)
@@ -789,6 +890,10 @@ assert any(
     item["id"] == "20260701-1546-weak-low-risk"
     for item in tool_dashboard["buckets"]["manual"]
 ), tool_dashboard["buckets"]["manual"]
+tool_adopted = next(
+    item for item in tool_dashboard["buckets"]["manual"] if item["id"] == "20260703-1745-adopted-current"
+)
+assert "user-owned" in tool_adopted["resource_cleanup"], tool_adopted
 assert [
     item["id"] for item in tool_select["matches"]
 ] == ["20260701-1432-caption-fix"], tool_select
@@ -797,6 +902,9 @@ assert tool_merge_gate_weak["eligible"] is False, tool_merge_gate_weak
 assert "unavailable checks without low-risk evidence" in tool_merge_gate_weak["reasons"]
 assert tool_cleanup_dirty["status"] == "blocked", tool_cleanup_dirty
 assert tool_cleanup_dirty["reason"] == "dirty worktree", tool_cleanup_dirty
+assert tool_cleanup_adopted["status"] == "done", tool_cleanup_adopted
+assert (repo / by_id["20260703-1745-adopted-cleanup"]["worktree"]).resolve().exists()
+assert resolve_ref("feature/adopted-current")[0] == 0
 assert tool_landing_ready["status"] == "ready", tool_landing_ready
 assert tool_landing_ready["landing_type"] == "fast-forward", tool_landing_ready
 assert tool_landing_ready["landing_sha"] == by_id["20260701-1432-caption-fix"]["head_sha"], tool_landing_ready
@@ -884,6 +992,9 @@ assert common_dir_mismatch_guard
 assert "Status: completed" in issue_text
 assert "../solve-records/20260701-1432-caption-fix.md" in issue_text
 assert "auto-merged" not in issue_text
+adopted_issue_text = (repo / ".scratch/caption/issues/03-adopted-current.md").read_text(encoding="utf-8")
+assert "Status: completed" in adopted_issue_text
+assert "../solve-records/20260703-1745-adopted-current.md" in adopted_issue_text
 
 success = finalize_attempt(finished=True, checks="passed", human_review=False)
 assert success and success["record_created"]

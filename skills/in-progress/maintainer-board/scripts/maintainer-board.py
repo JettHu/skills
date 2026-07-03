@@ -449,6 +449,18 @@ def body_frontmatter_conflict(record):
     return ""
 
 
+def resource_field(record, label):
+    prefix = f"{label}:"
+    for line in section(record.get("text", ""), "Resources").splitlines():
+        if not line.startswith(prefix):
+            continue
+        value = line.split(":", 1)[1].strip()
+        if len(value) >= 2 and value[0] == value[-1] == "`":
+            return value[1:-1]
+        return value
+    return ""
+
+
 def worktree_clean_check(repo, record):
     worktree = (repo / record["worktree"]).resolve()
     if not worktree.exists():
@@ -577,6 +589,7 @@ def solve_record_summary(repo, record, include_merge_gate=False):
         "checks": record.get("checks"),
         "merge": record.get("merge"),
         "cleanup_done": record.get("cleanup_done"),
+        "resource_cleanup": resource_field(record, "Cleanup"),
         "external_provider": record.get("external_provider"),
         "external_url": record.get("external_url"),
     }
@@ -733,6 +746,24 @@ def render_warning_list(warnings):
     return f"<ul class='warnings'>{items}</ul>"
 
 
+def record_cleanup_label(record):
+    resource_cleanup = record.get("resource_cleanup") or ""
+    if resource_cleanup and resource_cleanup != "pending":
+        return resource_cleanup
+    if str(record.get("cleanup_done")).lower() == "true":
+        return "cleanup done"
+    return "cleanup pending"
+
+
+def record_cleanup_ownership(record):
+    cleanup = record_cleanup_label(record).lower()
+    if "user-owned" in cleanup or "adopted" in cleanup:
+        return "user-owned adopted resources"
+    if str(record.get("cleanup_done")).lower() == "true":
+        return "no solve-owned cleanup pending"
+    return "solve-owned cleanup pending"
+
+
 def render_issue_card(issue, hidden=False):
     search = " ".join(
         str(value)
@@ -795,14 +826,16 @@ def render_record_card(record, hidden=False):
             record.get("state", ""),
             record.get("head", ""),
             record.get("base", ""),
+            record.get("resource_cleanup", ""),
         ]
     )
-    cleanup = "cleanup done" if str(record.get("cleanup_done")).lower() == "true" else "cleanup pending"
+    cleanup = record_cleanup_label(record)
+    cleanup_ownership = record_cleanup_ownership(record)
     top_pills = [
         record.get("state"),
         record.get("checks"),
         record.get("merge"),
-        cleanup if record.get("cleanup_done") else "",
+        cleanup,
     ]
     detail_rows = [
         ("Path", record.get("path")),
@@ -810,9 +843,10 @@ def render_record_card(record, hidden=False):
         ("State", record.get("state")),
         ("Checks", record.get("checks")),
         ("Merge", record.get("merge")),
-        ("Cleanup", cleanup if record.get("cleanup_done") else ""),
-        ("Base", record.get("base")),
-        ("Head", record.get("head")),
+        ("Cleanup", cleanup),
+        ("Cleanup ownership", cleanup_ownership),
+        ("Landing branch (base)", record.get("base")),
+        ("Candidate branch (head)", record.get("head")),
         ("Worktree", record.get("worktree")),
         ("Issues", record.get("issues", [])),
         ("Stale reason", record.get("stale_reason")),
