@@ -9,7 +9,9 @@ Use ids aligned with the head branch slug:
 solve/20260701-1432-caption-fix
 ```
 
-A solve record points to one finished candidate branch. Do not list commits in the record; derive the commit set from Git with `base_sha..head_sha`.
+A solve record points to one finished candidate branch. `head` is the candidate branch. `base` is the landing branch. Do not list commits in the record; derive the commit set from Git with `base_sha..head_sha`.
+
+The candidate may be an isolated solve branch, an adopted development branch, a PR branch, or a stack branch. The landing branch is where the candidate should enter after review, validation, deployment, or another project-specific gate.
 
 Required frontmatter:
 
@@ -89,6 +91,75 @@ Cleanup: pending | done | blocked
 
 ## Notes
 - <agent decisions, conflict notes, caveats, or empty>
+```
+
+Use `Cleanup: done` when no solve-owned resources remain, including adoption records where the adopted worktree and candidate branch are user-owned and must not be deleted by `$solve-records cleanup`.
+
+Adopted development branch example:
+
+```md
+---
+id: 20260703-1700-feature-current-branch
+kind: solve_record
+state: open
+base: main
+base_sha: abc1234
+head: feature/current-branch
+head_sha: def5678
+issues:
+  - .scratch/current-branch/issues/02.md
+worktree: .
+created_at: 2026-07-03T17:00:00+08:00
+cleanup_done: true
+---
+
+# Solve Record: Adopted current branch
+
+## Summary
+Status: open
+Next action: manual review
+
+Finished candidate on the adopted development branch.
+
+## Issues
+- `.scratch/current-branch/issues/02.md` - completed
+
+## Changes
+- Updated the candidate on the adopted branch.
+
+## Checks
+Status: passed
+- `scripts/validate-skills.sh` - passed
+
+## Merge
+Status: manual required
+Gate:
+- [x] Required checks passed
+- [x] Worktree clean
+- [x] Base/head match recorded SHAs or record was revalidated
+- [ ] Landing SHA constructed before base mutation
+- [ ] Landing validation passed
+- [ ] Final landing write surface reviewed
+- [ ] Base dirty and untracked paths reviewed as non-overlapping
+- [ ] Mandatory hard-stop patterns reviewed
+- [ ] No manual-review trigger detected
+- [x] Low-risk agent decisions recorded or none
+- [x] Dependencies merged or not required
+- [x] Conflict resolution not needed or completed safely
+Reason:
+- Manual required: development environment validation pending before landing into `main`.
+- Landing: blocked, `none`
+
+## Resources
+Base: `main`
+Base SHA: `abc1234`
+Head: `feature/current-branch`
+Head SHA: `def5678`
+Worktree: `.`
+Cleanup: done; adopted worktree and candidate branch are user-owned
+
+## Notes
+- `head` is the adopted candidate branch. `base` is the landing branch; this record does not imply a merge back into `feature/current-branch`.
 ```
 
 Issue backlink:

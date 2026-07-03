@@ -41,11 +41,11 @@ Tracker updates should record state-relevant facts, not run logs. Use the tracke
 - group worktrees and branches
 - validation evidence
 - solve records
-- final target branch
+- candidate and landing branches
 
 Group worktrees produce candidate changes. The coordinator owns integration and merge. A group worktree must not merge directly into the target branch.
 
-Default completion, when no `--auto-merge` or merge/apply/ship/land intent is present, is a clean committed candidate branch plus a solve record. Push, deploy, and cleanup happen only when the user's latest wording explicitly asks for them or when a later solve-record command advances the candidate.
+Default completion, when no `--auto-merge` or merge/apply/ship/land intent is present, is a clean committed candidate branch plus a solve record. `head` is the candidate branch whose current head contains finished work. `base` is the landing branch the candidate is meant to enter later. Push, deploy, and cleanup happen only when the user's latest wording explicitly asks for them or when a later solve-record command advances the candidate.
 
 Issues are assumed AFK-ready when they are in `ready-for-agent`: the issue body, acceptance criteria, and any agent brief are treated as approved input. Do not stop the whole batch to ask the user a question unless the issue selection or merge target is ambiguous and cannot be inferred safely.
 
@@ -58,6 +58,45 @@ Use native `git worktree add` as the normal creation interface for assigned solv
 Do not depend on the `agent-worktree` scaffolding skill being loaded after repo initialization. `agent-worktree` must not choose solve branch names, worktree paths, base refs, grouping, merge behavior, cleanup behavior, or validation policy.
 
 When adopting an existing worktree, verify the expected path, branch, and base/current context with raw Git checks. Missing Agent payload is local setup drift; report it only when it affects execution or validation, and continue to use the same solve workflow.
+
+## Adoption Routing
+
+Before claiming, decide the worktree route from the current branch/worktree, selected issues, tracker claim state, dirty status, branch topology, and risk. Adoption is Agent-judged behavior, not a required explicit flag.
+
+Choose exactly one route and state an adoption declaration before implementation:
+
+- `isolated`: create solve-owned candidate worktree(s) and branch(es).
+- `adopted-execution`: use the current worktree/branch as the execution or serial group target.
+- `adopted-integration`: use temporary group worktrees, then integrate into the current worktree/branch as the final candidate.
+- `ask`: stop before claim or implementation and ask the user to choose.
+
+For ordinary AFK pickup with no safely indicated prepared development branch, keep the existing `isolated` solve boundary.
+
+The declaration must name:
+
+- candidate branch
+- landing branch
+- worktree role
+- cleanup ownership, distinguishing solve-owned temporary resources from user-owned adopted resources
+
+Use `isolated` when adoption has a safety failure:
+
+- the current branch is a protected baseline such as `main`, `master`, or a project-defined protected release branch
+- the current branch/worktree conflicts with tracker claim metadata or an active claim
+- dirty or untracked paths overlap likely issue write paths or may be overwritten
+- branch topology, base ref, or candidate identity is unsafe enough that adopting could hide or overwrite work
+
+When creating an isolated worktree because adoption is unsuitable, preserve the user's current integration context as the base. Prefer the current branch or current HEAD when it is the strongest signal; use issue text, tracker metadata, stack relationships, release branches, or repo convention only when they identify a better base. Do not jump back to `main` or `master` merely because it exists.
+
+Use `ask` when the current branch/worktree looks plausibly safe but user intent is unclear. Offer context-relevant choices that include:
+
+- adopt the current branch/worktree
+- create an isolated solve worktree from the current integration context
+- use a user-described alternative
+
+Add branch switch, cleanup, or stash choices only when they fit the observed state.
+
+Adopted worktrees must pass the same entry-safety standard as created solve worktrees. Parallel execution may still create solve-owned temporary group worktrees while an adopted worktree/branch acts as the final integration target.
 
 ## State Machine
 
@@ -124,14 +163,14 @@ Report skipped issues with a short reason:
 
 For every selected issue:
 
-- determine the intended solve branch/worktree reference
+- determine the adoption route and intended branch/worktree reference
 - re-read the issue and confirm it is still `ready-for-agent` with no active `solve-in-progress` or `agent-decision`
 - claim it by adding `solve-in-progress` and recording the intended branch/worktree through the tracker's existing machine-readable claim surface
-- create the branch/worktree after the claim succeeds
+- create or adopt the assigned branch/worktree after the claim succeeds
 
 Do this before code changes. For local markdown, preserve existing structured conventions such as `state`/`status`, `flags`/`labels`, and `branch`/`worktree`/`solve_branch`/`solve_worktree`. Batch or parallel solve requires a machine-readable claim surface. If no reliable claim surface exists, do not run unsafe batch claims; for an explicit single issue, proceed only when user intent is clear and report the claim limitation.
 
-If branch/worktree creation fails after claiming, clear the claim when no resumable work exists. If resumable work exists, record a blocker reason and retain or clear `solve-in-progress` according to whether a human can resume from the linked branch/worktree.
+If branch/worktree creation or adoption fails after claiming, clear the claim when no resumable work exists. If resumable work exists, record a blocker reason and retain or clear `solve-in-progress` according to whether a human can resume from the linked branch/worktree.
 
 ### 3. Assess
 
@@ -156,14 +195,19 @@ Group executable issues by module, dependency, and likely file overlap.
 
 ### 4.5 Pre-Execute Gate (mandatory)
 
+The gate confirms no branch/worktree, tracker-claim, or dirty-state drift has occurred since adoption routing.
+
 Before writing ANY implementation file, the coordinator must verify and report:
 
-- [ ] Group worktree(s) created
-- [ ] Group branch(es) created from the target branch when known, otherwise from the declared base HEAD
+- [ ] Adoption declaration recorded: candidate branch, landing branch, worktree role, cleanup ownership
+- [ ] Group worktree(s) created or adopted
+- [ ] Group branch(es) created or adopted from the selected integration context
 - [ ] Current working directory is the assigned group worktree, not the invocation checkout
 - [ ] `git rev-parse --show-toplevel` equals the assigned group worktree path
 - [ ] Base/current context matches the solve assignment before implementation commits
 - [ ] `git status --short --branch` shows the assigned group branch
+- [ ] Tracker claim metadata matches the assigned worktree/branch
+- [ ] Dirty and untracked paths are absent, or proven unrelated to the selected issue scope before adoption
 
 Do not edit code, tests, docs, config, migrations, or generated artifacts until this gate passes.
 
@@ -173,7 +217,7 @@ If delegating to a subagent, include the assigned worktree path and branch in th
 
 ### 5. Execute Groups
 
-Create one group worktree per group, based on the chosen target branch or the current branch when no merge is requested. Execute only after the Pre-Execute Gate passes for that group.
+Create one group worktree per group, based on the selected integration context, unless the adoption route intentionally uses an existing worktree for that group. Execute only after the Pre-Execute Gate passes for that group.
 
 Suggested names:
 
@@ -187,6 +231,8 @@ git worktree add -b "<group-branch>" "<group-worktree-path>" "<base-ref>"
 ```
 
 If the repo-level Agent-ready hook is installed, payload bootstrap happens automatically during `git worktree add`. Solve should not call `agent-worktree` to create, bootstrap, verify, or remove solve worktrees. If native Git cannot create the exact assigned identity, mark only the affected issue/group with `tooling_unavailable`.
+
+For `adopted-integration`, temporary group branches are solve-owned resources. The adopted integration branch is the candidate branch and remains user-owned.
 
 For each issue in a group:
 
@@ -255,7 +301,7 @@ Run the repo-appropriate validation commands in the integration worktree. Prefer
 If final validation passes:
 
 - ensure the integration worktree is clean and all intended changes are committed
-- capture the current `base`, `base_sha`, `head`, `head_sha`, issue paths, worktree path, checks status, and validation evidence for solve record creation
+- capture the landing `base`, `base_sha`, candidate `head`, `head_sha`, issue paths, worktree path, checks status, validation evidence, and cleanup ownership for solve record creation
 - proceed to finalization before marking linked issues completed
 
 If final validation fails:
@@ -274,8 +320,8 @@ Do not create a solve record for failed required checks. Failed required checks 
 
 Create a solve record only after a finished, reviewable merge candidate exists:
 
-- clean, comparable `head`
-- known `base` and `head` refs
+- clean, comparable `head` candidate branch
+- known `base` landing branch and `head` candidate branch refs
 - recorded `base_sha` and `head_sha`
 - linked issue paths
 - checks status and validation evidence
@@ -286,7 +332,9 @@ Do not create solve records for claim-time state, in-progress attempts, missing 
 
 Checks marked `unavailable` block auto-merge unless the change is explicitly trivial and low-risk, and the record says why no meaningful check exists, why no manual-review trigger applies, and what evidence still supports the change.
 
-Do not clean up successful solve worktrees during ordinary finalization. The candidate branch and worktree remain review context until auto-merge, merge/apply/ship/land, or an explicit cleanup request advances the solve record.
+Adoption mode still creates solve records for finished candidates. When an adopted branch is the candidate branch, `head` is that branch and `base` is the landing branch; the record must not imply a merge back into the same branch. If development-environment deployment or human acceptance is pending, mark linked issues `completed` when acceptance criteria are verified, but set the solve record merge gate to `manual required` and record the pending evidence in `## Checks` or `## Merge`.
+
+Do not clean up successful solve worktrees during ordinary finalization. The candidate branch and worktree remain review context until auto-merge, merge/apply/ship/land, or an explicit cleanup request advances the solve record. Adopted worktrees and adopted candidate branches are user-owned resources; record them as not cleanup-owned and do not schedule them for automatic cleanup.
 
 During the same finalize step:
 
@@ -303,7 +351,9 @@ The issue `completed` state means acceptance criteria are implemented and verifi
 
 Auto-merge only when the user explicitly provided `--auto-merge` or asked to merge, apply, ship, land, or equivalent.
 
-The target branch must be explicit or safely inferred from tracker/project context. If ambiguous, ask before merging.
+The landing branch must be explicit or safely inferred from tracker/project context. If ambiguous, ask before merging.
+
+In adoption mode, `--auto-merge` means try to land the candidate branch into the landing branch. It never means merge an adopted candidate branch back into itself.
 
 Route requested auto-merge/merge/apply/ship/land wording through the same solve-record landing gate used by `$solve-records`. Merge eligible records one by one, in dependency order. Explicit set wording such as `all ready records` may process the bounded set one record at a time, but ineligible records must be skipped with reasons. Do not silently merge dependencies unless the user explicitly approves the wider operation.
 

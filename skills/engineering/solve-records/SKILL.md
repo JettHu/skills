@@ -15,7 +15,7 @@ Use solve records as local markdown receipts for finished, checkable merge candi
 | ambiguous state-changing prompt | show candidates and stop |
 | merge / ship / land | live-verify, construct `landing_sha`, then fast-forward base |
 | unavailable checks | manual required unless the low-risk exception is explicit |
-| cleanup | delete only registered, clean, merged solve worktrees/branches |
+| cleanup | delete only registered, clean, merged solve-owned worktrees/branches |
 | abandoned / replaced | close the record only; do not change issue state |
 
 Mechanics are flexible; gates are not. Adapt commands, helper skills, preflight shape, and reporting detail to the runtime and repo evidence, but never skip live verification, manual-review triggers, required-check handling, or cleanup safety checks.
@@ -114,11 +114,13 @@ Create a solve record only after `/ultra solve` has a finished, reviewable candi
 - no unresolved conflict or known blocker remains
 - linked issues are ready to be marked `completed`
 
+In frontmatter, `head` is the candidate branch whose current head contains finished work. `base` is the landing branch the candidate is meant to enter when merge, ship, or land intent is approved. In adoption mode, `head` may be a user-owned development branch; `base` remains the landing branch and must not be interpreted as "merge back into the current adopted branch."
+
 Never create an initial solve record for claim-time state, in-progress attempts, failed required checks, missing requirements, or a human-required decision that prevents the candidate from being finished. If the candidate is finished and merely requires human review before merge, create an open record with `## Merge` set to `manual required`.
 
 Do not add JSON as a source of truth or v1 fields such as `phase`, `merge_mode`, `merge_status`, `review_status`, `checks_status`, `attempt_id`, `candidate_state`, `human_state`, or `cleanup_state`.
 
-When creating a record from `/ultra solve`, mark linked issues `completed` in the same finalize step and append only a backlink to the record. Do not copy checks, merge rationale, or cleanup state into the issue.
+When creating a record from `/ultra solve`, mark linked issues `completed` in the same finalize step and append only a backlink to the record. Do not copy checks, merge rationale, or cleanup state into the issue. Development-environment deployment or human acceptance evidence belongs in `## Checks` or `## Merge`, not in a new issue state. If that evidence is pending, keep the issue completed when its acceptance criteria are verified and set the record merge gate to `manual required`.
 
 ## 5. Checks And Decisions
 
@@ -146,7 +148,7 @@ Process records one by one, in dependency order. Do not merge unmerged dependenc
 
 For explicit set operations, eligible records may merge while ineligible records are skipped with reasons. Never let one eligible member of a set make another member eligible.
 
-Before mutating the base branch, construct a verified `landing_sha`.
+Before mutating the base branch, construct a verified `landing_sha`. The base branch is the record's landing branch. If the candidate branch was adopted from the user's current worktree, merge/ship/land still targets the landing branch, not the adopted branch itself.
 
 Gate the record first:
 
@@ -216,7 +218,9 @@ Closing a solve record never changes linked issue state. If the linked issue its
 
 ## 8. Cleanup
 
-Cleanup deletes only local temporary Git resources created for solve. It never deletes issues, PRDs, product files, or the solve record itself.
+Cleanup deletes only local temporary Git resources created for solve. It never deletes issues, PRDs, product files, the solve record itself, adopted worktrees, or adopted candidate branches.
+
+For adoption records, mark `cleanup_done: true` when no solve-owned temporary resources remain, even though the user-owned adopted branch/worktree still exists. In `## Resources`, write that cleanup is done because the remaining resources are user-owned. Do not put adopted resources in the cleanup queue.
 
 Cleanup must pass all safety checks before removing anything:
 
