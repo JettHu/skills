@@ -51,13 +51,13 @@ Issues are assumed AFK-ready when they are in `ready-for-agent`: the issue body,
 
 ## Worktree Boundary
 
-`/ultra solve` owns worktree identity and lifecycle semantics: issue grouping, base ref, branch name, worktree path, claim state, validation, integration, solve-record finalization, and merge gates.
+`/ultra solve` owns worktree identity and lifecycle semantics: issue grouping, branch-from ref, branch name, worktree path, claim state, validation, integration, solve-record finalization, and merge gates.
 
 Use native `git worktree add` as the normal creation interface for assigned solve worktrees. If the repo has an `agent-worktree` post-checkout hook installed, Agent payload injection is a repo-local side effect of that native Git operation.
 
-Do not depend on the `agent-worktree` scaffolding skill being loaded after repo initialization. `agent-worktree` must not choose solve branch names, worktree paths, base refs, grouping, merge behavior, cleanup behavior, or validation policy.
+Do not depend on the `agent-worktree` scaffolding skill being loaded after repo initialization. `agent-worktree` must not choose solve branch names, worktree paths, branch-from refs, grouping, merge behavior, cleanup behavior, or validation policy.
 
-When adopting an existing worktree, verify the expected path, branch, and base/current context with raw Git checks. Missing Agent payload is local setup drift; report it only when it affects execution or validation, and continue to use the same solve workflow.
+When adopting an existing worktree, verify the expected path, branch, and assignment context with raw Git checks. Missing Agent payload is local setup drift; report it only when it affects execution or validation, and continue to use the same solve workflow.
 
 ## Adoption Routing
 
@@ -72,6 +72,8 @@ Choose exactly one route and state an adoption declaration before implementation
 
 For ordinary AFK pickup with no safely indicated prepared development branch, keep the existing `isolated` solve boundary.
 
+A prepared development branch is the current branch, or a branch clearly identified by the user request, tracker metadata, Codex App setup, or stack topology, as intended for the selected issue work. Branch names, commit messages, and issue paths may support this judgment, but name similarity alone is not enough. The branch must be non-protected, aligned with the issue scope, free of active claim conflicts, and able to pass entry safety.
+
 The declaration must name:
 
 - candidate branch
@@ -79,14 +81,26 @@ The declaration must name:
 - worktree role
 - cleanup ownership, distinguishing solve-owned temporary resources from user-owned adopted resources
 
+Use a compact declaration shape such as:
+
+```text
+Adoption: <isolated | adopted-execution | adopted-integration | ask>
+Candidate branch: <candidate-branch>
+Landing branch: <landing-branch>
+Worktree role: <role>
+Cleanup ownership: <solve-owned temporary resources | user-owned adopted resources | mixed>
+```
+
 Use `isolated` when adoption has a safety failure:
 
 - the current branch is a protected baseline such as `main`, `master`, or a project-defined protected release branch
 - the current branch/worktree conflicts with tracker claim metadata or an active claim
 - dirty or untracked paths overlap likely issue write paths or may be overwritten
-- branch topology, base ref, or candidate identity is unsafe enough that adopting could hide or overwrite work
+- branch topology, branch-from ref, or candidate identity is unsafe enough that adopting could hide or overwrite work
 
-When creating an isolated worktree because adoption is unsuitable, preserve the user's current integration context as the base. Prefer the current branch or current HEAD when it is the strongest signal; use issue text, tracker metadata, stack relationships, release branches, or repo convention only when they identify a better base. Do not jump back to `main` or `master` merely because it exists.
+When creating an isolated worktree because adoption is unsuitable, choose a branch-from ref that preserves the user's current integration context. Prefer the current branch or current HEAD when it is the strongest signal; use issue text, tracker metadata, stack relationships, release branches, or repo convention only when they clearly identify a better branch-from ref. When invoked from a protected baseline, default the branch-from ref to the current baseline or HEAD unless the user, tracker, Codex App setup, or stack topology clearly identifies another integration branch for this work. Do not jump to or away from `main` or `master` merely because a branch exists.
+
+The branch-from ref is only the starting point for `git worktree add`; it is not necessarily the solve record `base`. In solve records, `base` remains the landing branch the candidate is meant to enter later. For example, if dirty issue-scoped work prevents adopting the current `feature/billing` branch, an isolated solve branch may be created from `feature/billing` HEAD while the solve record still uses `base: main` when `main` is the landing branch.
 
 Use `ask` when the current branch/worktree looks plausibly safe but user intent is unclear. Offer context-relevant choices that include:
 
@@ -97,6 +111,8 @@ Use `ask` when the current branch/worktree looks plausibly safe but user intent 
 Add branch switch, cleanup, or stash choices only when they fit the observed state.
 
 Adopted worktrees must pass the same entry-safety standard as created solve worktrees. Parallel execution may still create solve-owned temporary group worktrees while an adopted worktree/branch acts as the final integration target.
+
+For `adopted-integration`, use solve-owned temporary group worktrees for parallel groups, then integrate those groups into the adopted branch. The adopted integration branch is the finished candidate branch and remains user-owned.
 
 ## State Machine
 
@@ -201,10 +217,10 @@ Before writing ANY implementation file, the coordinator must verify and report:
 
 - [ ] Adoption declaration recorded: candidate branch, landing branch, worktree role, cleanup ownership
 - [ ] Group worktree(s) created or adopted
-- [ ] Group branch(es) created or adopted from the selected integration context
+- [ ] Group branch(es) created or adopted from the selected branch-from ref or adopted context
 - [ ] Current working directory is the assigned group worktree, not the invocation checkout
 - [ ] `git rev-parse --show-toplevel` equals the assigned group worktree path
-- [ ] Base/current context matches the solve assignment before implementation commits
+- [ ] Branch-from, landing, and current context match the solve assignment before implementation commits
 - [ ] `git status --short --branch` shows the assigned group branch
 - [ ] Tracker claim metadata matches the assigned worktree/branch
 - [ ] Dirty and untracked paths are absent, or proven unrelated to the selected issue scope before adoption
@@ -217,7 +233,7 @@ If delegating to a subagent, include the assigned worktree path and branch in th
 
 ### 5. Execute Groups
 
-Create one group worktree per group, based on the selected integration context, unless the adoption route intentionally uses an existing worktree for that group. Execute only after the Pre-Execute Gate passes for that group.
+Create one group worktree per group from the selected branch-from ref, unless the adoption route intentionally uses an existing worktree for that group. Execute only after the Pre-Execute Gate passes for that group.
 
 Suggested names:
 
@@ -227,7 +243,7 @@ Suggested names:
 Create the assigned worktree with native Git, for example:
 
 ```bash
-git worktree add -b "<group-branch>" "<group-worktree-path>" "<base-ref>"
+git worktree add -b "<group-branch>" "<group-worktree-path>" "<branch-from-ref>"
 ```
 
 If the repo-level Agent-ready hook is installed, payload bootstrap happens automatically during `git worktree add`. Solve should not call `agent-worktree` to create, bootstrap, verify, or remove solve worktrees. If native Git cannot create the exact assigned identity, mark only the affected issue/group with `tooling_unavailable`.
