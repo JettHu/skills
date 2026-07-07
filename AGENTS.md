@@ -24,7 +24,7 @@ This repository is a skill catalog. Keep skill directories lean, keep reusable v
 - Model-invoked skills omit `disable-model-invocation` and set `policy.allow_implicit_invocation: true` in `agents/openai.yaml` when autonomous use is useful.
 - The `ultra-*` skills are user-invoked completion-friendly entrypoints. Keep them explicit and delegation-only.
 - `ultra` is the core orchestration dependency that wrappers and the model may invoke.
-- `solve-records` stays model-invoked because users may call it directly and `/ultra solve` finalization, merge, and cleanup flows need to reach it.
+- `solve-records` is user-invoked. Users call `$solve-records` explicitly for listing, acceptance review, merge/land, and cleanup; `/ultra solve` finalization follows the same record semantics from its own runbook.
 
 ## Agent Communication
 
