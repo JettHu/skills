@@ -14,4 +14,4 @@ Treat the user's request as if they had written:
 /ultra diagnose <user arguments>
 ```
 
-Forward all arguments and context unchanged. Do not implement separate debugging logic here; follow the core `ultra` workflow, which resolves the `diagnose` alias to the `diagnosing-bugs` profile before invoking the target skill.
+Forward all arguments and context unchanged through the core `ultra` workflow, which resolves the `diagnose` alias to the `diagnosing-bugs` profile before invoking the target skill.

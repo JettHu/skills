@@ -19,7 +19,7 @@ Use tracker verbs, not hard-coded frontmatter fields, so local markdown trackers
 
 Current mutation support is local markdown trackers, such as `.scratch/<feature>/issues/*.md` or `.scratch/<feature>/issue.md`. If the tracker is remote and no adapter is available, you may read issue context, but stop before claim/update/close operations and report that a remote tracker adapter is needed.
 
-Tracker updates should record state-relevant facts, not run logs. Use the tracker state, labels, assignment, or project status for claim/progress when available. Use PRs, commits, branches, and CI/check runs for implementation and validation evidence, linking them from the issue when useful. Use issue comments or local issue notes for blockers, missing requirements, agent decisions, or completion notes only when that is the tracker's normal review surface. Do not copy batch logs or large command output into issues.
+Tracker updates should record state-relevant facts. Use the tracker state, labels, assignment, or project status for claim/progress when available. Use PRs, commits, branches, and CI/check runs for implementation and validation evidence, linking them from the issue when useful. Use issue comments or local issue notes for blockers, missing requirements, agent decisions, or completion notes only when that is the tracker's normal review surface. Keep batch logs and large command output in the final solve summary or validation artifacts.
 
 ## Invocation
 
@@ -47,7 +47,7 @@ Group worktrees produce candidate changes. The coordinator owns integration and 
 
 Default completion, when no `--auto-merge` or merge/apply/ship/land intent is present, is a clean committed candidate branch plus a solve record. `head` is the candidate branch whose current head contains finished work. `base` is the landing branch the candidate is meant to enter later. Push, deploy, and cleanup happen only when the user's latest wording explicitly asks for them or when a later solve-record command advances the candidate.
 
-Issues are assumed AFK-ready when they are in `ready-for-agent`: the issue body, acceptance criteria, and any agent brief are treated as approved input. Do not stop the whole batch to ask the user a question unless the issue selection or merge target is ambiguous and cannot be inferred safely.
+Issues are assumed AFK-ready when they are in `ready-for-agent`: the issue body, acceptance criteria, and any agent brief are treated as approved input. Continue the batch unless the issue selection or merge target is ambiguous and cannot be inferred safely.
 
 ## Worktree Boundary
 
@@ -55,7 +55,7 @@ Issues are assumed AFK-ready when they are in `ready-for-agent`: the issue body,
 
 Use native `git worktree add` as the normal creation interface for assigned solve worktrees. If the repo has an `agent-worktree` post-checkout hook installed, Agent payload injection is a repo-local side effect of that native Git operation.
 
-Do not depend on the `agent-worktree` scaffolding skill being loaded after repo initialization. `agent-worktree` must not choose solve branch names, worktree paths, branch-from refs, grouping, merge behavior, cleanup behavior, or validation policy.
+Use the same solve workflow after repo initialization, with or without the `agent-worktree` scaffolding skill loaded. `agent-worktree` must not choose solve branch names, worktree paths, branch-from refs, grouping, merge behavior, cleanup behavior, or validation policy.
 
 When adopting an existing worktree, verify the expected path, branch, and assignment context with raw Git checks. Missing Agent payload is local setup drift; report it only when it affects execution or validation, and continue to use the same solve workflow.
 
@@ -98,7 +98,7 @@ Use `isolated` when adoption has a safety failure:
 - dirty or untracked paths overlap likely issue write paths or may be overwritten
 - branch topology, branch-from ref, or candidate identity is unsafe enough that adopting could hide or overwrite work
 
-When creating an isolated worktree because adoption is unsuitable, choose a branch-from ref that preserves the user's current integration context. Prefer the current branch or current HEAD when it is the strongest signal; use issue text, tracker metadata, stack relationships, release branches, or repo convention only when they clearly identify a better branch-from ref. When invoked from a protected baseline, default the branch-from ref to the current baseline or HEAD unless the user, tracker, Codex App setup, or stack topology clearly identifies another integration branch for this work. Do not jump to or away from `main` or `master` merely because a branch exists.
+When creating an isolated worktree because adoption is unsuitable, choose a branch-from ref that preserves the user's current integration context. Prefer the current branch or current HEAD when it is the strongest signal; use issue text, tracker metadata, stack relationships, release branches, or repo convention only when they clearly identify a better branch-from ref. When invoked from a protected baseline, default the branch-from ref to the current baseline or HEAD unless the user, tracker, Codex App setup, or stack topology clearly identifies another integration branch for this work. Branch existence alone is insufficient as a switch signal to or away from `main` or `master`.
 
 The branch-from ref is only the starting point for `git worktree add`; it is not necessarily the solve record `base`. In solve records, `base` remains the landing branch the candidate is meant to enter later. For example, if dirty issue-scoped work prevents adopting the current `feature/billing` branch, an isolated solve branch may be created from `feature/billing` HEAD while the solve record still uses `base: main` when `main` is the landing branch.
 
@@ -246,7 +246,7 @@ Create the assigned worktree with native Git, for example:
 git worktree add -b "<group-branch>" "<group-worktree-path>" "<branch-from-ref>"
 ```
 
-If the repo-level Agent-ready hook is installed, payload bootstrap happens automatically during `git worktree add`. Solve should not call `agent-worktree` to create, bootstrap, verify, or remove solve worktrees. If native Git cannot create the exact assigned identity, mark only the affected issue/group with `tooling_unavailable`.
+If the repo-level Agent-ready hook is installed, payload bootstrap happens automatically during `git worktree add`. Solve creates and verifies assigned worktrees with native Git, and removes solve-owned resources through solve-record cleanup gates; `agent-worktree` remains hook/config scaffolding. If native Git cannot create the exact assigned identity, mark only the affected issue/group with `tooling_unavailable`.
 
 For `adopted-integration`, temporary group branches are solve-owned resources. The adopted integration branch is the candidate branch and remains user-owned.
 
@@ -265,15 +265,15 @@ For each issue in a group:
    - docs/config-only issue: edit directly
 3. Implement.
 4. Verify each acceptance criterion.
-5. Record validation evidence as a PR, commit, CI/check, tracker pointer, or final solve summary entry. Avoid putting run logs in issues.
+5. Record validation evidence as a PR, commit, CI/check, tracker pointer, or final solve summary entry.
 6. Commit verified work to the group branch before leaving the group worktree.
 
 Commit rules:
 
-- Do not leave successful group work as dirty worktree changes. Integration consumes committed group branches, not uncommitted files.
+- Leave successful group work as clean, committed group branches for integration.
 - Split commits by issue, vertical slice, or coherent logical change when that makes review and rollback clearer.
 - Keep tightly coupled code, tests, docs, and generated artifacts together when separating them would create broken intermediate commits.
-- Avoid both extremes: do not collapse unrelated issues into one large commit, and do not split mechanical fragments so finely that the history stops explaining behavior.
+- Commit granularity should follow coherent behavior and review boundaries: separate unrelated issues, and keep mechanical fragments together when they explain one behavior.
 - Commit messages should reference the relevant issue id(s) and, when useful, the validation command or evidence.
 
 ### 6. Review Groups
@@ -351,7 +351,7 @@ Checks marked `unavailable` block auto-merge unless the change is explicitly tri
 
 Before creating an auto-mergeable or ready solve record, explicitly consider rollout/config/operator-action signals. Use already-known project context when it is sufficient; otherwise scan the changed files and nearby docs for generic signals such as config files, environment variables, feature flags, migrations, deployment docs, and runbooks. Record one body-prose disposition under `## Merge` or `## Notes`: `none`, `pre-merge action required`, or `post-merge activation required`. `pre-merge action required` means `manual required`; `post-merge activation required` can remain ready only when the record explains why code merge is safe, what action activates the change, how to smoke-check or validate it, and how to roll back or disable it.
 
-Adoption mode still creates solve records for finished candidates. When an adopted branch is the candidate branch, `head` is that branch and `base` is the landing branch; the record must not imply a merge back into the same branch. If development-environment deployment or human acceptance is pending, mark linked issues `completed` when acceptance criteria are verified, but set the solve record merge gate to `manual required` and record the pending evidence in `## Checks` or `## Merge`. A later `$solve-records` acceptance review may update `## Merge` from `manual required` to `ready` after live verification, while keeping `state: open` and without landing unless the user explicitly asks to merge, ship, or land.
+Adoption mode still creates solve records for finished candidates. When an adopted branch is the candidate branch, `head` is that branch and `base` is the landing branch; the record must not imply a merge back into the same branch. If development-environment deployment or human acceptance is pending, mark linked issues `completed` when acceptance criteria are verified, but set the solve record merge gate to `manual required` and record the pending evidence in `## Checks` or `## Merge`. A later `$solve-records` acceptance review may update `## Merge` from `manual required` to `ready` after live verification, while keeping `state: open`; landing remains reserved for explicit merge, ship, or land intent.
 
 Do not clean up successful solve worktrees during ordinary finalization. The candidate branch and worktree remain review context until auto-merge, merge/apply/ship/land, or an explicit cleanup request advances the solve record. Adopted worktrees and adopted candidate branches are user-owned resources; record them as not cleanup-owned and do not schedule them for automatic cleanup.
 
@@ -360,7 +360,7 @@ During the same finalize step:
 - create the solve record in `.scratch/<feature>/solve-records/` or `.scratch/solve-records/`
 - mark linked issues `completed`
 - preserve `agent-decision` on completed low-risk decisions
-- append only a solve-record backlink to each issue; do not duplicate record state in the issue
+- append only a solve-record backlink to each issue; record state stays in the solve record
 - link implementation and validation evidence where the tracker convention needs it
 - remove `solve-in-progress`
 
@@ -395,7 +395,7 @@ If merge succeeds, update the solve record to `state: merged`, set `merged_at` a
 
 If merge fails or conflicts before completion, abort the merge when possible, keep the solve record open, write `manual required` in the record, do not clean up the candidate branch/worktree, and do not roll linked issues back from `completed` unless the candidate itself is invalidated.
 
-Do not show a full diff by default. Show the issue list, group branches, validation commands and results, pending blockers, and final target branch.
+By default, show the issue list, group branches, validation commands and results, pending blockers, and final target branch. Include a full diff only when the user asks for it or review needs it.
 
 ## Agent Decisions
 
@@ -425,15 +425,15 @@ Decision handling:
 When routing to the debugging skill, `/ultra tdd`, or another skill:
 
 - Treat the issue body, acceptance criteria, and agent brief as approved input.
-- Do not block waiting for user confirmation.
+- Continue without waiting for user confirmation.
 - If a routed skill reaches an unanswerable decision, update only that issue to `ready-for-human` or `needs-info` and continue the batch.
-- Do not let one blocked issue stop unrelated issues.
+- Isolate blocked issues and continue unrelated issues.
 
-Architecture proposal skills such as `/ultra improve-codebase-architecture` are analysis-first. Do not silently execute speculative architecture work from solve.
+Architecture proposal skills such as `/ultra improve-codebase-architecture` are analysis-first. Solve executes approved ready issues; speculative architecture work stays in the proposal/review track.
 
 ## Upstream Issue Quality
 
-Do not require `to-issues` to emit a dedicated `technical_context` field in v1. If an issue lacks technical detail, solve should infer what it can from the codebase. If missing context blocks completion, set `needs-info` with a blocker reason. If recurring issue-quality gaps appear, mention them in the final solve summary or an existing project issue-generation surface; do not require a new tracker schema.
+`technical_context` is optional in v1. If an issue lacks technical detail, solve should infer what it can from the codebase. If missing context blocks completion, set `needs-info` with a blocker reason. If recurring issue-quality gaps appear, mention them in the final solve summary or an existing project issue-generation surface; issue-generation improvements can stay within the existing tracker schema.
 
 This is a feedback loop, not a schema gate: `to-issues -> solve notices missing context -> solve reports the gap -> future issue generation improves`.
 
@@ -441,7 +441,7 @@ This is a feedback loop, not a schema gate: `to-issues -> solve notices missing 
 
 Current mutation support is local markdown trackers. The conceptual contract for future remote tracker support is:
 
-For local markdown, detect and preserve the repo's existing issue conventions. Existing structured fields may include frontmatter keys such as `state`/`status`, `flags`/`labels`, comments/notes, or branch/worktree links. Existing body-marker conventions may be read and preserved when they are already part of the tracker, but do not invent a new body-note schema for claims. Batch claims require a machine-readable claim surface.
+For local markdown, detect and preserve the repo's existing issue conventions. Existing structured fields may include frontmatter keys such as `state`/`status`, `flags`/`labels`, comments/notes, or branch/worktree links. Use existing body-marker conventions only when they are already part of the tracker. Batch claims require a machine-readable claim surface.
 
 - `list_ready_for_agent(filter)`
 - `read_issue(issue_id)`

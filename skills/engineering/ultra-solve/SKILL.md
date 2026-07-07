@@ -14,4 +14,4 @@ Treat the user's request as if they had written:
 /ultra solve <user arguments>
 ```
 
-Forward all arguments and context unchanged. Do not implement separate issue-execution logic here; follow the core `ultra` workflow, which dispatches `solve` to `solve.md`.
+Forward all arguments and context unchanged through the core `ultra` workflow, which dispatches `solve` to `solve.md`.

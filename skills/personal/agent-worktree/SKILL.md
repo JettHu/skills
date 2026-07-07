@@ -45,7 +45,7 @@ bash scripts/bootstrap-agent-worktree.sh init --payload "<paths>" --mode link
 Dependency strategy is explicit and separate from `PAYLOAD`:
 
 - `bootstrap`: record generated offline/cache-only and online lockfile-respecting commands. First-class suggestions currently cover `pnpm` and `uv`.
-- `link`: record explicit dependency paths in `DEPENDENCY_PAYLOAD`; do not record bootstrap commands.
+- `link`: record only explicit dependency paths in `DEPENDENCY_PAYLOAD`.
 - `none`: record no dependency payload paths and no bootstrap commands.
 
 Examples:
@@ -60,7 +60,7 @@ Completion criterion: the script reports final payload, mode, dependency strateg
 
 ## Reconfigure
 
-Map natural-language requests to these commands. They update env/hook/exclude only; they do not create, bootstrap, verify, remove, or delete worktrees.
+Map natural-language requests to these commands. They update env/hook/exclude only; worktree creation, bootstrap, verification, removal, and deletion stay with native Git and the owning workflow.
 
 ```bash
 bash scripts/bootstrap-agent-worktree.sh add-payload docs/local .scratch

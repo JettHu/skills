@@ -59,7 +59,7 @@ Internal validation found that research/review did not improve known-codebase PR
 
 These briefs are starting points, not mandatory prompts. Preserve the intent, evidence requirements, and concise output budget, but adapt wording, roles, and exploration split to the task and runtime.
 
-If referenced files such as `CONTEXT.md` or `docs/adr/` do not exist, use the nearest project docs, issue tracker context, or code context instead.
+When referenced files such as `CONTEXT.md` or `docs/adr/` are absent, use the nearest project docs, issue tracker context, or code context instead.
 
 ### Architecture agent (code)
 

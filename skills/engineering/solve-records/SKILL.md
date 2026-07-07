@@ -24,11 +24,11 @@ Mechanics are flexible; gates are not. Adapt commands, helper skills, preflight 
 
 Resolve `scripts/solve-records.py` relative to this skill directory, not relative to the target repo. When running from a repo shell, execute the bundled script by absolute path if needed, and pass the target checkout with `--repo`.
 
-Prefer one `dashboard` or `list` helper call per user request and reuse its JSON as a fact index. Avoid invoking the helper once per record unless a later live-verification or mutation gate specifically needs fresh target-specific evidence. When the user provides an exact solve-record path, read that file directly; do not run `select` for discovery. Run `merge-gate` or `landing-plan` when preparing a readiness transition or merge gate, not repeatedly to restate already-read body prose.
+Prefer one `dashboard` or `list` helper call per user request and reuse its JSON as a fact index until a later live-verification or mutation gate needs fresh target-specific evidence. When the user provides an exact solve-record path, read that file directly; use `select` only for discovery or disambiguation. Run `merge-gate` or `landing-plan` when preparing a readiness transition or merge gate, not repeatedly to restate already-read body prose.
 
 ## 1. Dashboard
 
-With no prompt, list records only. Do not mutate Git, issues, branches, worktrees, or records.
+With no prompt, use read-only dashboard/list mode for records.
 
 Run the bundled read-only helper first when available:
 
@@ -36,20 +36,20 @@ Run the bundled read-only helper first when available:
 python /path/to/solve-records/scripts/solve-records.py dashboard --repo . --json
 ```
 
-Use the helper output as a fact index, not as permission to mutate. If the helper is unavailable or fails, fall back to manual discovery in both locations:
+Use the helper output as a fact index for the read-only dashboard. If the helper is unavailable or fails, fall back to manual discovery in both locations:
 
 - Feature-local: `.scratch/<feature>/solve-records/*.md`
 - Root-level: `.scratch/solve-records/*.md`
 
 Bucket every discovered file:
 
-- `Ready to merge`: `state: open`, no manual blocker, live refs match the record, checks either passed or are unavailable with an explicit low-risk exception, and the body records an explicit rollout/config disposition that does not require pre-merge action.
+- `Ready to merge`: `state: open`, no manual blocker, live refs match the record, checks either passed or are unavailable with an explicit low-risk exception, and the body records an explicit rollout/config disposition that permits merge.
 - `Manual merge required`: open records with a manual-review trigger, missing or blocking rollout/config disposition, unavailable checks without a low-risk rationale, blocked dependencies, or stale live state.
 - `Cleanup pending`: `state: merged` or `state: closed` with `cleanup_done: false`.
 - `Recently merged`: the 10 most recent `state: merged` records.
 - `Stale or malformed`: missing refs, SHA mismatch, unreadable frontmatter, missing required fields, or body/frontmatter conflicts.
 
-Show malformed records without hiding valid records. Completion criterion: every discovered file is either listed in exactly one bucket or reported as malformed with its path and repair reason.
+Show malformed records alongside valid records. Completion criterion: every discovered file is either listed in exactly one bucket or reported as malformed with its path and repair reason.
 
 ## 2. Select
 
@@ -85,13 +85,13 @@ Supported selectors:
 
 If a read-only prompt matches multiple records, show the candidates. If a state-changing prompt matches multiple records, stop before mutation and ask which record or wider set the user wants.
 
-An explicit bounded set is allowed when the user clearly says `all` or names a scoped set, such as `all ready records`, `all low-risk ones`, or `clean up merged records`. For explicit sets, enumerate the matched records first, then process them one by one through the full gate. Skip and report records whose individual gate fails; do not broaden the set to dependencies, stale records, manual-required records, or malformed records unless the user explicitly approves that wider operation.
+An explicit bounded set is allowed when the user clearly says `all` or names a scoped set, such as `all ready records`, `all low-risk ones`, or `clean up merged records`. For explicit sets, enumerate the matched records first, then process exactly that approved set one by one through the full gate. Skip and report records whose individual gate fails; do not broaden the set to dependencies, stale records, manual-required records, or malformed records unless the user explicitly approves that wider operation.
 
 If one record or one explicit bounded set matches unambiguously, continue to live verification.
 
 ## 3. Acceptance Review
 
-Acceptance review is a readiness transition, not merge intent. Use it when the user asks whether a finished candidate is accepted, ready, or mergeable without explicitly saying `merge`, `ship`, or `land`.
+Acceptance review is a readiness transition separate from merge intent. Use it when the user asks whether a finished candidate is accepted, ready, or mergeable without explicitly saying `merge`, `ship`, or `land`.
 
 For an acceptance review:
 
@@ -102,7 +102,7 @@ For an acceptance review:
 - if no manual-review trigger remains, update only `## Merge` from `Status: manual required` to `Status: ready` and record the acceptance evidence
 - if a trigger remains, keep `Status: manual required` and record the smallest actionable reason
 
-Preserve `manual required` when acceptance evidence is still pending; rollout/config disposition is missing or says `pre-merge action required`; product/API/security/data/architecture review is required; checks are unavailable without the low-risk exception; refs are stale; the candidate worktree is dirty; dependencies are unmerged; or conflict resolution needs human judgment.
+Keep `manual required` while acceptance evidence is still pending; rollout/config disposition is missing or says `pre-merge action required`; product/API/security/data/architecture review is required; checks are unavailable without the low-risk exception; refs are stale; the candidate worktree is dirty; dependencies are unmerged; or conflict resolution needs human judgment.
 
 `post-merge activation required` can still be ready when the record explains why code merge is safe, which action activates the feature, how to smoke-check or validate it, and how to roll back or disable it.
 
@@ -118,7 +118,7 @@ Verify at least:
 - the relevant worktree is clean before merge or cleanup
 - required checks are still passed for the recorded or revalidated candidate
 - the record has no human-required decision, unresolved dependency, or manual-review trigger
-- the rollout/config disposition is present and does not require pre-merge action before any `ready` transition or merge
+- the rollout/config disposition is present and permits readiness or merge before any `ready` transition or merge
 - the selected action still matches the user's latest wording
 
 If verification fails, fail closed: preserve the record's existing state, keep open merge candidates open, write or report the smallest manual reason, and do not delete resources. For cleanup failure on a merged record, keep `state: merged` and `cleanup_done: false`.
@@ -141,15 +141,15 @@ In frontmatter, `head` is the candidate branch whose current head contains finis
 
 Never create an initial solve record for claim-time state, in-progress attempts, failed required checks, missing requirements, or a human-required decision that prevents the candidate from being finished. If the candidate is finished and merely requires human review before merge, create an open record with `## Merge` set to `manual required`.
 
-Before creating an auto-mergeable or ready record, explicitly consider rollout/config/operator-action signals. Use existing context when it is sufficient; otherwise scan changed files and nearby docs for generic signals such as config files, environment variables, feature flags, migrations, deployment docs, and runbooks. Record the conclusion in `## Merge` or `## Notes` as body prose, not frontmatter.
+Before creating an auto-mergeable or ready record, explicitly consider rollout/config/operator-action signals. Use existing context when it is sufficient; otherwise scan changed files and nearby docs for generic signals such as config files, environment variables, feature flags, migrations, deployment docs, and runbooks. Record the conclusion as body prose in `## Merge` or `## Notes`.
 
-Do not add JSON as a source of truth or v1 fields such as `phase`, `merge_mode`, `merge_status`, `review_status`, `checks_status`, `attempt_id`, `candidate_state`, `human_state`, or `cleanup_state`.
+The v1 record source of truth is markdown frontmatter and body from [record-format.md](references/record-format.md). Supported frontmatter stays limited to the documented fields; JSON registries and v1-style fields such as `phase`, `merge_mode`, `merge_status`, `review_status`, `checks_status`, `attempt_id`, `candidate_state`, `human_state`, or `cleanup_state` stay outside the v1 schema.
 
-When creating a record from `/ultra solve`, mark linked issues `completed` in the same finalize step and append only a backlink to the record. Do not copy checks, merge rationale, or cleanup state into the issue. Development-environment deployment or human acceptance evidence belongs in `## Checks` or `## Merge`, not in a new issue state. If that evidence is pending, keep the issue completed when its acceptance criteria are verified and set the record merge gate to `manual required`.
+When creating a record from `/ultra solve`, mark linked issues `completed` in the same finalize step and append only a backlink to the record. Checks, merge rationale, cleanup state, development-environment deployment, and human acceptance evidence live in the solve record, especially `## Checks` and `## Merge`. If that evidence is pending, keep the issue completed when its acceptance criteria are verified and set the record merge gate to `manual required`.
 
 ## 6. Checks And Decisions
 
-Treat checks as merge-safety evidence, not a full test log.
+Treat checks as merge-safety evidence rather than a full test log.
 
 - `passed`: relevant checks passed for the recorded `base_sha` and `head_sha`.
 - `unavailable`: no meaningful automated check exists or the environment cannot run it. This blocks auto-merge unless the change is trivial and low-risk, with the record explicitly saying why no meaningful check exists, why no manual-review trigger applies, and what evidence still supports the change.
@@ -171,7 +171,7 @@ Rollout/config disposition is required before a record is treated as ready:
 - `pre-merge action required`: human/operator action is needed before merge; keep `## Merge` as `manual required`.
 - `post-merge activation required`: code may be mergeable only when the record names why code merge is safe, the activation action, a smoke or validation check, and a rollback or disable path.
 
-This disposition stays in body prose, preferably under `## Merge` `Reason:` or `## Notes`; it is not an issue state, solve-record state, or frontmatter enum.
+This disposition lives in body prose, preferably under `## Merge` `Reason:` or `## Notes`, separate from issue state, solve-record state, and frontmatter enums.
 
 ## 7. Merge, Ship, Or Land
 
@@ -246,7 +246,7 @@ If landing construction or the dirty-base gate fails before merge, abort any in-
 
 ## 8. Close
 
-There is no promoted `close` next action in v1 dashboards; do not suggest closure for ordinary open candidates. If the user explicitly says a candidate is abandoned, replaced, or should be closed, read [edge-cases.md](references/edge-cases.md) and perform record-only closure.
+The promoted v1 dashboard next actions are merge, manual review, and cleanup. If the user explicitly says a candidate is abandoned, replaced, or should be closed, read [edge-cases.md](references/edge-cases.md) and perform record-only closure.
 
 Closing a solve record never changes linked issue state. If the linked issue itself should be abandoned, use the tracker or triage workflow.
 
@@ -268,7 +268,7 @@ Cleanup must pass all safety checks before removing anything:
 
 Use `cleanup-plan` from the bundled solve-records helper when available, then verify the reported facts before deleting anything.
 
-Then remove the worktree, run `git worktree prune`, and delete the branch with `git branch -d`. Use raw Git checks and native Git cleanup commands; do not require or invoke `agent-worktree` for solve resource cleanup.
+Then remove the worktree, run `git worktree prune`, and delete the branch with `git branch -d`. Solve resource cleanup uses raw Git checks and native Git cleanup commands; `agent-worktree` remains hook/config scaffolding.
 
 If any safety check fails, do not delete anything. Update or report `Cleanup: blocked` with the exact remaining resource and reason.
 
