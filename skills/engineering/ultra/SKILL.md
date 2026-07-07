@@ -13,13 +13,13 @@ Wrap an agent skill with adaptive pre-exploration and post-review. The target sk
 
 ## Subcommands
 
-If the first argument is `solve`, treat it as an ultra subcommand, not as a target skill. Follow [solve.md](solve.md) directly and do not look up `solve` in [PROFILES.md](PROFILES.md).
+If the first argument is `solve`, dispatch directly to the [solve.md](solve.md) ultra subcommand. `solve` has its own state machine outside [PROFILES.md](PROFILES.md).
 
 ## Runtime adaptivity
 
 This skill is capability-oriented. The workflow describes outcomes; parenthetical hints describe the *capability needed*, not a specific tool. "Spawn agents" means "run exploration or review passes; use parallel subagents when available, otherwise serial passes."
 
-If a named tool is unavailable, use the nearest equivalent workflow (serial passes, direct file reads, manual diff inspection) and state the substitution briefly. **MUST NOT fail or block because a specific tool does not exist.**
+If a named tool is unavailable, use the nearest equivalent workflow (serial passes, direct file reads, manual diff inspection) and state the substitution briefly. A missing specific tool is never by itself a blocker.
 
 Fallback examples:
 - Parallel exploration or review -> run the same passes serially with available read/search tools.
@@ -32,7 +32,7 @@ Example runtime mappings, not requirements: `parallel codebase exploration` -> A
 
 ### 0. Dispatch subcommands
 
-If the first argument is `solve`, follow [solve.md](solve.md) and stop this wrapper workflow. `solve` has its own state machine and is not profile-driven.
+If the first argument is `solve`, follow [solve.md](solve.md) and stop this wrapper workflow. `solve` has its own state machine outside profile-driven execution.
 
 ### 1. Look up the enhancement profile
 
@@ -60,7 +60,7 @@ Before spawning exploration agents, assess whether the current conversation alre
 
 **If context is insufficient**: Proceed with full pre-exploration per the profile.
 
-**Safety rule**: When in doubt, do not skip. A redundant exploration costs tokens; a skipped necessary exploration costs quality. Only skip when you can point to *specific* prior messages or explore results that cover the target area.
+**Safety rule**: Default to exploration until *specific* prior messages or explore results prove the target area is already covered. A redundant exploration costs tokens; a skipped necessary exploration costs quality.
 
 ### 3. Pre-exploration (parallel agents, adaptive scope)
 
@@ -103,7 +103,7 @@ Present findings as a brief checklist of potential gaps. Don't auto-fix — let 
 
 **When `code_review: true`** — only if the skill produced code changes:
 
-If `base_sha` was not recorded in step 1, do not silently skip review. Report that the change-detection baseline is missing and use the safest fixed point available (for example, an explicit user-supplied base or the current branch merge-base).
+If step 1 did not record `base_sha`, report that the change-detection baseline is missing and use the safest fixed point available (for example, an explicit user-supplied base or the current branch merge-base).
 
 Check for changes using these read-only checks:
 
@@ -117,7 +117,7 @@ This catches committed changes (`git diff <base_sha> HEAD`), unstaged changes (`
 
 If changes exist, pin and report the review range before starting review. Prefer an explicit fixed point when the user supplied one; otherwise use `base_sha`. Pass reviewers the diff command, commit list, and any staged/uncommitted diff status so all review passes inspect the same change set.
 
-Conduct a proportional, findings-first code review (e.g., via TeamCreate or parallel review passes). Treat these as internal review lenses, not mandatory output sections or a checklist to enumerate. Report real findings only. If there are no findings, give a short pass summary that names only the relevant axes. Do not include no-op sections such as "Dependencies: no impact" unless that fact is unusually important for the diff.
+Conduct a proportional, findings-first code review (e.g., via TeamCreate or parallel review passes). Treat these as internal review lenses, not mandatory output sections or a checklist to enumerate. Report real findings only. If there are no findings, give a short pass summary that names only the relevant axes. Include a no-op section such as "Dependencies: no impact" only when that fact is unusually important for the diff.
 
 Primary axes to consider:
 

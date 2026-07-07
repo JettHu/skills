@@ -14,4 +14,4 @@ Treat the user's request as if they had written:
 /ultra to-issues <user arguments>
 ```
 
-Forward all arguments and context unchanged. Do not implement separate issue-splitting logic here; follow the core `ultra` workflow, then invoke `to-issues` through it.
+Forward all arguments and context unchanged through the core `ultra` workflow, then invoke `to-issues` through it.

@@ -9,7 +9,7 @@ Use ids aligned with the head branch slug:
 solve/20260701-1432-caption-fix
 ```
 
-A solve record points to one finished candidate branch. `head` is the candidate branch. `base` is the landing branch. Do not list commits in the record; derive the commit set from Git with `base_sha..head_sha`.
+A solve record points to one finished candidate branch. `head` is the candidate branch. `base` is the landing branch. Derive the commit set from Git with `base_sha..head_sha`.
 
 The candidate may be an isolated solve branch, an adopted development branch, a PR branch, or a stack branch. The landing branch is where the candidate should enter after review, validation, deployment, or another project-specific gate.
 
@@ -97,7 +97,7 @@ Cleanup: pending | done | blocked
 - <agent decisions, conflict notes, caveats, or empty>
 ```
 
-Use `Cleanup: done` when no solve-owned resources remain, including adoption records where the adopted worktree and candidate branch are user-owned and must not be deleted by `$solve-records cleanup`.
+Use `Cleanup: done` when no solve-owned resources remain, including adoption records where the adopted worktree and candidate branch are user-owned and stay outside `$solve-records cleanup`.
 
 Merge status examples:
 
@@ -219,4 +219,4 @@ Issue backlink:
 - `../solve-records/20260701-1432-caption-fix.md`
 ```
 
-If an issue has multiple records, use `### Solve Records` with one path-only bullet per record. Do not copy checks, merge rationale, resource details, summaries, or record state into the issue.
+If an issue has multiple records, use `### Solve Records` with one path-only bullet per record. Keep checks, merge rationale, resource details, summaries, and record state in the solve record.

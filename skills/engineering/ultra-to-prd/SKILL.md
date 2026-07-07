@@ -14,4 +14,4 @@ Treat the user's request as if they had written:
 /ultra to-prd <user arguments>
 ```
 
-Forward all arguments and context unchanged. Do not implement separate PRD-writing logic here; follow the core `ultra` workflow, then invoke `to-prd` through it.
+Forward all arguments and context unchanged through the core `ultra` workflow, then invoke `to-prd` through it.
