@@ -32,6 +32,8 @@ ANCESTOR_CACHE = {}
 
 
 HARD_STOP_BASENAMES = {
+    ".env",
+    ".env.example",
     "package.json",
     "Cargo.toml",
     "Cargo.lock",
@@ -50,6 +52,12 @@ HARD_STOP_BASENAMES = {
     "SKILL.md",
     "AGENTS.md",
     "CLAUDE.md",
+}
+
+ROLLOUT_CONFIG_DISPOSITIONS = {
+    "none",
+    "pre-merge action required",
+    "post-merge activation required",
 }
 
 
@@ -279,6 +287,54 @@ def has_low_risk_exception(record):
     return all(fragment in notes for fragment in required_evidence)
 
 
+def rollout_config_block(record):
+    text = record.get("text", "")
+    return (section(text, "Merge") + "\n" + section(text, "Notes")).lower()
+
+
+def rollout_config_disposition(record):
+    prefixes = (
+        "rollout/config disposition:",
+        "rollout config disposition:",
+        "rollout disposition:",
+        "config disposition:",
+    )
+    for line in rollout_config_block(record).splitlines():
+        normalized = line.strip().lstrip("-*").strip()
+        for prefix in prefixes:
+            if prefix not in normalized:
+                continue
+            value = normalized.split(prefix, 1)[1].strip()
+            for disposition in ROLLOUT_CONFIG_DISPOSITIONS:
+                if value == disposition or value.startswith((disposition + ";", disposition + ".", disposition + ",")):
+                    return disposition
+            return "unknown"
+    return ""
+
+
+def rollout_config_gate_reason(record):
+    disposition = rollout_config_disposition(record)
+    if not disposition:
+        return "missing rollout/config disposition"
+    if disposition == "unknown":
+        return "unknown rollout/config disposition"
+    if disposition == "pre-merge action required":
+        return "rollout/config pre-merge action required"
+    if disposition == "post-merge activation required":
+        block = rollout_config_block(record)
+        required = [
+            (("code merge is safe", "code merge safe"), "code-merge-safety rationale"),
+            (("activation:",), "activation action"),
+            (("rollback:", "disable:"), "rollback or disable note"),
+        ]
+        for fragments, label in required:
+            if not any(fragment in block for fragment in fragments):
+                return f"post-merge activation missing {label}"
+        if "smoke:" not in block and "validation:" not in block:
+            return "post-merge activation missing smoke or validation check"
+    return ""
+
+
 def body_frontmatter_conflict(record):
     summary_status = record.get("summary_status")
     if summary_status and summary_status != record.get("state"):
@@ -375,9 +431,21 @@ def hard_stop_paths(paths):
             normalized.startswith(".github/")
             or normalized.startswith(".claude-plugin/")
             or normalized.startswith(".codex-plugin/")
+            or normalized.startswith("config/")
+            or normalized.startswith("configs/")
+            or normalized.startswith("deploy/")
+            or normalized.startswith("deployment/")
             or normalized.endswith("/agents/openai.yaml")
+            or "/config/" in f"/{normalized}/"
+            or "/configs/" in f"/{normalized}/"
+            or "/deploy/" in f"/{normalized}/"
+            or "/deployment/" in f"/{normalized}/"
             or "/migrations/" in f"/{normalized}/"
             or "/schema/" in f"/{normalized}/"
+            or "feature-flag" in normalized
+            or "feature_flags" in normalized
+            or "runbook" in normalized
+            or basename.startswith(".env")
             or normalized.startswith("prisma/schema.prisma")
             or basename.startswith("Dockerfile")
             or basename.startswith("docker-compose")
@@ -423,6 +491,9 @@ def merge_gate(repo, record):
                 reasons.append("unavailable checks without low-risk evidence")
         elif record.get("checks") != "passed":
             reasons.append(f"checks status is {record.get('checks') or '<missing>'}")
+        rollout_reason = rollout_config_gate_reason(record)
+        if record.get("merge") == "ready" and rollout_reason:
+            reasons.append(rollout_reason)
         if not reasons:
             clean, clean_reason = worktree_clean_check(repo, record)
             if not clean:
@@ -642,6 +713,7 @@ def record_summary(repo, record, include_merge_gate=False):
         summary["refs_ok"] = refs_ok
         summary["ref_reason"] = ref_reason
         summary["low_risk_exception"] = has_low_risk_exception(record)
+        summary["rollout_config_disposition"] = rollout_config_disposition(record)
         conflict = body_frontmatter_conflict(record)
         if conflict:
             summary["body_conflict"] = conflict

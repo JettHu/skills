@@ -317,7 +317,7 @@ Run the repo-appropriate validation commands in the integration worktree. Prefer
 If final validation passes:
 
 - ensure the integration worktree is clean and all intended changes are committed
-- capture the landing `base`, `base_sha`, candidate `head`, `head_sha`, issue paths, worktree path, checks status, validation evidence, and cleanup ownership for solve record creation
+- capture the landing `base`, `base_sha`, candidate `head`, `head_sha`, issue paths, worktree path, checks status, validation evidence, rollout/config disposition, and cleanup ownership for solve record creation
 - proceed to finalization before marking linked issues completed
 
 If final validation fails:
@@ -342,13 +342,16 @@ Create a solve record only after a finished, reviewable merge candidate exists:
 - linked issue paths
 - checks status and validation evidence
 - merge-gate disposition
+- rollout/config disposition in the record body
 - worktree and cleanup resource notes
 
 Do not create solve records for claim-time state, in-progress attempts, missing requirements, failed required checks, or a human-required decision that prevents the candidate from being finished. If a finished candidate exists but needs human review before merge for product/API/security/data/architecture/rollout risk, create the record as `state: open` with `## Merge` set to `manual required`; do not auto-merge it.
 
 Checks marked `unavailable` block auto-merge unless the change is explicitly trivial and low-risk, and the record says why no meaningful check exists, why no manual-review trigger applies, and what evidence still supports the change.
 
-Adoption mode still creates solve records for finished candidates. When an adopted branch is the candidate branch, `head` is that branch and `base` is the landing branch; the record must not imply a merge back into the same branch. If development-environment deployment or human acceptance is pending, mark linked issues `completed` when acceptance criteria are verified, but set the solve record merge gate to `manual required` and record the pending evidence in `## Checks` or `## Merge`.
+Before creating an auto-mergeable or ready solve record, explicitly consider rollout/config/operator-action signals. Use already-known project context when it is sufficient; otherwise scan the changed files and nearby docs for generic signals such as config files, environment variables, feature flags, migrations, deployment docs, and runbooks. Record one body-prose disposition under `## Merge` or `## Notes`: `none`, `pre-merge action required`, or `post-merge activation required`. `pre-merge action required` means `manual required`; `post-merge activation required` can remain ready only when the record explains why code merge is safe, what action activates the change, how to smoke-check or validate it, and how to roll back or disable it.
+
+Adoption mode still creates solve records for finished candidates. When an adopted branch is the candidate branch, `head` is that branch and `base` is the landing branch; the record must not imply a merge back into the same branch. If development-environment deployment or human acceptance is pending, mark linked issues `completed` when acceptance criteria are verified, but set the solve record merge gate to `manual required` and record the pending evidence in `## Checks` or `## Merge`. A later `$solve-records` acceptance review may update `## Merge` from `manual required` to `ready` after live verification, while keeping `state: open` and without landing unless the user explicitly asks to merge, ship, or land.
 
 Do not clean up successful solve worktrees during ordinary finalization. The candidate branch and worktree remain review context until auto-merge, merge/apply/ship/land, or an explicit cleanup request advances the solve record. Adopted worktrees and adopted candidate branches are user-owned resources; record them as not cleanup-owned and do not schedule them for automatic cleanup.
 
@@ -382,7 +385,7 @@ All record merge gates must pass:
 5. All eligible group branches are integrated and final validation passed.
 6. No semantic conflict was force-resolved.
 7. The solve record was re-read and live Git state still matches recorded `base_sha` and `head_sha`, or the record was revalidated before merge. A changed `head_sha` blocks merge until fresh validation updates the record. A changed `base_sha` may be revalidated only when the recorded base is an ancestor of the live base, the head still matches, preflight merge is clean, and checks are rerun or the unavailable-check low-risk exception is restated against the live base.
-8. The record has no manual-review trigger, stale check, stale ref, missing dependency, or unavailable check without the low-risk exception evidence.
+8. The record has no manual-review trigger, stale check, stale ref, missing dependency, missing or blocking rollout/config disposition, or unavailable check without the low-risk exception evidence.
 
 The landing gate constructs `landing_sha` before touching the user's base worktree. Fast-forward candidates use head as `landing_sha`; non-fast-forward candidates and mechanical conflicts must be merged or resolved in a disposable worktree or equivalent throwaway environment. Semantic conflict resolution still stops as `manual required`.
 

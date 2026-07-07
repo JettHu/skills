@@ -33,6 +33,7 @@ make_branch() {
   local file="$2"
   local text="$3"
   git -C "$REPO" checkout -b "$branch" master >/dev/null 2>&1
+  mkdir -p "$(dirname "$REPO/$file")"
   printf '%s\n' "$text" >"$REPO/$file"
   git -C "$REPO" add "$file"
   git -C "$REPO" commit -m "$branch" >/dev/null
@@ -51,6 +52,11 @@ MISMATCH_WORKTREE_HEAD="$(make_branch solve/20260701-1532-branch-mismatch-worktr
 RECENT_HEAD="$(make_branch solve/20260701-1540-recent-merged recent.txt recent)"
 LOW_RISK_HEAD="$(make_branch solve/20260701-1545-low-risk-unavailable low-risk.txt low-risk)"
 WEAK_LOW_RISK_HEAD="$(make_branch solve/20260701-1546-weak-low-risk weak-low-risk.txt weak-low-risk)"
+CONFIG_MISSING_HEAD="$(make_branch solve/20260707-1519-config-missing-disposition config/direct-mode.env config-missing)"
+CONFIG_PREMERGE_HEAD="$(make_branch solve/20260707-1520-config-premerge config/direct-mode-premerge.env config-premerge)"
+CONFIG_POST_ACTIVATION_HEAD="$(make_branch solve/20260707-1521-config-post-activation config/direct-mode-post.env config-post)"
+ACCEPTANCE_PENDING_HEAD="$(make_branch solve/20260707-1530-acceptance-pending acceptance/pending.txt acceptance-pending)"
+ACCEPTANCE_PREMERGE_HEAD="$(make_branch solve/20260707-1531-acceptance-premerge acceptance/premerge.txt acceptance-premerge)"
 CLOSE_HEAD="$(make_branch solve/20260701-1555-abandoned abandoned.txt abandoned)"
 REMOTE_HEAD="$(make_branch solve/20260701-1600-remote-pr remote.txt remote)"
 CONFLICT_HEAD="$(make_branch solve/20260701-1605-body-conflict body-conflict.txt body-conflict)"
@@ -125,6 +131,10 @@ write_record() {
   local merge="${11}"
   local notes="${12:-fixture}"
   local cleanup_resource="${13:-pending}"
+  local rollout_note=""
+  if [[ "$notes" != *"Rollout/config disposition:"* ]]; then
+    rollout_note="- Rollout/config disposition: none; no rollout/config/operator action is needed."
+  fi
   mkdir -p "$(dirname "$path")"
   cat >"$path" <<EOF
 ---
@@ -175,6 +185,7 @@ Cleanup: $cleanup_resource
 
 ## Notes
 - $notes
+$rollout_note
 EOF
 }
 
@@ -267,6 +278,39 @@ write_record "$REPO/.scratch/solve-records/20260701-1546-weak-low-risk.md" \
   "20260701-1546-weak-low-risk" open solve/20260701-1546-weak-low-risk "$WEAK_LOW_RISK_HEAD" \
   ".scratch/caption/issues/01.md" "../wt-ready" false "Weak low risk unavailable check" unavailable ready \
   "low-risk"
+
+write_record "$REPO/.scratch/solve-records/20260707-1519-config-missing-disposition.md" \
+  "20260707-1519-config-missing-disposition" open solve/20260707-1519-config-missing-disposition "$CONFIG_MISSING_HEAD" \
+  ".scratch/caption/issues/01.md" "../wt-ready" false "Config signal missing disposition" passed ready
+python3 - "$REPO/.scratch/solve-records/20260707-1519-config-missing-disposition.md" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace("\n- Rollout/config disposition: none; no rollout/config/operator action is needed.", "", 1)
+path.write_text(text, encoding="utf-8")
+PY
+
+write_record "$REPO/.scratch/solve-records/20260707-1520-config-premerge.md" \
+  "20260707-1520-config-premerge" open solve/20260707-1520-config-premerge "$CONFIG_PREMERGE_HEAD" \
+  ".scratch/caption/issues/01.md" "../wt-ready" false "Config pre-merge action" passed ready \
+  "Rollout/config disposition: pre-merge action required; operator must enable required config before merge."
+
+write_record "$REPO/.scratch/solve-records/20260707-1521-config-post-activation.md" \
+  "20260707-1521-config-post-activation" open solve/20260707-1521-config-post-activation "$CONFIG_POST_ACTIVATION_HEAD" \
+  ".scratch/caption/issues/01.md" "../wt-ready" false "Config post-merge activation" passed ready \
+  "Rollout/config disposition: post-merge activation required; code merge is safe because the default remains disabled. Activation: enable DIRECT_MODE after merge. Smoke: run the direct-mode staging request. Rollback: disable DIRECT_MODE."
+
+write_record "$REPO/.scratch/solve-records/20260707-1530-acceptance-pending.md" \
+  "20260707-1530-acceptance-pending" open solve/20260707-1530-acceptance-pending "$ACCEPTANCE_PENDING_HEAD" \
+  ".scratch/caption/issues/01.md" "../wt-ready" false "Acceptance pending candidate" passed "manual required" \
+  "human acceptance pending; Rollout/config disposition: none; no rollout/config/operator action is needed."
+
+write_record "$REPO/.scratch/solve-records/20260707-1531-acceptance-premerge.md" \
+  "20260707-1531-acceptance-premerge" open solve/20260707-1531-acceptance-premerge "$ACCEPTANCE_PREMERGE_HEAD" \
+  ".scratch/caption/issues/01.md" "../wt-ready" false "Acceptance still manual candidate" passed "manual required" \
+  "Rollout/config disposition: pre-merge action required; operator must enable required config before merge."
 
 write_record "$REPO/.scratch/solve-records/20260701-1555-abandoned.md" \
   "20260701-1555-abandoned" open solve/20260701-1555-abandoned "$CLOSE_HEAD" \
@@ -559,6 +603,60 @@ def has_low_risk_exception(record):
     return all(fragment in notes for fragment in required_evidence)
 
 
+ROLLOUT_CONFIG_DISPOSITIONS = {
+    "none",
+    "pre-merge action required",
+    "post-merge activation required",
+}
+
+
+def rollout_config_block(record):
+    return (section(record["text"], "Merge") + "\n" + section(record["text"], "Notes")).lower()
+
+
+def rollout_config_disposition(record):
+    prefixes = (
+        "rollout/config disposition:",
+        "rollout config disposition:",
+        "rollout disposition:",
+        "config disposition:",
+    )
+    for line in rollout_config_block(record).splitlines():
+        normalized = line.strip().lstrip("-*").strip()
+        for prefix in prefixes:
+            if prefix not in normalized:
+                continue
+            value = normalized.split(prefix, 1)[1].strip()
+            for disposition in ROLLOUT_CONFIG_DISPOSITIONS:
+                if value == disposition or value.startswith((disposition + ";", disposition + ".", disposition + ",")):
+                    return disposition
+            return "unknown"
+    return ""
+
+
+def rollout_config_gate_reason(record):
+    disposition = rollout_config_disposition(record)
+    if not disposition:
+        return "missing rollout/config disposition"
+    if disposition == "unknown":
+        return "unknown rollout/config disposition"
+    if disposition == "pre-merge action required":
+        return "rollout/config pre-merge action required"
+    if disposition == "post-merge activation required":
+        block = rollout_config_block(record)
+        required = [
+            (("code merge is safe", "code merge safe"), "code-merge-safety rationale"),
+            (("activation:",), "activation action"),
+            (("rollback:", "disable:"), "rollback or disable note"),
+        ]
+        for fragments, label in required:
+            if not any(fragment in block for fragment in fragments):
+                return f"post-merge activation missing {label}"
+        if "smoke:" not in block and "validation:" not in block:
+            return "post-merge activation missing smoke or validation check"
+    return ""
+
+
 def recent_sort_key(record_or_id):
     if isinstance(record_or_id, str):
         record = by_id[record_or_id]
@@ -598,7 +696,8 @@ def dashboard(records):
             recent.append(record["id"])
             continue
         unavailable_low_risk = record["checks"] == "unavailable" and has_low_risk_exception(record)
-        if record["merge"] == "ready" and (record["checks"] == "passed" or unavailable_low_risk):
+        rollout_ready = not rollout_config_gate_reason(record)
+        if record["merge"] == "ready" and rollout_ready and (record["checks"] == "passed" or unavailable_low_risk):
             buckets["ready"].append(record["id"])
         else:
             buckets["manual"].append(record["id"])
@@ -634,6 +733,8 @@ def can_merge(record):
     if record["state"] != "open":
         return False
     if record["merge"] != "ready":
+        return False
+    if rollout_config_gate_reason(record):
         return False
     if record["checks"] != "passed":
         return record["checks"] == "unavailable" and has_low_risk_exception(record)
@@ -752,6 +853,19 @@ def can_merge_with_weak_low_risk_exception(record):
     return record["checks"] == "unavailable" and "low-risk" in record["notes"]
 
 
+def can_merge_without_rollout_config_gate(record):
+    if record.get("malformed"):
+        return False
+    refs_ok, _ = ref_matches(record)
+    if not refs_ok:
+        return False
+    if record["state"] != "open" or record["merge"] != "ready":
+        return False
+    if record["checks"] != "passed":
+        return record["checks"] == "unavailable" and has_low_risk_exception(record)
+    return True
+
+
 def unsafe_first_match_for_state_change(records, query):
     matches = select(records, query)
     return matches[0] if matches else None
@@ -797,9 +911,49 @@ tool_dashboard_cli = run_tool("dashboard")
 tool_select = {"matches": tool_module.select_records(tool_records, "caption fix")}
 tool_merge_gate_ready = tool_module.merge_gate(repo, tool_by_id["20260701-1432-caption-fix"])
 tool_merge_gate_weak = tool_module.merge_gate(repo, tool_by_id["20260701-1546-weak-low-risk"])
+tool_merge_gate_config_missing = tool_module.merge_gate(repo, tool_by_id["20260707-1519-config-missing-disposition"])
+tool_merge_gate_config_premerge = tool_module.merge_gate(repo, tool_by_id["20260707-1520-config-premerge"])
+tool_merge_gate_config_post_activation = tool_module.merge_gate(
+    repo, tool_by_id["20260707-1521-config-post-activation"]
+)
 tool_cleanup_dirty = tool_module.cleanup_plan(repo, tool_by_id["20260701-1510-dirty-cleanup"])
 tool_cleanup_adopted = tool_module.cleanup_plan(repo, tool_by_id["20260703-1745-adopted-cleanup"])
 tool_landing_ready = tool_module.landing_plan(repo, tool_by_id["20260701-1432-caption-fix"])
+
+
+def acceptance_review_exact_path(record_path):
+    path = (repo / record_path).resolve()
+    record = tool_module.parse_record(repo, path)
+    if record.get("state") != "open":
+        return {"updated": False, "reasons": [f"state is {record.get('state')}"]}
+    if record.get("merge") not in {"manual required", "ready"}:
+        return {"updated": False, "reasons": [f"merge status is {record.get('merge') or '<missing>'}"]}
+
+    candidate = dict(record)
+    candidate["merge"] = "ready"
+    candidate["text"] = record["text"].replace("Status: manual required", "Status: ready", 1)
+    gate = tool_module.merge_gate(repo, candidate)
+    if not gate["eligible"]:
+        return {"updated": False, "reasons": gate["reasons"]}
+
+    updated_text = candidate["text"].replace(
+        "- fixture reason",
+        "- Acceptance review passed: exact-path record, refs, checks, worktree, and manual-review triggers were verified.",
+        1,
+    )
+    path.write_text(updated_text, encoding="utf-8")
+    updated = tool_module.parse_record(repo, path)
+    return {
+        "updated": True,
+        "state": updated["state"],
+        "merge": updated["merge"],
+        "cleanup_done": updated["cleanup_done"],
+        "cleanup_plan": tool_module.cleanup_plan(repo, updated),
+    }
+
+
+acceptance_ready = acceptance_review_exact_path(".scratch/solve-records/20260707-1530-acceptance-pending.md")
+acceptance_still_manual = acceptance_review_exact_path(".scratch/solve-records/20260707-1531-acceptance-premerge.md")
 expected_recent = ["20260701-1501-recent-newer-merged-at"] + [
     f"20260701-17{minute:02d}-recent-{minute:02d}"
     for minute in range(11, 2, -1)
@@ -827,6 +981,9 @@ assert "20260701-1702-recent-02" not in buckets["recent"], buckets
 assert "20260701-1551-wrong-kind" not in buckets["ready"] + buckets["manual"], buckets
 assert "20260701-1545-low-risk-unavailable" in buckets["ready"], buckets
 assert "20260701-1546-weak-low-risk" in buckets["manual"], buckets
+assert "20260707-1519-config-missing-disposition" in buckets["manual"], buckets
+assert "20260707-1520-config-premerge" in buckets["manual"], buckets
+assert "20260707-1521-config-post-activation" in buckets["ready"], buckets
 assert "20260703-1745-adopted-current" in buckets["manual"], buckets
 assert "20260703-1745-protected-baseline" in buckets["ready"], buckets
 assert "20260703-1745-adopted-integration" in buckets["ready"], buckets
@@ -880,6 +1037,9 @@ assert tool_recent_ids == expected_recent, tool_recent_ids
 tool_ready_ids = [item["id"] for item in tool_dashboard["buckets"]["ready"]]
 assert "20260701-1432-caption-fix" in tool_ready_ids, tool_dashboard["buckets"]["ready"]
 assert "20260701-1545-low-risk-unavailable" in tool_ready_ids, tool_dashboard["buckets"]["ready"]
+assert "20260707-1521-config-post-activation" in tool_ready_ids, tool_dashboard["buckets"]["ready"]
+assert "20260707-1519-config-missing-disposition" not in tool_ready_ids, tool_dashboard["buckets"]["ready"]
+assert "20260707-1520-config-premerge" not in tool_ready_ids, tool_dashboard["buckets"]["ready"]
 assert "20260701-1551-wrong-kind" not in tool_ready_ids, tool_dashboard["buckets"]["ready"]
 assert any(
     item["id"] == "20260701-1551-wrong-kind"
@@ -900,6 +1060,11 @@ assert [
 assert tool_merge_gate_ready["eligible"] is True, tool_merge_gate_ready
 assert tool_merge_gate_weak["eligible"] is False, tool_merge_gate_weak
 assert "unavailable checks without low-risk evidence" in tool_merge_gate_weak["reasons"]
+assert tool_merge_gate_config_missing["eligible"] is False, tool_merge_gate_config_missing
+assert "missing rollout/config disposition" in tool_merge_gate_config_missing["reasons"]
+assert tool_merge_gate_config_premerge["eligible"] is False, tool_merge_gate_config_premerge
+assert "rollout/config pre-merge action required" in tool_merge_gate_config_premerge["reasons"]
+assert tool_merge_gate_config_post_activation["eligible"] is True, tool_merge_gate_config_post_activation
 assert tool_cleanup_dirty["status"] == "blocked", tool_cleanup_dirty
 assert tool_cleanup_dirty["reason"] == "dirty worktree", tool_cleanup_dirty
 assert tool_cleanup_adopted["status"] == "done", tool_cleanup_adopted
@@ -909,6 +1074,21 @@ assert tool_landing_ready["status"] == "ready", tool_landing_ready
 assert tool_landing_ready["landing_type"] == "fast-forward", tool_landing_ready
 assert tool_landing_ready["landing_sha"] == by_id["20260701-1432-caption-fix"]["head_sha"], tool_landing_ready
 assert "caption.txt" in tool_landing_ready["write_surface"], tool_landing_ready
+assert acceptance_ready["updated"] is True, acceptance_ready
+assert acceptance_ready["state"] == "open", acceptance_ready
+assert acceptance_ready["merge"] == "ready", acceptance_ready
+assert acceptance_ready["cleanup_done"] == "false", acceptance_ready
+assert acceptance_ready["cleanup_plan"]["status"] == "not_applicable", acceptance_ready
+acceptance_ready_text = (repo / ".scratch/solve-records/20260707-1530-acceptance-pending.md").read_text(
+    encoding="utf-8"
+)
+assert "Status: ready" in acceptance_ready_text, acceptance_ready_text
+assert "state: open" in acceptance_ready_text, acceptance_ready_text
+assert acceptance_still_manual["updated"] is False, acceptance_still_manual
+assert "rollout/config pre-merge action required" in acceptance_still_manual["reasons"], acceptance_still_manual
+assert "Status: manual required" in (
+    repo / ".scratch/solve-records/20260707-1531-acceptance-premerge.md"
+).read_text(encoding="utf-8")
 
 assert select(records, "20260701-1432-caption-fix") == ["20260701-1432-caption-fix"]
 assert select(records, ".scratch/caption/solve-records/20260701-1432-caption-fix.md") == ["20260701-1432-caption-fix"]
@@ -929,6 +1109,9 @@ assert can_merge(by_id["20260701-1505-stale-ref"]) is False
 assert can_merge(by_id["20260701-1506-sha-drift"]) is False
 assert can_merge(by_id["20260701-1545-low-risk-unavailable"]) is True
 assert can_merge(by_id["20260701-1546-weak-low-risk"]) is False
+assert can_merge(by_id["20260707-1519-config-missing-disposition"]) is False
+assert can_merge(by_id["20260707-1520-config-premerge"]) is False
+assert can_merge(by_id["20260707-1521-config-post-activation"]) is True
 
 advanced_base_sha = "f" * 40
 assert can_revalidate_base_only(
@@ -1031,6 +1214,10 @@ ablation = {
     "without_low_risk_evidence_guard_weak_exception_would_auto_merge": (
         can_merge_with_weak_low_risk_exception(by_id["20260701-1546-weak-low-risk"])
         and not can_merge(by_id["20260701-1546-weak-low-risk"])
+    ),
+    "without_rollout_config_disposition_gate_config_signal_looks_ready": (
+        can_merge_without_rollout_config_gate(by_id["20260707-1519-config-missing-disposition"])
+        and not can_merge(by_id["20260707-1519-config-missing-disposition"])
     ),
     "without_selector_confirmation_short_query_is_ambiguous": (
         len(select(records, "caption")) > 1
@@ -1302,6 +1489,7 @@ Cleanup: pending
 
 ## Notes
 - fixture
+- Rollout/config disposition: none; no rollout/config/operator action is needed.
 EOF
 }
 

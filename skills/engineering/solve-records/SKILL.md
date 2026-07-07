@@ -13,6 +13,7 @@ Use solve records as local markdown receipts for finished, checkable merge candi
 | --- | --- |
 | no prompt | read-only dashboard |
 | ambiguous state-changing prompt | show candidates and stop |
+| acceptance review / can this merge? | live-verify, update `## Merge` to `ready` or keep `manual required`, keep `state: open` |
 | merge / ship / land | live-verify, construct `landing_sha`, then fast-forward base |
 | unavailable checks | manual required unless the low-risk exception is explicit |
 | cleanup | delete only registered, clean, merged solve-owned worktrees/branches |
@@ -22,7 +23,7 @@ Mechanics are flexible; gates are not. Adapt commands, helper skills, preflight 
 
 Resolve `scripts/solve-records.py` relative to this skill directory, not relative to the target repo. When running from a repo shell, execute the bundled script by absolute path if needed, and pass the target checkout with `--repo`.
 
-Prefer one `dashboard` or `list` helper call per user request and reuse its JSON as a fact index. Avoid invoking the helper once per record unless a later live-verification or mutation gate specifically needs fresh target-specific evidence.
+Prefer one `dashboard` or `list` helper call per user request and reuse its JSON as a fact index. Avoid invoking the helper once per record unless a later live-verification or mutation gate specifically needs fresh target-specific evidence. When the user provides an exact solve-record path, read that file directly; do not run `select` for discovery. Run `merge-gate` or `landing-plan` when preparing a readiness transition or merge gate, not repeatedly to restate already-read body prose.
 
 ## 1. Dashboard
 
@@ -41,8 +42,8 @@ Use the helper output as a fact index, not as permission to mutate. If the helpe
 
 Bucket every discovered file:
 
-- `Ready to merge`: `state: open`, no manual blocker, live refs match the record, and checks either passed or are unavailable with an explicit low-risk exception.
-- `Manual merge required`: open records with a manual-review trigger, unavailable checks without a low-risk rationale, blocked dependencies, or stale live state.
+- `Ready to merge`: `state: open`, no manual blocker, live refs match the record, checks either passed or are unavailable with an explicit low-risk exception, and the body records an explicit rollout/config disposition that does not require pre-merge action.
+- `Manual merge required`: open records with a manual-review trigger, missing or blocking rollout/config disposition, unavailable checks without a low-risk rationale, blocked dependencies, or stale live state.
 - `Cleanup pending`: `state: merged` or `state: closed` with `cleanup_done: false`.
 - `Recently merged`: the 10 most recent `state: merged` records.
 - `Stale or malformed`: missing refs, SHA mismatch, unreadable frontmatter, missing required fields, or body/frontmatter conflicts.
@@ -52,6 +53,8 @@ Show malformed records without hiding valid records. Completion criterion: every
 ## 2. Select
 
 With a prompt, infer the intent semantically instead of requiring strict subcommands.
+
+If the prompt contains an exact solve-record path, read the record directly and use it as the selected candidate. Use `select` only when discovery or disambiguation is needed.
 
 Use the helper for candidate lookup when available:
 
@@ -65,6 +68,7 @@ Supported intents:
 
 - list or filter records
 - explain a record
+- acceptance review, such as `验收下`, `review this`, `can this merge?`, or `is this ready?`
 - merge, ship, or land records through the same merge gate
 - clean up records
 - explicitly mark a solve record closed when the user says the candidate is abandoned, replaced, or no longer wanted
@@ -84,9 +88,26 @@ An explicit bounded set is allowed when the user clearly says `all` or names a s
 
 If one record or one explicit bounded set matches unambiguously, continue to live verification.
 
-## 3. Live Verify
+## 3. Acceptance Review
 
-Before any merge, ship, land, close, cleanup, or record update, re-read the record and verify current Git state. Do not trust stored SHAs, body prose, or earlier chat context.
+Acceptance review is a readiness transition, not merge intent. Use it when the user asks whether a finished candidate is accepted, ready, or mergeable without explicitly saying `merge`, `ship`, or `land`.
+
+For an acceptance review:
+
+- re-read the exact record and linked issue evidence
+- verify refs match or are narrowly revalidated, the candidate worktree is clean, checks passed or have the documented low-risk unavailable-check exception, dependencies are satisfied, and no conflict remains
+- verify rollout/config/operator-action signals were considered and dispositioned in the record body
+- preserve `state: open`; records become `merged` only after an actual landing succeeds
+- if no manual-review trigger remains, update only `## Merge` from `Status: manual required` to `Status: ready` and record the acceptance evidence
+- if a trigger remains, keep `Status: manual required` and record the smallest actionable reason
+
+Preserve `manual required` when acceptance evidence is still pending; rollout/config disposition is missing or says `pre-merge action required`; product/API/security/data/architecture review is required; checks are unavailable without the low-risk exception; refs are stale; the candidate worktree is dirty; dependencies are unmerged; or conflict resolution needs human judgment.
+
+`post-merge activation required` can still be ready when the record explains why code merge is safe, which action activates the feature, how to smoke-check or validate it, and how to roll back or disable it.
+
+## 4. Live Verify
+
+Before any acceptance-review readiness update, merge, ship, land, close, cleanup, or record update, re-read the record and verify current Git state. Do not trust stored SHAs, body prose, or earlier chat context.
 
 Verify at least:
 
@@ -96,13 +117,14 @@ Verify at least:
 - the relevant worktree is clean before merge or cleanup
 - required checks are still passed for the recorded or revalidated candidate
 - the record has no human-required decision, unresolved dependency, or manual-review trigger
+- the rollout/config disposition is present and does not require pre-merge action before any `ready` transition or merge
 - the selected action still matches the user's latest wording
 
 If verification fails, fail closed: preserve the record's existing state, keep open merge candidates open, write or report the smallest manual reason, and do not delete resources. For cleanup failure on a merged record, keep `state: merged` and `cleanup_done: false`.
 
 Revalidation is narrow. A changed `head_sha` means the candidate changed; stop and require a fresh validation/update before merge. A changed `base_sha` may be revalidated only when the recorded base is an ancestor of the live base, the recorded `head_sha` still matches the live head, a merge/preflight against the live base is clean, and required checks are rerun or the unavailable-check low-risk exception is restated against the live base. If any part is uncertain, treat the record as stale/manual-required.
 
-## 4. Create Or Repair A Record
+## 5. Create Or Repair A Record
 
 Read [record-format.md](references/record-format.md) before creating or repairing a record. Use that file as the single source of truth for frontmatter, body sections, and backlink shape.
 
@@ -118,11 +140,13 @@ In frontmatter, `head` is the candidate branch whose current head contains finis
 
 Never create an initial solve record for claim-time state, in-progress attempts, failed required checks, missing requirements, or a human-required decision that prevents the candidate from being finished. If the candidate is finished and merely requires human review before merge, create an open record with `## Merge` set to `manual required`.
 
+Before creating an auto-mergeable or ready record, explicitly consider rollout/config/operator-action signals. Use existing context when it is sufficient; otherwise scan changed files and nearby docs for generic signals such as config files, environment variables, feature flags, migrations, deployment docs, and runbooks. Record the conclusion in `## Merge` or `## Notes` as body prose, not frontmatter.
+
 Do not add JSON as a source of truth or v1 fields such as `phase`, `merge_mode`, `merge_status`, `review_status`, `checks_status`, `attempt_id`, `candidate_state`, `human_state`, or `cleanup_state`.
 
 When creating a record from `/ultra solve`, mark linked issues `completed` in the same finalize step and append only a backlink to the record. Do not copy checks, merge rationale, or cleanup state into the issue. Development-environment deployment or human acceptance evidence belongs in `## Checks` or `## Merge`, not in a new issue state. If that evidence is pending, keep the issue completed when its acceptance criteria are verified and set the record merge gate to `manual required`.
 
-## 5. Checks And Decisions
+## 6. Checks And Decisions
 
 Treat checks as merge-safety evidence, not a full test log.
 
@@ -140,7 +164,15 @@ Agents may make low-risk implementation or conflict-resolution decisions when th
 
 Require human review for product semantics, public API or data contracts, database schema or data changes, auth/security/privacy, production rollout risk, feature-flag defaults, broad architecture direction, billing/compliance, or any conflict where both intents cannot be preserved.
 
-## 6. Merge, Ship, Or Land
+Rollout/config disposition is required before a record is treated as ready:
+
+- `none`: no rollout/config/operator action is needed.
+- `pre-merge action required`: human/operator action is needed before merge; keep `## Merge` as `manual required`.
+- `post-merge activation required`: code may be mergeable only when the record names why code merge is safe, the activation action, a smoke or validation check, and a rollback or disable path.
+
+This disposition stays in body prose, preferably under `## Merge` `Reason:` or `## Notes`; it is not an issue state, solve-record state, or frontmatter enum.
+
+## 7. Merge, Ship, Or Land
 
 Treat `merge`, `ship`, and `land` as the same intent: advance the selected record through the merge gate.
 
@@ -157,6 +189,7 @@ Gate the record first:
 - verify the candidate worktree is clean
 - verify no manual-review trigger remains
 - verify required checks passed, or the unavailable-check low-risk exception is recorded
+- verify rollout/config disposition is explicit; `pre-merge action required` blocks merge, while `post-merge activation required` needs safety, activation, smoke/validation, and rollback notes
 
 Construct `landing_sha`:
 
@@ -189,7 +222,7 @@ Required proof:
 - dirty and untracked base paths are disjoint from the final landing write surface
 - mandatory hard-stop patterns were reviewed
 
-Mandatory hard-stop pattern hits require `manual required` unless the user explicitly approved proceeding and the record captures why. Review at least lockfiles and dependency manifests, migrations or schemas, CI/build/rollout config, and skill or Agent invocation metadata such as `SKILL.md`, `agents/openai.yaml`, `.claude-plugin/**`, `AGENTS.md`, or `CLAUDE.md`.
+Mandatory hard-stop pattern hits require `manual required` unless the user explicitly approved proceeding and the record captures why. Review generic signal classes: lockfiles and dependency manifests, config files, environment variables, feature flags, migrations or schemas, deployment docs and runbooks, CI/build/rollout config, and skill or Agent invocation metadata such as `SKILL.md`, `agents/openai.yaml`, `.claude-plugin/**`, `AGENTS.md`, or `CLAUDE.md`.
 
 The helper reports these as `hard_stop_paths` and blocks by default; explicit user approval is a human decision, not a helper override.
 
@@ -210,13 +243,13 @@ After a successful merge:
 
 If landing construction or the dirty-base gate fails before merge, abort any in-progress disposable merge when possible, keep `state: open`, write `manual required` with the smallest actionable reason, and do not clean up the candidate branch or worktree.
 
-## 7. Close
+## 8. Close
 
 There is no promoted `close` next action in v1 dashboards; do not suggest closure for ordinary open candidates. If the user explicitly says a candidate is abandoned, replaced, or should be closed, read [edge-cases.md](references/edge-cases.md) and perform record-only closure.
 
 Closing a solve record never changes linked issue state. If the linked issue itself should be abandoned, use the tracker or triage workflow.
 
-## 8. Cleanup
+## 9. Cleanup
 
 Cleanup deletes only local temporary Git resources created for solve. It never deletes issues, PRDs, product files, the solve record itself, adopted worktrees, or adopted candidate branches.
 
@@ -238,6 +271,6 @@ Then remove the worktree, run `git worktree prune`, and delete the branch with `
 
 If any safety check fails, do not delete anything. Update or report `Cleanup: blocked` with the exact remaining resource and reason.
 
-## 9. Remote Boundary
+## 10. Remote Boundary
 
 Keep local solve records local by default. If `external_provider` or `external_url` is present, read [edge-cases.md](references/edge-cases.md): native GitHub PRs and GitLab MRs are primary merge artifacts, and the local record is only a backlink/cache.

@@ -79,6 +79,10 @@ Gate:
 - [ ] Conflict resolution not needed or completed safely
 Reason:
 - <why merge is allowed, performed, or blocked>
+- Rollout/config disposition: <none | pre-merge action required | post-merge activation required>; <short rationale>
+- Activation: <post-merge action or none>
+- Smoke: <validation check or none>
+- Rollback: <disable or rollback path or none>
 - Landing: <fast-forward | merge-commit | resolved-merge-commit | blocked>, `<landing_sha or none>`
 
 ## Resources
@@ -94,6 +98,48 @@ Cleanup: pending | done | blocked
 ```
 
 Use `Cleanup: done` when no solve-owned resources remain, including adoption records where the adopted worktree and candidate branch are user-owned and must not be deleted by `$solve-records cleanup`.
+
+Merge status examples:
+
+```md
+## Merge
+Status: manual required
+Reason:
+- Manual required: human acceptance is pending after the candidate checks passed.
+- Rollout/config disposition: none; no rollout/config/operator action is needed.
+- Landing: blocked, `none`
+```
+
+```md
+## Merge
+Status: ready
+Reason:
+- Acceptance review passed: issue criteria, checks, refs, and manual-review triggers were reverified.
+- Rollout/config disposition: post-merge activation required; code merge is safe because the default remains disabled.
+- Activation: enable `FEATURE_DIRECT_MODE=true` after merge.
+- Smoke: run the documented direct-mode request check in staging.
+- Rollback: disable `FEATURE_DIRECT_MODE`.
+- Landing: fast-forward, `<head_sha>`
+```
+
+```md
+---
+state: merged
+merged_at: 2026-07-03T18:30:00+08:00
+merged_sha: abcdef0
+---
+
+## Summary
+Status: merged
+Next action: cleanup
+
+## Merge
+Status: auto-merged
+Reason:
+- Landed after the merge gate passed.
+- Rollout/config disposition: none; no rollout/config/operator action was needed.
+- Landing: fast-forward, `abcdef0`
+```
 
 Adopted development branch example:
 
@@ -148,6 +194,7 @@ Gate:
 - [x] Conflict resolution not needed or completed safely
 Reason:
 - Manual required: development environment validation pending before landing into `main`.
+- Rollout/config disposition: none; no rollout/config/operator action is needed.
 - Landing: blocked, `none`
 
 ## Resources
