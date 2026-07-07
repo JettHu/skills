@@ -1,6 +1,7 @@
 ---
 name: maintainer-board
-description: Generate a read-only local HTML dashboard for a repository's .scratch issues and solve records. Use when the user asks for an issues board, solve-records board, maintainer board, local dashboard, or static board snapshot for the current repo or another local checkout.
+description: Generate a read-only local HTML dashboard for a repository's .scratch issues and solve records.
+disable-model-invocation: true
 ---
 
 # Maintainer Board

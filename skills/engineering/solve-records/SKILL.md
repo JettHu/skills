@@ -1,6 +1,7 @@
 ---
 name: solve-records
-description: Use when the user invokes $solve-records, asks to list, explain, merge, ship, land, close, or clean up finished /ultra solve candidates, needs stale or malformed solve-record triage, or when /ultra solve finalization must create or advance local solve records.
+description: Manage local solve records for finished /ultra solve candidates, including readiness review, merge/land, and cleanup.
+disable-model-invocation: true
 ---
 
 # Solve Records
