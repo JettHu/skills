@@ -62,6 +62,10 @@ Next action: merge | manual review | cleanup | none
 Status: passed | unavailable | stale
 - `<command or check>` - passed | unavailable | stale
 
+## Review
+Post-Execution Review: passed | manual gate | blocked
+- <integrated-candidate review outcome, unresolved manual gate, or blocking finding>
+
 ## Merge
 Status: ready | auto-merged | manual required
 Gate:
@@ -176,6 +180,10 @@ Finished candidate on the adopted development branch.
 ## Checks
 Status: passed
 - `scripts/validate-skills.sh` - passed
+
+## Review
+Post-Execution Review: passed
+- Integrated candidate matched the linked issue and no fixable review findings remained.
 
 ## Merge
 Status: manual required

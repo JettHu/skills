@@ -15,3 +15,5 @@ Treat the user's request as if they had written:
 ```
 
 Forward all arguments and context unchanged through the core `ultra` workflow, then invoke `to-issues` through it.
+
+When the delegated flow publishes `ready-for-agent` issues, disclose the local [Agent Brief contract](references/agent-brief.md) as the preferred brief shape.

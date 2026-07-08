@@ -134,18 +134,19 @@ Create a solve record only after `/ultra solve` has a finished, reviewable candi
 - implementation commits exist on `head`
 - the candidate worktree is clean
 - required checks passed, or checks are unavailable with the reason written in the record
+- Post-Execution Review passed, or any unresolved manual gate/caveat does not prevent a finished candidate and is written in the record
 - no unresolved conflict or known blocker remains
 - linked issues are ready to be marked `completed`
 
 In frontmatter, `head` is the candidate branch whose current head contains finished work. `base` is the landing branch the candidate is meant to enter when merge, ship, or land intent is approved. In adoption mode, `head` may be a user-owned development branch; `base` remains the landing branch and must not be interpreted as "merge back into the current adopted branch."
 
-Never create an initial solve record for claim-time state, in-progress attempts, failed required checks, missing requirements, or a human-required decision that prevents the candidate from being finished. If the candidate is finished and merely requires human review before merge, create an open record with `## Merge` set to `manual required`.
+Never create an initial solve record for claim-time state, in-progress attempts, failed required checks, missing requirements, unresolved Post-Execution Review findings that prevent a finished candidate, or a human-required decision that prevents the candidate from being finished. If the candidate is finished and merely requires human review before merge, create an open record with `## Merge` set to `manual required`.
 
 Before creating an auto-mergeable or ready record, explicitly consider rollout/config/operator-action signals. Use existing context when it is sufficient; otherwise scan changed files and nearby docs for generic signals such as config files, environment variables, feature flags, migrations, deployment docs, and runbooks. Record the conclusion as body prose in `## Merge` or `## Notes`.
 
 The v1 record source of truth is markdown frontmatter and body from [record-format.md](references/record-format.md). Supported frontmatter stays limited to the documented fields; JSON registries and v1-style fields such as `phase`, `merge_mode`, `merge_status`, `review_status`, `checks_status`, `attempt_id`, `candidate_state`, `human_state`, or `cleanup_state` stay outside the v1 schema.
 
-When creating a record from `/ultra solve`, mark linked issues `completed` in the same finalize step and append only a backlink to the record. Checks, merge rationale, cleanup state, development-environment deployment, and human acceptance evidence live in the solve record, especially `## Checks` and `## Merge`. If that evidence is pending, keep the issue completed when its acceptance criteria are verified and set the record merge gate to `manual required`.
+When creating a record from `/ultra solve`, mark linked issues `completed` in the same finalize step and append only a backlink to the record. Checks, Post-Execution Review outcome, merge rationale, cleanup state, development-environment deployment, and human acceptance evidence live in the solve record, especially `## Checks`, `## Review`, and `## Merge`. If that evidence is pending, keep the issue completed when its acceptance criteria are verified and set the record merge gate to `manual required`.
 
 ## 6. Checks And Decisions
 
