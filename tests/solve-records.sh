@@ -55,6 +55,7 @@ WEAK_LOW_RISK_HEAD="$(make_branch solve/20260701-1546-weak-low-risk weak-low-ris
 CONFIG_MISSING_HEAD="$(make_branch solve/20260707-1519-config-missing-disposition config/direct-mode.env config-missing)"
 CONFIG_PREMERGE_HEAD="$(make_branch solve/20260707-1520-config-premerge config/direct-mode-premerge.env config-premerge)"
 CONFIG_POST_ACTIVATION_HEAD="$(make_branch solve/20260707-1521-config-post-activation config/direct-mode-post.env config-post)"
+REVIEW_BLOCKED_HEAD="$(make_branch solve/20260708-1000-review-blocked review/blocked.txt review-blocked)"
 ACCEPTANCE_PENDING_HEAD="$(make_branch solve/20260707-1530-acceptance-pending acceptance/pending.txt acceptance-pending)"
 ACCEPTANCE_PREMERGE_HEAD="$(make_branch solve/20260707-1531-acceptance-premerge acceptance/premerge.txt acceptance-premerge)"
 CLOSE_HEAD="$(make_branch solve/20260701-1555-abandoned abandoned.txt abandoned)"
@@ -167,6 +168,10 @@ Next action: merge
 ## Checks
 Status: $checks
 - \`fixture\` - $checks
+
+## Review
+Post-Execution Review: passed
+- Fixture review passed.
 
 ## Merge
 Status: $merge
@@ -301,6 +306,23 @@ write_record "$REPO/.scratch/solve-records/20260707-1521-config-post-activation.
   "20260707-1521-config-post-activation" open solve/20260707-1521-config-post-activation "$CONFIG_POST_ACTIVATION_HEAD" \
   ".scratch/caption/issues/01.md" "../wt-ready" false "Config post-merge activation" passed ready \
   "Rollout/config disposition: post-merge activation required; code merge is safe because the default remains disabled. Activation: enable DIRECT_MODE after merge. Smoke: run the direct-mode staging request. Rollback: disable DIRECT_MODE."
+
+write_record "$REPO/.scratch/solve-records/20260708-1000-review-blocked.md" \
+  "20260708-1000-review-blocked" open solve/20260708-1000-review-blocked "$REVIEW_BLOCKED_HEAD" \
+  ".scratch/caption/issues/01.md" "../wt-ready" false "Post-execution review blocked" passed ready
+python3 - "$REPO/.scratch/solve-records/20260708-1000-review-blocked.md" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace(
+    "Post-Execution Review: passed\n- Fixture review passed.",
+    "Post-Execution Review: blocked\n- Review found an unresolved acceptance gap.",
+    1,
+)
+path.write_text(text, encoding="utf-8")
+PY
 
 write_record "$REPO/.scratch/solve-records/20260707-1530-acceptance-pending.md" \
   "20260707-1530-acceptance-pending" open solve/20260707-1530-acceptance-pending "$ACCEPTANCE_PENDING_HEAD" \
@@ -521,6 +543,7 @@ def parse_record(path):
     if data["kind"] != "solve_record":
         return {"path": rel, "malformed": f"invalid kind: {data['kind']}", "text": text}
     data["checks"] = status_line(section(text, "Checks"))
+    data["review"] = post_execution_review_line(section(text, "Review"))
     data["merge"] = status_line(section(text, "Merge"))
     data["summary_status"] = status_line(section(text, "Summary"))
     data["notes"] = section(text, "Notes").lower()
@@ -610,6 +633,32 @@ ROLLOUT_CONFIG_DISPOSITIONS = {
 }
 
 
+POST_EXECUTION_REVIEW_STATUSES = {
+    "passed",
+    "manual gate",
+    "blocked",
+}
+
+
+def post_execution_review_line(block):
+    for line in block.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("post-execution review:"):
+            return stripped.split(":", 1)[1].strip().lower()
+    return ""
+
+
+def post_execution_review_gate_reason(record):
+    review = record.get("review", "")
+    if not review:
+        return "missing Post-Execution Review outcome"
+    if review not in POST_EXECUTION_REVIEW_STATUSES:
+        return "unknown Post-Execution Review outcome"
+    if review != "passed":
+        return f"Post-Execution Review is {review}"
+    return ""
+
+
 def rollout_config_block(record):
     return (section(record["text"], "Merge") + "\n" + section(record["text"], "Notes")).lower()
 
@@ -697,7 +746,13 @@ def dashboard(records):
             continue
         unavailable_low_risk = record["checks"] == "unavailable" and has_low_risk_exception(record)
         rollout_ready = not rollout_config_gate_reason(record)
-        if record["merge"] == "ready" and rollout_ready and (record["checks"] == "passed" or unavailable_low_risk):
+        review_ready = not post_execution_review_gate_reason(record)
+        if (
+            record["merge"] == "ready"
+            and rollout_ready
+            and review_ready
+            and (record["checks"] == "passed" or unavailable_low_risk)
+        ):
             buckets["ready"].append(record["id"])
         else:
             buckets["manual"].append(record["id"])
@@ -733,6 +788,8 @@ def can_merge(record):
     if record["state"] != "open":
         return False
     if record["merge"] != "ready":
+        return False
+    if post_execution_review_gate_reason(record):
         return False
     if rollout_config_gate_reason(record):
         return False
@@ -848,6 +905,8 @@ def can_merge_with_weak_low_risk_exception(record):
         return False
     if record["state"] != "open" or record["merge"] != "ready":
         return False
+    if post_execution_review_gate_reason(record):
+        return False
     if record["checks"] == "passed":
         return True
     return record["checks"] == "unavailable" and "low-risk" in record["notes"]
@@ -860,6 +919,8 @@ def can_merge_without_rollout_config_gate(record):
     if not refs_ok:
         return False
     if record["state"] != "open" or record["merge"] != "ready":
+        return False
+    if post_execution_review_gate_reason(record):
         return False
     if record["checks"] != "passed":
         return record["checks"] == "unavailable" and has_low_risk_exception(record)
@@ -916,6 +977,7 @@ tool_merge_gate_config_premerge = tool_module.merge_gate(repo, tool_by_id["20260
 tool_merge_gate_config_post_activation = tool_module.merge_gate(
     repo, tool_by_id["20260707-1521-config-post-activation"]
 )
+tool_merge_gate_review_blocked = tool_module.merge_gate(repo, tool_by_id["20260708-1000-review-blocked"])
 tool_cleanup_dirty = tool_module.cleanup_plan(repo, tool_by_id["20260701-1510-dirty-cleanup"])
 tool_cleanup_adopted = tool_module.cleanup_plan(repo, tool_by_id["20260703-1745-adopted-cleanup"])
 tool_landing_ready = tool_module.landing_plan(repo, tool_by_id["20260701-1432-caption-fix"])
@@ -1040,6 +1102,7 @@ assert "20260701-1545-low-risk-unavailable" in tool_ready_ids, tool_dashboard["b
 assert "20260707-1521-config-post-activation" in tool_ready_ids, tool_dashboard["buckets"]["ready"]
 assert "20260707-1519-config-missing-disposition" not in tool_ready_ids, tool_dashboard["buckets"]["ready"]
 assert "20260707-1520-config-premerge" not in tool_ready_ids, tool_dashboard["buckets"]["ready"]
+assert "20260708-1000-review-blocked" not in tool_ready_ids, tool_dashboard["buckets"]["ready"]
 assert "20260701-1551-wrong-kind" not in tool_ready_ids, tool_dashboard["buckets"]["ready"]
 assert any(
     item["id"] == "20260701-1551-wrong-kind"
@@ -1065,6 +1128,8 @@ assert "missing rollout/config disposition" in tool_merge_gate_config_missing["r
 assert tool_merge_gate_config_premerge["eligible"] is False, tool_merge_gate_config_premerge
 assert "rollout/config pre-merge action required" in tool_merge_gate_config_premerge["reasons"]
 assert tool_merge_gate_config_post_activation["eligible"] is True, tool_merge_gate_config_post_activation
+assert tool_merge_gate_review_blocked["eligible"] is False, tool_merge_gate_review_blocked
+assert "Post-Execution Review is blocked" in tool_merge_gate_review_blocked["reasons"]
 assert tool_cleanup_dirty["status"] == "blocked", tool_cleanup_dirty
 assert tool_cleanup_dirty["reason"] == "dirty worktree", tool_cleanup_dirty
 assert tool_cleanup_adopted["status"] == "done", tool_cleanup_adopted
@@ -1112,6 +1177,7 @@ assert can_merge(by_id["20260701-1546-weak-low-risk"]) is False
 assert can_merge(by_id["20260707-1519-config-missing-disposition"]) is False
 assert can_merge(by_id["20260707-1520-config-premerge"]) is False
 assert can_merge(by_id["20260707-1521-config-post-activation"]) is True
+assert can_merge(by_id["20260708-1000-review-blocked"]) is False
 
 advanced_base_sha = "f" * 40
 assert can_revalidate_base_only(
@@ -1471,6 +1537,10 @@ Next action: merge
 ## Checks
 Status: passed
 - \`fixture\` - passed
+
+## Review
+Post-Execution Review: passed
+- Fixture review passed.
 
 ## Merge
 Status: ready

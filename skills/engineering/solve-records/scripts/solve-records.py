@@ -60,6 +60,12 @@ ROLLOUT_CONFIG_DISPOSITIONS = {
     "post-merge activation required",
 }
 
+POST_EXECUTION_REVIEW_STATUSES = {
+    "passed",
+    "manual gate",
+    "blocked",
+}
+
 
 def run_git(cwd, *args, check=True):
     result = subprocess.run(
@@ -154,6 +160,14 @@ def status_line(block):
     return ""
 
 
+def post_execution_review_line(block):
+    for line in block.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("post-execution review:"):
+            return stripped.split(":", 1)[1].strip().lower()
+    return ""
+
+
 def first_heading(text):
     for line in text.splitlines():
         if line.startswith("# "):
@@ -198,6 +212,7 @@ def parse_record(repo, path):
         return data
 
     data["checks"] = status_line(section(text, "Checks"))
+    data["review"] = post_execution_review_line(section(text, "Review"))
     data["merge"] = status_line(section(text, "Merge"))
     data["summary_status"] = status_line(section(text, "Summary"))
     data["notes"] = section(text, "Notes").lower()
@@ -285,6 +300,17 @@ def has_low_risk_exception(record):
         "evidence:",
     ]
     return all(fragment in notes for fragment in required_evidence)
+
+
+def post_execution_review_gate_reason(record):
+    review = record.get("review", "")
+    if not review:
+        return "missing Post-Execution Review outcome"
+    if review not in POST_EXECUTION_REVIEW_STATUSES:
+        return "unknown Post-Execution Review outcome"
+    if review != "passed":
+        return f"Post-Execution Review is {review}"
+    return ""
 
 
 def rollout_config_block(record):
@@ -491,6 +517,9 @@ def merge_gate(repo, record):
                 reasons.append("unavailable checks without low-risk evidence")
         elif record.get("checks") != "passed":
             reasons.append(f"checks status is {record.get('checks') or '<missing>'}")
+        review_reason = post_execution_review_gate_reason(record)
+        if record.get("merge") == "ready" and review_reason:
+            reasons.append(review_reason)
         rollout_reason = rollout_config_gate_reason(record)
         if record.get("merge") == "ready" and rollout_reason:
             reasons.append(rollout_reason)
@@ -700,6 +729,7 @@ def record_summary(repo, record, include_merge_gate=False):
         "issues": record.get("issues", []),
         "worktree": record.get("worktree"),
         "checks": record.get("checks"),
+        "review": record.get("review"),
         "merge": record.get("merge"),
         "cleanup_done": record.get("cleanup_done"),
         "resource_cleanup": resource_field(record, "Cleanup"),
