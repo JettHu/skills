@@ -1,0 +1,6 @@
+interface:
+  display_name: "Setup Ultra Skills"
+  short_description: "Configure Ultra tracker operations"
+  default_prompt: "Use $setup-ultra-skills to add or reconfigure the Ultra extension for this repo's configured tracker."
+policy:
+  allow_implicit_invocation: false

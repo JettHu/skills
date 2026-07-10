@@ -2,6 +2,7 @@
   "name": "jett-skills",
   "skills": [
     "./skills/engineering/solve-records",
+    "./skills/engineering/setup-ultra-skills",
     "./skills/engineering/ultra",
     "./skills/engineering/ultra-diagnose",
     "./skills/engineering/ultra-solve",
