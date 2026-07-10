@@ -41,7 +41,7 @@ The installer creates symlinks, so `git pull` in this repository updates install
 
 | Skill | Purpose |
 | --- | --- |
-| [`solve-records`](skills/engineering/solve-records/SKILL.md) | List, explain, merge, and clean up local solve records for finished `/ultra solve` candidates. |
+| [`solve-records`](skills/engineering/solve-records/SKILL.md) | List and explain local Attempt receipts, safely advance candidate records, and surface recovery next actions. |
 | [`ultra`](skills/engineering/ultra/SKILL.md) | Coordinate enhanced skill runs and the `/ultra solve` issue-to-candidate workflow. |
 | [`ultra-diagnose`](skills/engineering/ultra-diagnose/SKILL.md) | Completion-friendly entry for `/ultra diagnose`. |
 | [`ultra-solve`](skills/engineering/ultra-solve/SKILL.md) | Completion-friendly entry for `/ultra solve`. |

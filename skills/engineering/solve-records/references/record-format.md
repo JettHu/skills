@@ -1,89 +1,146 @@
 # Solve Record Format
 
-Read this only when creating or repairing solve records.
+Read this only when creating or repairing a solve record.
 
-Use ids aligned with the head branch slug:
+A Solve Record is an Attempt Receipt: a compact, local Markdown handoff when
+an Attempt reaches a meaningful outcome. It is not a Claim, PR, MR, run log,
+or replacement for the linked Ticket.
 
-```text
-20260701-1432-caption-fix
-solve/20260701-1432-caption-fix
-```
+Create a record only for one of these outcomes:
 
-A solve record points to one finished candidate branch. `head` is the candidate branch. `base` is the landing branch. Derive the commit set from Git with `base_sha..head_sha`.
+- `candidate`: a finished, checkable delivery candidate.
+- `blocked`: substantive work or evidence is retained after a required check,
+  integration, or tooling blocker.
+- `needs-info`: substantive assessment found information that only a human can
+  supply.
+- `ready-for-human`: a human-owned product, API, data, security, architecture,
+  or significant UX decision stopped the Attempt.
+- `abandoned` or `superseded`: retained resources or evidence need a durable
+  disposition.
 
-The candidate may be an isolated solve branch, an adopted development branch, a PR branch, or a stack branch. The landing branch is where the candidate should enter after review, validation, deployment, or another project-specific gate.
+Do not create a record for a transient tool failure, an immediately released
+Claim with no useful finding, or fully cleaned work with no recovery value.
 
-Required frontmatter:
+## Machine-readable contract
+
+Every new record uses this common frontmatter:
 
 ```yaml
-id: 20260701-1432-caption-fix
+id: 20260710-1432-caption-fix
 kind: solve_record
 state: open
-base: master
-base_sha: abc1234
-head: solve/20260701-1432-caption-fix
-head_sha: def5678
+outcome: candidate
 issues:
   - .scratch/caption/issues/01.md
-worktree: ../.agent-worktrees/project/project-solve-caption-fix
-created_at: 2026-07-01T14:32:00+08:00
+created_at: 2026-07-10T14:32:00+08:00
 cleanup_done: false
 ```
 
-Optional frontmatter:
+`state` is the record lifecycle (`open`, `merged`, or `closed`); `outcome` is
+the Attempt result. Keep them separate. `issues` contains one or more linked
+Ticket paths or identifiers, even though the common header names the primary
+linked Ticket.
 
-```yaml
-merged_at:
-merged_sha:
-closed_at:
-updated_at:
-external_provider:
-external_url:
+The only supported outcomes are:
+
+```text
+candidate | blocked | needs-info | ready-for-human | abandoned | superseded
 ```
 
-Body template:
+Candidate records additionally require these fields because candidate gates
+need live Git evidence:
+
+```yaml
+base: main
+base_sha: abc1234
+head: solve/20260710-1432-caption-fix
+head_sha: def5678
+worktree: ../.agent-worktrees/project/project-solve-caption-fix
+```
+
+Recovery records do not require candidate fields. Add only retained resource
+references that actually exist, such as `branch`, `worktree`, `commit`, `pr`,
+`external_provider`, `external_url`, or `source_spec`. An empty recovery
+record is valid when its body makes the no-resource disposition clear.
+
+Optional lifecycle fields remain `merged_at`, `merged_sha`, `closed_at`, and
+`updated_at`. Do not introduce a JSON registry or v1-style lifecycle fields
+such as `phase`, `merge_mode`, `merge_status`, `review_status`,
+`checks_status`, `attempt_id`, `candidate_state`, `human_state`, or
+`cleanup_state`.
+
+### Legacy candidate compatibility
+
+Existing records without `outcome` remain candidates without rewriting them
+only when they satisfy the complete legacy candidate schema and retain the old
+candidate body shape (rather than a new `## Ticket`, `## Outcome`,
+`## What Changed`, `## Verification`, or recovery-only body section):
+
+```text
+id, kind: solve_record, state, base, base_sha, head, head_sha, issues,
+worktree, created_at, cleanup_done
+```
+
+The helper reports that mapping as legacy compatibility. A no-discriminator
+record shaped like a new receipt or recovery receipt is malformed; never infer
+a candidate merely because `outcome` is absent. Legacy `## Issues`,
+`## Changes`, and `## Checks` sections remain readable alongside the new names
+below.
+
+## Common body header
+
+Every new record starts with this header before its outcome-specific sections:
 
 ```md
 # Solve Record: <title>
 
-## Summary
-Status: open | merged | closed
-Next action: merge | manual review | cleanup | none
+## Ticket
+Linked Ticket: `.scratch/caption/issues/01.md`
+Source Spec: `.scratch/caption/reference.md` <!-- optional -->
 
-<short summary>
+## Outcome
+Result: <candidate | blocked | needs-info | ready-for-human | abandoned | superseded>
+Branch/worktree/commit/PR: <retained references, or none>
+Resource ownership: <solve-owned | user-owned | mixed | no retained resources>; <cleanup responsibility>
+```
 
-## Issues
-- `<issue path>` - completed
+`Branch/worktree/commit/PR` is descriptive rather than a candidate-gate
+substitute. Record only resources that are retained for a future resume,
+review, close/supersede decision, or safe cleanup. The ownership line must say
+who can remove each retained resource; it must never imply that user-owned
+resources are safe to delete.
 
-## Changes
+## Candidate record
+
+Use this shape only for `outcome: candidate`:
+
+```md
+# Solve Record: <title>
+
+## Ticket
+Linked Ticket: `.scratch/caption/issues/01.md`
+Source Spec: `.scratch/caption/reference.md`
+
+## Outcome
+Result: candidate
+Branch/worktree/commit/PR: `solve/20260710-1432-caption-fix`, `../.agent-worktrees/project/project-solve-caption-fix`
+Resource ownership: solve-owned; `$solve-records cleanup` may remove only after candidate cleanup gates pass
+
+## What Changed
 - <implementation summary>
 
-## Checks
+## Verification
 Status: passed | unavailable | stale
 - `<command or check>` - passed | unavailable | stale
 
 ## Review
-Post-Execution Review: passed | manual gate | blocked
-- <integrated-candidate review outcome, unresolved manual gate, or blocking finding>
+Post-Execution Review: passed
+- <integrated-candidate review outcome>
 
 ## Merge
 Status: ready | auto-merged | manual required
-Gate:
-- [ ] Required checks passed
-- [ ] Worktree clean
-- [ ] Base/head match recorded SHAs or record was revalidated
-- [ ] Landing SHA constructed before base mutation
-- [ ] Landing validation passed
-- [ ] Final landing write surface reviewed
-- [ ] Base dirty and untracked paths reviewed as non-overlapping
-- [ ] Mandatory hard-stop patterns reviewed
-- [ ] No manual-review trigger detected
-- [ ] Low-risk agent decisions recorded or none
-- [ ] Dependencies merged or not required
-- [ ] Conflict resolution not needed or completed safely
 Reason:
-- <why merge is allowed, performed, or blocked>
-- Rollout/config disposition: <none | pre-merge action required | post-merge activation required>; <short rationale>
+- Rollout/config disposition: <none | pre-merge action required | post-merge activation required>; <rationale>
 - Activation: <post-merge action or none>
 - Smoke: <validation check or none>
 - Rollback: <disable or rollback path or none>
@@ -98,133 +155,75 @@ Worktree: `<repo-relative worktree path>`
 Cleanup: pending | done | blocked
 
 ## Notes
-- <agent decisions, conflict notes, caveats, or empty>
+- <durable low-risk decision, caveat, or none>
 ```
 
-Use `Cleanup: done` when no solve-owned resources remain, including adoption records where the adopted worktree and candidate branch are user-owned and stay outside `$solve-records cleanup`.
+Candidate acceptance review, merge, ship, land, and candidate cleanup require
+this candidate-only Git evidence. `post-merge activation required` can be
+ready only when the record explains why code merge is safe, the activation,
+smoke check, and rollback or disable path.
 
-Merge status examples:
+A manual-gated or blocked Post-Execution Review is not a candidate receipt.
+Route the Attempt to the matching recovery outcome and place the finding in
+`## Confirmed Findings` or `## Blocker Or Requested Information`.
 
-```md
-## Merge
-Status: manual required
-Reason:
-- Manual required: human acceptance is pending after the candidate checks passed.
-- Rollout/config disposition: none; no rollout/config/operator action is needed.
-- Landing: blocked, `none`
-```
+## Recovery record
 
-```md
-## Merge
-Status: ready
-Reason:
-- Acceptance review passed: issue criteria, checks, refs, and manual-review triggers were reverified.
-- Rollout/config disposition: post-merge activation required; code merge is safe because the default remains disabled.
-- Activation: enable `FEATURE_DIRECT_MODE=true` after merge.
-- Smoke: run the documented direct-mode request check in staging.
-- Rollback: disable `FEATURE_DIRECT_MODE`.
-- Landing: fast-forward, `<head_sha>`
-```
+Use this shape for every non-candidate outcome:
 
 ```md
----
-state: merged
-merged_at: 2026-07-03T18:30:00+08:00
-merged_sha: abcdef0
----
+# Solve Record: <title>
 
-## Summary
-Status: merged
-Next action: cleanup
+## Ticket
+Linked Ticket: `.scratch/caption/issues/01.md`
+Source Spec: `.scratch/caption/reference.md` <!-- optional -->
 
-## Merge
-Status: auto-merged
-Reason:
-- Landed after the merge gate passed.
-- Rollout/config disposition: none; no rollout/config/operator action was needed.
-- Landing: fast-forward, `abcdef0`
-```
+## Outcome
+Result: blocked
+Branch/worktree/commit/PR: `solve/20260710-1432-caption-fix`, `../.agent-worktrees/project/project-solve-caption-fix`
+Resource ownership: mixed; the solve branch is solve-owned, the adopted worktree is user-owned
 
-Adopted development branch example:
+## Attempt Summary
+- <what was assessed or changed before the handoff>
 
-```md
----
-id: 20260703-1700-feature-current-branch
-kind: solve_record
-state: open
-base: main
-base_sha: abc1234
-head: feature/current-branch
-head_sha: def5678
-issues:
-  - .scratch/current-branch/issues/02.md
-worktree: .
-created_at: 2026-07-03T17:00:00+08:00
-cleanup_done: true
----
+## Confirmed Findings
+- <facts, failed validation evidence, or decision constraints>
 
-# Solve Record: Adopted current branch
+## Blocker Or Requested Information
+- <the blocker, missing information, or human decision>
 
-## Summary
-Status: open
-Next action: manual review
-
-Finished candidate on the adopted development branch.
-
-## Issues
-- `.scratch/current-branch/issues/02.md` - completed
-
-## Changes
-- Updated the candidate on the adopted branch.
-
-## Checks
-Status: passed
-- `scripts/validate-skills.sh` - passed
-
-## Review
-Post-Execution Review: passed
-- Integrated candidate matched the linked issue and no fixable review findings remained.
-
-## Merge
-Status: manual required
-Gate:
-- [x] Required checks passed
-- [x] Worktree clean
-- [x] Base/head match recorded SHAs or record was revalidated
-- [ ] Landing SHA constructed before base mutation
-- [ ] Landing validation passed
-- [ ] Final landing write surface reviewed
-- [ ] Base dirty and untracked paths reviewed as non-overlapping
-- [ ] Mandatory hard-stop patterns reviewed
-- [ ] No manual-review trigger detected
-- [x] Low-risk agent decisions recorded or none
-- [x] Dependencies merged or not required
-- [x] Conflict resolution not needed or completed safely
-Reason:
-- Manual required: development environment validation pending before landing into `main`.
-- Rollout/config disposition: none; no rollout/config/operator action is needed.
-- Landing: blocked, `none`
+## Resume Or Cleanup
+Next action: resume | provide information | human decision | close | supersede | cleanup
+- <safe next step and the evidence/resources it needs>
 
 ## Resources
-Base: `main`
-Base SHA: `abc1234`
-Head: `feature/current-branch`
-Head SHA: `def5678`
-Worktree: `.`
-Cleanup: done; adopted worktree and candidate branch are user-owned
-
-## Notes
-- `head` is the adopted candidate branch. `base` is the landing branch; this record does not imply a merge back into `feature/current-branch`.
+Cleanup: pending | done | blocked | none
+- <resource, owner, safety evidence, and whether it is retained>
 ```
 
-Issue backlink:
+`blocked`, `needs-info`, and `ready-for-human` normally remain open and enter
+the Needs Attention or Resume view. `abandoned` and `superseded` normally
+close after their disposition is recorded. A resumed Attempt reuses the linked
+recovery record only when it keeps the same retained resources and recovery
+context; a clean restart closes or supersedes the old receipt first.
+
+Recovery records never enter acceptance, merge, ship, land, or candidate
+cleanup gates. Their resource guidance is ownership-based: verify retained
+resources and their cleanup evidence directly, leave user-owned resources in
+place, and do not borrow candidate merge prerequisites.
+
+## Ticket backlink
+
+Use a path-only backlink in the Ticket. Keep checks, merge rationale, outcome,
+resource ownership, summaries, and record lifecycle in the record itself.
 
 ```md
 ## Comments
 
 ### Solve Record
 
-- `../solve-records/20260701-1432-caption-fix.md`
+- `../solve-records/20260710-1432-caption-fix.md`
 ```
 
-If an issue has multiple records, use `### Solve Records` with one path-only bullet per record. Keep checks, merge rationale, resource details, summaries, and record state in the solve record.
+If a Ticket has multiple records, use `### Solve Records` with one path-only
+bullet per receipt.
