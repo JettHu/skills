@@ -13,5 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate skills
         run: scripts/validate-skills.sh
+      - name: Test Ultra lens ownership
+        run: bash tests/ultra-lenses.sh
       - name: Test agent-worktree
         run: tests/agent-worktree.sh

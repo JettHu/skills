@@ -18,6 +18,13 @@ core_lenses = {
     "Completeness reviewer": "**Completeness reviewer**:",
     "Consistency reviewer": "**Consistency reviewer**:",
 }
+core_requirements = (
+    "When cited `CONTEXT.md` or `docs/adr/` files are absent",
+    "patterns to follow",
+    "cite sources when available",
+    "Flag only concrete omissions",
+    "Flag only real *convention drift*",
+)
 profile_template_headings = (
     "## Suggested agent briefs",
     "### Architecture agent (code)",
@@ -30,6 +37,9 @@ profile_template_headings = (
 for lens, definition in core_lenses.items():
     count = core.count(definition)
     assert count == 1, f"{lens} must have exactly one compact core definition, found {count}"
+
+for requirement in core_requirements:
+    assert requirement in core, f"core lens behavior is missing: {requirement}"
 
 for heading in profile_template_headings:
     assert heading not in profiles, f"profile prompt template returned: {heading}"

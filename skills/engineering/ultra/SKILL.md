@@ -70,16 +70,18 @@ Spawn agents based on the profile flags AND the context sufficiency assessment A
 
 **Task-specific narrowing**: The profile's Rationale column may specify conditions under which certain modules should be narrowed even when context is insufficient. For example, the to-prd profile defaults to code-only for known-codebase PRDs; research and review are enabled only for specific conditions (unfamiliar domain, external API standards, high-risk changes). Apply these task-specific rules before spawning agents.
 
+When cited `CONTEXT.md` or `docs/adr/` files are absent, use the nearest project docs, tracker context, or code context.
+
 **When `code: true`** — by default, spawn up to two code-exploration agents:
 
-- **Architecture agent** (parallel codebase exploration): Read CONTEXT.md, relevant ADRs, and the modules the task touches. Summarize the current architecture, key abstractions, and domain vocabulary relevant to the task.
-- **Risk agent** (parallel codebase exploration): Identify files that might be affected, cross-cutting dependencies, edge cases, and potential breaking changes.
+- **Architecture agent** (parallel codebase exploration): Read CONTEXT.md, relevant ADRs, and the modules the task touches. Summarize the current architecture, key abstractions, relevant domain vocabulary, and patterns to follow.
+- **Risk agent** (parallel codebase exploration): Identify affected files, cross-cutting dependencies, edge cases, breaking changes, and unexpected constraints.
 
 These are default exploration roles, not a fixed taxonomy. For tasks with a clearer split, replace or narrow them while staying within the total pre-exploration cap.
 
 **When `research: true`** — spawn one additional agent:
 
-- **Industry agent** (with web search): Search for how similar problems are solved elsewhere — established patterns, common pitfalls, design trade-offs. Focus on actionable insights, not surveys.
+- **Industry agent** (with web search): Search for how similar problems are solved elsewhere — established patterns, common pitfalls, design trade-offs. Focus on actionable insights, not surveys, and cite sources when available.
 
 Within the total cap, adapt the exploration roles to the specific task — don't limit yourself to the default profile template. For example:
 - A debugging task might benefit from a "similar bug patterns" search agent
@@ -96,8 +98,8 @@ Invoke the target skill unmodified, passing through any remaining arguments (e.g
 
 **When `review: true`** — run two review passes after the skill completes, in parallel when available:
 
-- **Completeness reviewer**: Cross-reference the skill's output against pre-exploration findings (or conversation context). Flag anything surfaced that the output doesn't address. Pay special attention to *scope blindness* — issues or edge cases raised during exploration that the skill output silently dropped.
-- **Consistency reviewer**: Check that the output uses correct domain vocabulary (CONTEXT.md), respects ADRs, and follows project conventions. Flag *convention drift* — where the output introduces patterns, naming, or structures that deviate from established project conventions without justification.
+- **Completeness reviewer**: Cross-reference the skill's output against pre-exploration findings (or conversation context). Flag only concrete omissions, especially *scope blindness* — issues or edge cases raised during exploration that the skill output silently dropped.
+- **Consistency reviewer**: Check that the output uses correct domain vocabulary (CONTEXT.md), respects ADRs, and follows project conventions. Flag only real *convention drift* — patterns, naming, or structures that deviate without justification.
 
 Present findings as a brief checklist of potential gaps. Don't auto-fix — let the user decide.
 
