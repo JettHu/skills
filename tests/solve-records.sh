@@ -1795,3 +1795,394 @@ else
 fi
 
 echo "solve-records landing fixture passed"
+
+OUTCOME_REPO="$TMPDIR_ROOT/outcome-project"
+OUTCOME_BRANCH="solve/20260710-outcomes"
+OUTCOME_WORKTREE="$TMPDIR_ROOT/outcome-wt"
+git init -b master "$OUTCOME_REPO" >/dev/null
+git -C "$OUTCOME_REPO" config user.email "outcomes@example.test"
+git -C "$OUTCOME_REPO" config user.name "Outcome Records Test"
+printf 'base\n' >"$OUTCOME_REPO/app.txt"
+git -C "$OUTCOME_REPO" add app.txt
+git -C "$OUTCOME_REPO" commit -m "outcome base" >/dev/null
+OUTCOME_BASE="$(git -C "$OUTCOME_REPO" rev-parse master)"
+git -C "$OUTCOME_REPO" checkout -b "$OUTCOME_BRANCH" master >/dev/null 2>&1
+printf 'candidate\n' >"$OUTCOME_REPO/candidate.txt"
+git -C "$OUTCOME_REPO" add candidate.txt
+git -C "$OUTCOME_REPO" commit -m "outcome candidate" >/dev/null
+OUTCOME_HEAD="$(git -C "$OUTCOME_REPO" rev-parse "$OUTCOME_BRANCH")"
+git -C "$OUTCOME_REPO" checkout master >/dev/null 2>&1
+git -C "$OUTCOME_REPO" worktree add "$OUTCOME_WORKTREE" "$OUTCOME_BRANCH" >/dev/null 2>&1
+
+python3 - "$OUTCOME_REPO" "$SOLVE_RECORDS_SCRIPT" "$OUTCOME_BASE" "$OUTCOME_HEAD" <<'PY'
+import hashlib
+import importlib.util
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+repo = Path(sys.argv[1]).resolve()
+tool_path = Path(sys.argv[2]).resolve()
+base_sha = sys.argv[3]
+head_sha = sys.argv[4]
+records_dir = repo / ".scratch/outcomes/solve-records"
+records_dir.mkdir(parents=True)
+issue = ".scratch/outcomes/issues/01.md"
+(repo / issue).parent.mkdir(parents=True)
+(repo / issue).write_text("Status: ready-for-agent\n", encoding="utf-8")
+
+spec = importlib.util.spec_from_file_location("solve_records_outcomes", tool_path)
+tool = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tool)
+
+
+def write(name, text):
+    path = records_dir / f"{name}.md"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+legacy = write(
+    "legacy-candidate",
+    f"""---
+id: legacy-candidate
+kind: solve_record
+state: open
+base: master
+base_sha: {base_sha}
+head: solve/20260710-outcomes
+head_sha: {head_sha}
+issues:
+  - {issue}
+worktree: ../outcome-wt
+created_at: 2026-07-10T14:32:00+08:00
+cleanup_done: false
+---
+
+# Solve Record: Legacy candidate
+
+## Summary
+Status: open
+
+## Issues
+- {issue}
+
+## Changes
+- Legacy candidate is still readable.
+
+## Checks
+Status: passed
+
+## Review
+Post-Execution Review: passed
+
+## Merge
+Status: ready
+- Rollout/config disposition: none; no operator action is needed.
+
+## Resources
+Cleanup: pending
+""",
+)
+
+
+def new_candidate(name):
+    return write(
+        name,
+        f"""---
+id: {name}
+kind: solve_record
+state: open
+outcome: candidate
+base: master
+base_sha: {base_sha}
+head: solve/20260710-outcomes
+head_sha: {head_sha}
+issues:
+  - {issue}
+worktree: ../outcome-wt
+created_at: 2026-07-10T14:32:00+08:00
+cleanup_done: false
+---
+
+# Solve Record: New candidate
+
+## Ticket
+Linked Ticket: {issue}
+Source Spec: .scratch/outcomes/reference.md
+
+## Outcome
+Result: candidate
+Branch/worktree/commit/PR: solve/20260710-outcomes, ../outcome-wt
+Resource ownership: solve-owned; candidate cleanup owns the temporary worktree
+
+## What Changed
+- Added a fixture candidate.
+
+## Verification
+Status: passed
+
+## Review
+Post-Execution Review: passed
+
+## Merge
+Status: ready
+- Rollout/config disposition: none; no operator action is needed.
+
+## Resources
+Cleanup: pending
+""",
+    )
+
+
+def recovery(name, outcome, state, ownership, retained, next_action):
+    return write(
+        name,
+        f"""---
+id: {name}
+kind: solve_record
+state: {state}
+outcome: {outcome}
+issues:
+  - {issue}
+created_at: 2026-07-10T14:32:00+08:00
+cleanup_done: false
+---
+
+# Solve Record: {outcome}
+
+## Ticket
+Linked Ticket: {issue}
+Source Spec: .scratch/outcomes/reference.md
+
+## Outcome
+Result: {outcome}
+Branch/worktree/commit/PR: {retained}
+Resource ownership: {ownership}
+
+## Attempt Summary
+- Substantive assessment reached a durable handoff.
+
+## Confirmed Findings
+- The fixture records the exact recovery outcome.
+
+## Blocker Or Requested Information
+- Continue only through the recorded recovery action.
+
+## Resume Or Cleanup
+Next action: {next_action}
+- Preserve recorded ownership before acting.
+
+## Resources
+Cleanup: pending
+""",
+    )
+
+
+new_candidate("new-candidate")
+recovery("blocked", "blocked", "open", "solve-owned; resume owns the branch", "solve/retained", "resume")
+recovery("needs-info", "needs-info", "open", "no retained resources; no cleanup needed", "none", "provide information")
+recovery(
+    "ready-for-human",
+    "ready-for-human",
+    "open",
+    "mixed; the adopted worktree is user-owned",
+    "feature/adopted, ../adopted-worktree",
+    "human decision",
+)
+recovery("abandoned", "abandoned", "closed", "user-owned; leave the branch in place", "feature/user-branch", "close")
+recovery("superseded", "superseded", "closed", "solve-owned; retain until explicit cleanup", "solve/old-attempt", "supersede")
+
+unknown = recovery("malformed-unknown", "blocked", "open", "no retained resources", "none", "resume")
+unknown.write_text(
+    unknown.read_text(encoding="utf-8").replace("outcome: blocked", "outcome: untracked", 1),
+    encoding="utf-8",
+)
+missing_discriminator = recovery(
+    "malformed-missing-discriminator",
+    "blocked",
+    "open",
+    "no retained resources",
+    "none",
+    "resume",
+)
+missing_discriminator.write_text(
+    missing_discriminator.read_text(encoding="utf-8").replace("outcome: blocked\n", "", 1),
+    encoding="utf-8",
+)
+missing_candidate_field = new_candidate("malformed-candidate-fields")
+missing_candidate_field.write_text(
+    missing_candidate_field.read_text(encoding="utf-8").replace("head: solve/20260710-outcomes\n", "", 1),
+    encoding="utf-8",
+)
+missing_ownership = recovery("malformed-missing-ownership", "blocked", "open", "no retained resources", "none", "resume")
+missing_ownership.write_text(
+    missing_ownership.read_text(encoding="utf-8").replace("Resource ownership: no retained resources\n", "", 1),
+    encoding="utf-8",
+)
+missing_retained = recovery("malformed-missing-retained", "blocked", "open", "no retained resources", "none", "resume")
+missing_retained.write_text(
+    missing_retained.read_text(encoding="utf-8").replace("Branch/worktree/commit/PR: none\n", "", 1),
+    encoding="utf-8",
+)
+missing_action = recovery("malformed-missing-action", "blocked", "open", "no retained resources", "none", "resume")
+missing_action.write_text(
+    missing_action.read_text(encoding="utf-8").replace("Next action: resume\n", "", 1),
+    encoding="utf-8",
+)
+missing_cleanup = recovery("malformed-missing-cleanup", "blocked", "open", "no retained resources", "none", "resume")
+missing_cleanup.write_text(
+    missing_cleanup.read_text(encoding="utf-8").replace("Cleanup: pending\n", "", 1),
+    encoding="utf-8",
+)
+review_blocked = new_candidate("malformed-candidate-review")
+review_blocked.write_text(
+    review_blocked.read_text(encoding="utf-8").replace("Post-Execution Review: passed", "Post-Execution Review: blocked", 1),
+    encoding="utf-8",
+)
+legacy_new_candidate = new_candidate("malformed-legacy-new-candidate")
+legacy_new_candidate.write_text(
+    legacy_new_candidate.read_text(encoding="utf-8").replace("outcome: candidate\n", "", 1),
+    encoding="utf-8",
+)
+legacy_recovery = write(
+    "malformed-legacy-recovery",
+    legacy.read_text(encoding="utf-8").replace("id: legacy-candidate", "id: malformed-legacy-recovery", 1)
+    + """
+## Outcome
+Result: blocked
+Branch/worktree/commit/PR: solve/retained
+Resource ownership: solve-owned
+
+## Attempt Summary
+- This must not be inferred as a legacy candidate.
+""",
+)
+
+legacy_before = hashlib.sha256(legacy.read_bytes()).hexdigest()
+worktrees_before = subprocess.run(
+    ["git", "-C", str(repo), "worktree", "list", "--porcelain"],
+    check=True,
+    stdout=subprocess.PIPE,
+    text=True,
+).stdout
+refs_before = subprocess.run(
+    ["git", "-C", str(repo), "show-ref", "--head"],
+    check=True,
+    stdout=subprocess.PIPE,
+    text=True,
+).stdout
+
+records = tool.discover(repo)
+by_id = {record.get("id"): record for record in records}
+assert by_id["legacy-candidate"]["outcome"] == "candidate"
+assert by_id["legacy-candidate"]["legacy_outcome"] is True
+assert hashlib.sha256(legacy.read_bytes()).hexdigest() == legacy_before
+
+for outcome in ("candidate", "blocked", "needs-info", "ready-for-human", "abandoned", "superseded"):
+    record_id = "new-candidate" if outcome == "candidate" else outcome
+    assert by_id[record_id]["outcome"] == outcome, by_id[record_id]
+    assert "malformed" not in by_id[record_id], by_id[record_id]
+
+assert by_id["malformed-unknown"]["malformed"] == "invalid outcome: untracked"
+assert "missing outcome and legacy candidate fields" in by_id["malformed-missing-discriminator"]["malformed"]
+assert "missing candidate fields: head" == by_id["malformed-candidate-fields"]["malformed"]
+assert by_id["malformed-missing-ownership"]["malformed"] == "missing resource ownership"
+assert by_id["malformed-missing-retained"]["malformed"] == "missing retained resource disposition"
+assert by_id["malformed-missing-action"]["malformed"] == "missing recovery next action"
+assert by_id["malformed-missing-cleanup"]["malformed"] == "missing resource cleanup disposition"
+assert by_id["malformed-candidate-review"]["malformed"] == "candidate requires passed Post-Execution Review"
+assert by_id["malformed-legacy-new-candidate"]["malformed"] == "missing outcome for new or recovery-shaped receipt"
+assert by_id["malformed-legacy-recovery"]["malformed"] == "missing outcome for new or recovery-shaped receipt"
+
+dashboard = tool.dashboard(repo, records)
+cli_dashboard = json.loads(
+    subprocess.run(
+        [sys.executable, str(tool_path), "dashboard", "--repo", str(repo), "--json"],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout
+)
+assert dashboard["record_count"] == cli_dashboard["record_count"] == len(records)
+
+classified = []
+for bucket in dashboard["buckets"].values():
+    classified.extend(item["id"] for item in bucket)
+assert len(classified) == len(set(classified)) == len(records), dashboard
+assert set(classified) == {record.get("id") for record in records}, dashboard
+
+recovery_ids = {"blocked", "needs-info", "ready-for-human", "abandoned", "superseded"}
+bucket_ids = {
+    name: {item["id"] for item in items}
+    for name, items in dashboard["buckets"].items()
+}
+assert recovery_ids == bucket_ids["recovery"], dashboard
+assert recovery_ids.isdisjoint(
+    bucket_ids["ready"] | bucket_ids["manual"] | bucket_ids["cleanup"] | bucket_ids["recent"] | bucket_ids["stale_or_malformed"]
+), dashboard
+assert {"legacy-candidate", "new-candidate"} <= bucket_ids["ready"], dashboard
+assert {
+    "malformed-unknown",
+    "malformed-missing-discriminator",
+    "malformed-candidate-fields",
+    "malformed-missing-ownership",
+    "malformed-missing-retained",
+    "malformed-missing-action",
+    "malformed-missing-cleanup",
+    "malformed-candidate-review",
+    "malformed-legacy-new-candidate",
+    "malformed-legacy-recovery",
+} <= bucket_ids["stale_or_malformed"], dashboard
+
+for outcome in recovery_ids:
+    record = by_id[outcome]
+    gate = tool.merge_gate(repo, record)
+    landing = tool.landing_plan(repo, record)
+    cleanup = tool.cleanup_plan(repo, record)
+    expected = f"outcome is {outcome}; candidate-only operations are unavailable"
+    assert gate["eligible"] is False and expected in gate["reasons"], gate
+    assert landing["status"] == "blocked" and expected in landing["reasons"], landing
+    assert cleanup["status"] == "blocked" and cleanup["reason"] == expected, cleanup
+    assert "refs_ok" not in tool.record_summary(repo, record), record
+
+assert tool.select_records(records, "needs-info") == [by_id["needs-info"]]
+assert by_id["abandoned"]["resource_ownership"].startswith("user-owned")
+
+worktrees_after = subprocess.run(
+    ["git", "-C", str(repo), "worktree", "list", "--porcelain"],
+    check=True,
+    stdout=subprocess.PIPE,
+    text=True,
+).stdout
+refs_after = subprocess.run(
+    ["git", "-C", str(repo), "show-ref", "--head"],
+    check=True,
+    stdout=subprocess.PIPE,
+    text=True,
+).stdout
+assert worktrees_after == worktrees_before
+assert refs_after == refs_before
+
+catalog_root = tool_path.parents[4]
+for path in (
+    tool_path.parents[1] / "SKILL.md",
+    tool_path.parents[1] / "agents/openai.yaml",
+    catalog_root / "README.md",
+    catalog_root / "skills/engineering/README.md",
+):
+    assert "recovery" in path.read_text(encoding="utf-8").lower(), path
+format_text = (tool_path.parents[1] / "references/record-format.md").read_text(encoding="utf-8").lower()
+skill_text = (tool_path.parents[1] / "SKILL.md").read_text(encoding="utf-8").lower()
+for phrase in ("transient tool failure", "no-value claim release", "fully cleaned work"):
+    assert phrase in format_text or phrase in skill_text, phrase
+assert "outcome gate" in skill_text
+assert "[candidate-gates.md](references/candidate-gates.md)" in skill_text
+assert skill_text.count("completion:") == 5
+candidate_gates = (tool_path.parents[1] / "references/candidate-gates.md").read_text(encoding="utf-8").lower()
+assert "completion:" in candidate_gates
+assert "landing sha" in candidate_gates
+
+print("solve-records outcome fixture passed")
+PY

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only helpers for local solve records."""
+"""Read-only helpers for local outcome-aware Attempt Receipts."""
 
 import argparse
 import json
@@ -8,18 +8,61 @@ import sys
 from pathlib import Path
 
 
-REQUIRED = {
+COMMON_REQUIRED = {
     "id",
     "kind",
     "state",
+    "issues",
+    "created_at",
+    "cleanup_done",
+}
+
+CANDIDATE_REQUIRED = {
     "base",
     "base_sha",
     "head",
     "head_sha",
-    "issues",
     "worktree",
-    "created_at",
-    "cleanup_done",
+}
+
+LEGACY_CANDIDATE_REQUIRED = COMMON_REQUIRED | CANDIDATE_REQUIRED
+
+OUTCOMES = {
+    "candidate",
+    "blocked",
+    "needs-info",
+    "ready-for-human",
+    "abandoned",
+    "superseded",
+}
+
+RECOVERY_OUTCOMES = OUTCOMES - {"candidate"}
+
+NEW_CANDIDATE_SECTIONS = {
+    "Ticket",
+    "Outcome",
+    "What Changed",
+    "Verification",
+    "Review",
+    "Merge",
+    "Resources",
+}
+
+RECOVERY_SECTIONS = {
+    "Ticket",
+    "Outcome",
+    "Attempt Summary",
+    "Confirmed Findings",
+    "Blocker Or Requested Information",
+    "Resume Or Cleanup",
+    "Resources",
+}
+
+NEW_RECEIPT_ONLY_SECTIONS = {
+    "Ticket",
+    "Outcome",
+    "What Changed",
+    "Verification",
 }
 
 REF_CACHE = {}
@@ -175,6 +218,72 @@ def first_heading(text):
     return ""
 
 
+def has_section(text, name):
+    return any(line.strip() == f"## {name}" for line in text.splitlines())
+
+
+def labeled_value(block, label):
+    prefix = f"{label.lower()}:"
+    for line in block.splitlines():
+        normalized = line.strip().lstrip("-* ").strip()
+        if normalized.lower().startswith(prefix):
+            return normalized.split(":", 1)[1].strip()
+    return ""
+
+
+def missing_fields(data, fields):
+    missing = []
+    for field in fields:
+        value = data.get(field)
+        if isinstance(value, list):
+            if not value:
+                missing.append(field)
+        elif not value:
+            missing.append(field)
+    return sorted(missing)
+
+
+def new_body_error(data):
+    text = data["text"]
+    ticket_block = section(text, "Ticket")
+    outcome_block = section(text, "Outcome")
+    if not has_section(text, "Ticket"):
+        return "missing Ticket section"
+    if not labeled_value(ticket_block, "Linked Ticket"):
+        return "missing linked Ticket"
+    if not has_section(text, "Outcome"):
+        return "missing Outcome section"
+    result = labeled_value(outcome_block, "Result").lower()
+    if not result:
+        return "missing outcome result"
+    if result != data["outcome"]:
+        return "body/frontmatter outcome conflict"
+    if not labeled_value(outcome_block, "Branch/worktree/commit/PR"):
+        return "missing retained resource disposition"
+    if not labeled_value(outcome_block, "Resource ownership"):
+        return "missing resource ownership"
+
+    required_sections = NEW_CANDIDATE_SECTIONS if data["outcome"] == "candidate" else RECOVERY_SECTIONS
+    missing = sorted(name for name in required_sections if not has_section(text, name))
+    if missing:
+        return "missing sections: " + ",".join(missing)
+    if not labeled_value(section(text, "Resources"), "Cleanup"):
+        return "missing resource cleanup disposition"
+    if data["outcome"] == "candidate":
+        if post_execution_review_line(section(text, "Review")) != "passed":
+            return "candidate requires passed Post-Execution Review"
+    elif not labeled_value(section(text, "Resume Or Cleanup"), "Next action"):
+        return "missing recovery next action"
+    return ""
+
+
+def candidate_operation_refusal(record):
+    outcome = record.get("outcome")
+    if outcome in RECOVERY_OUTCOMES:
+        return f"outcome is {outcome}; candidate-only operations are unavailable"
+    return ""
+
+
 def parse_record(repo, path):
     text = path.read_text(encoding="utf-8")
     rel = str(path.relative_to(repo))
@@ -203,7 +312,10 @@ def parse_record(repo, path):
         current = key
         data[key] = [] if key == "issues" and not value else value
 
-    missing = sorted(REQUIRED - set(data))
+    if "issues" in data and not isinstance(data["issues"], list):
+        data["issues"] = [data["issues"]] if data["issues"] else []
+
+    missing = missing_fields(data, COMMON_REQUIRED)
     if missing:
         data["malformed"] = "missing " + ",".join(missing)
         return data
@@ -211,12 +323,49 @@ def parse_record(repo, path):
         data["malformed"] = f"invalid kind: {data['kind']}"
         return data
 
-    data["checks"] = status_line(section(text, "Checks"))
+    outcome = data.get("outcome", "").lower()
+    if "outcome" not in data:
+        missing_legacy = missing_fields(data, LEGACY_CANDIDATE_REQUIRED)
+        if missing_legacy:
+            data["malformed"] = "missing outcome and legacy candidate fields: " + ",".join(missing_legacy)
+            return data
+        recovery_sections = RECOVERY_SECTIONS - {"Ticket", "Outcome", "Resources"}
+        if any(has_section(text, name) for name in NEW_RECEIPT_ONLY_SECTIONS | recovery_sections):
+            data["malformed"] = "missing outcome for new or recovery-shaped receipt"
+            return data
+        data["outcome"] = "candidate"
+        data["legacy_outcome"] = True
+    elif not outcome:
+        data["malformed"] = "missing outcome"
+        return data
+    elif outcome not in OUTCOMES:
+        data["malformed"] = f"invalid outcome: {outcome}"
+        return data
+    else:
+        data["outcome"] = outcome
+        if outcome == "candidate":
+            missing_candidate = missing_fields(data, CANDIDATE_REQUIRED)
+            if missing_candidate:
+                data["malformed"] = "missing candidate fields: " + ",".join(missing_candidate)
+                return data
+        body_error = new_body_error(data)
+        if body_error:
+            data["malformed"] = body_error
+            return data
+
+    ticket_block = section(text, "Ticket")
+    outcome_block = section(text, "Outcome")
+    data["linked_ticket"] = labeled_value(ticket_block, "Linked Ticket")
+    data["source_spec"] = labeled_value(ticket_block, "Source Spec") or data.get("source_spec", "")
+    data["resource_ownership"] = labeled_value(outcome_block, "Resource ownership")
+    data["retained_resources"] = labeled_value(outcome_block, "Branch/worktree/commit/PR")
+    data["checks"] = status_line(section(text, "Verification")) or status_line(section(text, "Checks"))
     data["review"] = post_execution_review_line(section(text, "Review"))
     data["merge"] = status_line(section(text, "Merge"))
     data["summary_status"] = status_line(section(text, "Summary"))
     data["notes"] = section(text, "Notes").lower()
-    data["changes"] = section(text, "Changes")
+    data["changes"] = section(text, "What Changed") or section(text, "Changes")
+    data["recovery_action"] = labeled_value(section(text, "Resume Or Cleanup"), "Next action")
     data["title"] = first_heading(text)
     return data
 
@@ -282,6 +431,8 @@ def resolve_ref(repo, ref):
 
 
 def ref_check(repo, record):
+    if record.get("outcome") != "candidate":
+        return True, ""
     for ref_key, sha_key in (("base", "base_sha"), ("head", "head_sha")):
         returncode, stdout, _stderr = resolve_ref(repo, record[ref_key])
         if returncode != 0:
@@ -362,6 +513,8 @@ def rollout_config_gate_reason(record):
 
 
 def body_frontmatter_conflict(record):
+    if record.get("outcome") != "candidate":
+        return ""
     summary_status = record.get("summary_status")
     if summary_status and summary_status != record.get("state"):
         return "body/frontmatter status conflict"
@@ -500,6 +653,8 @@ def merge_gate(repo, record):
 
     if record.get("malformed"):
         reasons.append(record["malformed"])
+    elif candidate_operation_refusal(record):
+        reasons.append(candidate_operation_refusal(record))
     elif body_frontmatter_conflict(record):
         reasons.append(body_frontmatter_conflict(record))
     else:
@@ -655,6 +810,9 @@ def registered_worktrees(repo):
 
 
 def cleanup_refusal(repo, record):
+    refusal = candidate_operation_refusal(record)
+    if refusal:
+        return refusal
     worktree = (repo / record["worktree"]).resolve()
     if worktree == repo.resolve():
         return "worktree is repo root"
@@ -690,6 +848,14 @@ def cleanup_plan(repo, record):
             "status": "blocked",
             "reason": record["malformed"],
         }
+    refusal = candidate_operation_refusal(record)
+    if refusal:
+        return {
+            "id": record.get("id"),
+            "path": record.get("path"),
+            "status": "blocked",
+            "reason": refusal,
+        }
     if record.get("state") not in {"merged", "closed"}:
         return {
             "id": record.get("id"),
@@ -721,24 +887,31 @@ def record_summary(repo, record, include_merge_gate=False):
         "id": record.get("id"),
         "title": record.get("title"),
         "state": record.get("state"),
+        "outcome": record.get("outcome"),
+        "legacy_outcome": bool(record.get("legacy_outcome")),
         "created_at": record.get("created_at"),
         "merged_at": record.get("merged_at"),
         "merged_sha": record.get("merged_sha"),
         "base": record.get("base"),
         "head": record.get("head"),
         "issues": record.get("issues", []),
+        "linked_ticket": record.get("linked_ticket"),
+        "source_spec": record.get("source_spec"),
         "worktree": record.get("worktree"),
         "checks": record.get("checks"),
         "review": record.get("review"),
         "merge": record.get("merge"),
         "cleanup_done": record.get("cleanup_done"),
         "resource_cleanup": resource_field(record, "Cleanup"),
+        "resource_ownership": record.get("resource_ownership"),
+        "retained_resources": record.get("retained_resources"),
+        "recovery_action": record.get("recovery_action"),
         "external_provider": record.get("external_provider"),
         "external_url": record.get("external_url"),
     }
     if record.get("malformed"):
         summary["malformed"] = record["malformed"]
-    else:
+    elif record.get("outcome") == "candidate":
         refs_ok, ref_reason = ref_check(repo, record)
         summary["refs_ok"] = refs_ok
         summary["ref_reason"] = ref_reason
@@ -747,6 +920,14 @@ def record_summary(repo, record, include_merge_gate=False):
         conflict = body_frontmatter_conflict(record)
         if conflict:
             summary["body_conflict"] = conflict
+        if include_merge_gate:
+            summary["merge_gate"] = merge_gate(repo, record)
+    else:
+        summary["recovery_view"] = "resume" if record.get("outcome") in {
+            "blocked",
+            "needs-info",
+            "ready-for-human",
+        } else "closed"
         if include_merge_gate:
             summary["merge_gate"] = merge_gate(repo, record)
     return summary
@@ -766,6 +947,7 @@ def dashboard(repo, records):
         "manual": [],
         "cleanup": [],
         "recent": [],
+        "recovery": [],
         "stale_or_malformed": [],
     }
 
@@ -774,6 +956,9 @@ def dashboard(repo, records):
         summary = record_summary(repo, record)
         if record.get("malformed"):
             buckets["stale_or_malformed"].append(summary)
+            continue
+        if record.get("outcome") != "candidate":
+            buckets["recovery"].append(summary)
             continue
         conflict = body_frontmatter_conflict(record)
         if conflict:
@@ -812,8 +997,12 @@ def searchable_text(record):
     fields = [
         record.get("id", ""),
         record.get("path", ""),
+        record.get("outcome", ""),
         record.get("head", ""),
         record.get("title", ""),
+        record.get("linked_ticket", ""),
+        record.get("source_spec", ""),
+        record.get("recovery_action", ""),
         " ".join(record.get("issues", [])),
         record.get("changes", ""),
     ]
@@ -851,6 +1040,7 @@ def print_dashboard_text(result):
         "manual": "Manual merge required",
         "cleanup": "Cleanup pending",
         "recent": "Recently merged",
+        "recovery": "Needs attention or resume",
         "stale_or_malformed": "Stale or malformed",
     }
     for key, label in labels.items():

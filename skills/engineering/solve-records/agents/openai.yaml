@@ -1,6 +1,6 @@
 interface:
   display_name: "Solve Records"
-  short_description: "Manage local solve records"
-  default_prompt: "Use $solve-records to list local solve records and safely merge or clean up finished candidates."
+  short_description: "Manage local Attempt Receipts"
+  default_prompt: "Use $solve-records to inspect local Attempt Receipts, safely advance eligible candidates, or explain recovery next actions."
 policy:
   allow_implicit_invocation: false
