@@ -2186,3 +2186,196 @@ assert "landing sha" in candidate_gates
 
 print("solve-records outcome fixture passed")
 PY
+
+MODEL_EVAL_FIXTURE="$REPO_ROOT/.evals/solve-records-outcomes/model-adherence-fixture.py"
+# This is a synthetic local-attestation regression, not a model-adherence run.
+MODEL_EVAL_REPO="$TMPDIR_ROOT/model-attestation-project"
+MODEL_EVAL_SNAPSHOT="$TMPDIR_ROOT/model-attestation-before.json"
+MODEL_EVAL_EMPTY_GRADE="$TMPDIR_ROOT/model-attestation-empty-grade.json"
+MODEL_EVAL_FINAL_GRADE="$TMPDIR_ROOT/model-attestation-final-grade.json"
+
+attest_fixture() {
+  local repo="$1"
+  local snapshot="$2"
+  local session_ref="$3"
+  local dashboard_ready="${4:-model-candidate}"
+  python3 "$MODEL_EVAL_FIXTURE" attest \
+    --repo "$repo" \
+    --snapshot "$snapshot" \
+    --helper "$SOLVE_RECORDS_SCRIPT" \
+    --session-ref "$session_ref" \
+    --dashboard-ready "$dashboard_ready" \
+    --dashboard-recovery "blocked,needs-info,abandoned-user-owned" \
+    --blocked-merge-result refused \
+    --blocked-merge-reason "outcome is blocked; candidate-only operations are unavailable" \
+    --abandoned-cleanup-result preserved-user-owned \
+    --abandoned-resource-ownership "user-owned; leave the branch and worktree in place" \
+    --needs-info-resume-route provide-information-and-reclaim-ticket \
+    --needs-info-recorded-action "provide information"
+}
+
+python3 "$MODEL_EVAL_FIXTURE" prepare \
+  --repo "$MODEL_EVAL_REPO" \
+  --snapshot "$MODEL_EVAL_SNAPSHOT" >/dev/null
+
+if python3 "$MODEL_EVAL_FIXTURE" grade \
+  --repo "$MODEL_EVAL_REPO" \
+  --snapshot "$MODEL_EVAL_SNAPSHOT" \
+  --helper "$SOLVE_RECORDS_SCRIPT" >"$MODEL_EVAL_EMPTY_GRADE"; then
+  echo "model-attestation fixture: grade passed without a run attestation" >&2
+  exit 1
+fi
+
+python3 - "$MODEL_EVAL_EMPTY_GRADE" <<'PY'
+import json
+import sys
+
+result = json.load(open(sys.argv[1], encoding="utf-8"))
+assert result["passed"] is False, result
+assert result["checks"]["run_attestation_present"] is False, result
+assert result["checks"]["run_attestation_observations_valid"] is False, result
+PY
+
+if attest_fixture "$MODEL_EVAL_REPO" "$MODEL_EVAL_SNAPSHOT" "synthetic-regression" "wrong-receipt" >/dev/null; then
+  echo "model-attestation fixture: attestation accepted an unobserved dashboard" >&2
+  exit 1
+fi
+
+if [[ -e "$MODEL_EVAL_REPO/.scratch/model-adherence/run-attestation.json" ]]; then
+  echo "model-attestation fixture: invalid attestation wrote evidence" >&2
+  exit 1
+fi
+
+attest_fixture "$MODEL_EVAL_REPO" "$MODEL_EVAL_SNAPSHOT" "synthetic-regression" >/dev/null
+
+python3 "$MODEL_EVAL_FIXTURE" grade \
+  --repo "$MODEL_EVAL_REPO" \
+  --snapshot "$MODEL_EVAL_SNAPSHOT" \
+  --helper "$SOLVE_RECORDS_SCRIPT" >"$MODEL_EVAL_FINAL_GRADE"
+
+python3 - "$MODEL_EVAL_FINAL_GRADE" <<'PY'
+import json
+import sys
+
+result = json.load(open(sys.argv[1], encoding="utf-8"))
+assert result["passed"] is True, result
+assert result["run_attestation"]["session_ref"] == "synthetic-regression", result
+assert result["run_attestation"]["provenance"] == "unverified-local-attestation", result
+assert result["checks"]["run_attestation_matches_challenge"] is True, result
+PY
+
+python3 - "$MODEL_EVAL_REPO/.scratch/model-adherence/run-attestation.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+evidence = json.loads(path.read_text(encoding="utf-8"))
+evidence["challenge_nonce"] = "tampered"
+path.write_text(json.dumps(evidence), encoding="utf-8")
+PY
+
+if python3 "$MODEL_EVAL_FIXTURE" grade \
+  --repo "$MODEL_EVAL_REPO" \
+  --snapshot "$MODEL_EVAL_SNAPSHOT" \
+  --helper "$SOLVE_RECORDS_SCRIPT" >/dev/null; then
+  echo "model-attestation fixture: grade accepted mismatched challenge evidence" >&2
+  exit 1
+fi
+
+MODEL_ATTESTATION_BAD_JSON_REPO="$TMPDIR_ROOT/model-attestation-bad-json-project"
+MODEL_ATTESTATION_BAD_JSON_SNAPSHOT="$TMPDIR_ROOT/model-attestation-bad-json-before.json"
+MODEL_ATTESTATION_BAD_JSON_GRADE="$TMPDIR_ROOT/model-attestation-bad-json-grade.json"
+
+python3 "$MODEL_EVAL_FIXTURE" prepare \
+  --repo "$MODEL_ATTESTATION_BAD_JSON_REPO" \
+  --snapshot "$MODEL_ATTESTATION_BAD_JSON_SNAPSHOT" >/dev/null
+attest_fixture "$MODEL_ATTESTATION_BAD_JSON_REPO" "$MODEL_ATTESTATION_BAD_JSON_SNAPSHOT" "synthetic-regression" >/dev/null
+printf 'not json\n' >"$MODEL_ATTESTATION_BAD_JSON_REPO/.scratch/model-adherence/run-attestation.json"
+
+if python3 "$MODEL_EVAL_FIXTURE" grade \
+  --repo "$MODEL_ATTESTATION_BAD_JSON_REPO" \
+  --snapshot "$MODEL_ATTESTATION_BAD_JSON_SNAPSHOT" \
+  --helper "$SOLVE_RECORDS_SCRIPT" >"$MODEL_ATTESTATION_BAD_JSON_GRADE"; then
+  echo "model-attestation fixture: grade accepted malformed attestation JSON" >&2
+  exit 1
+fi
+
+python3 - "$MODEL_ATTESTATION_BAD_JSON_GRADE" <<'PY'
+import json
+import sys
+
+result = json.load(open(sys.argv[1], encoding="utf-8"))
+assert result["checks"]["run_attestation_parseable"] is False, result
+PY
+
+MODEL_ATTESTATION_BAD_CHALLENGE_REPO="$TMPDIR_ROOT/model-attestation-bad-challenge-project"
+MODEL_ATTESTATION_BAD_CHALLENGE_SNAPSHOT="$TMPDIR_ROOT/model-attestation-bad-challenge-before.json"
+MODEL_ATTESTATION_BAD_CHALLENGE_GRADE="$TMPDIR_ROOT/model-attestation-bad-challenge-grade.json"
+
+python3 "$MODEL_EVAL_FIXTURE" prepare \
+  --repo "$MODEL_ATTESTATION_BAD_CHALLENGE_REPO" \
+  --snapshot "$MODEL_ATTESTATION_BAD_CHALLENGE_SNAPSHOT" >/dev/null
+attest_fixture "$MODEL_ATTESTATION_BAD_CHALLENGE_REPO" "$MODEL_ATTESTATION_BAD_CHALLENGE_SNAPSHOT" "synthetic-regression" >/dev/null
+
+python3 - "$MODEL_ATTESTATION_BAD_CHALLENGE_REPO" "$MODEL_ATTESTATION_BAD_CHALLENGE_SNAPSHOT" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+repo = Path(sys.argv[1])
+snapshot_path = Path(sys.argv[2])
+snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+challenge = {
+    "schema": "not-a-challenge",
+    "nonce": "",
+    "evidence_path": ".scratch/model-adherence/elsewhere.json",
+}
+snapshot["challenge"] = challenge
+fingerprint_input = {
+    "record_hashes": snapshot["record_hashes"],
+    "refs": snapshot["refs"],
+    "worktrees": snapshot["worktrees"],
+    "challenge": challenge,
+}
+snapshot["fixture_fingerprint"] = hashlib.sha256(
+    json.dumps(fingerprint_input, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+(repo / ".scratch/model-adherence/eval-challenge.json").write_text(
+    json.dumps(challenge),
+    encoding="utf-8",
+)
+attestation_path = repo / ".scratch/model-adherence/run-attestation.json"
+attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+attestation["challenge_nonce"] = challenge["nonce"]
+attestation["fixture_fingerprint"] = snapshot["fixture_fingerprint"]
+attestation_path.write_text(json.dumps(attestation), encoding="utf-8")
+PY
+
+if python3 "$MODEL_EVAL_FIXTURE" grade \
+  --repo "$MODEL_ATTESTATION_BAD_CHALLENGE_REPO" \
+  --snapshot "$MODEL_ATTESTATION_BAD_CHALLENGE_SNAPSHOT" \
+  --helper "$SOLVE_RECORDS_SCRIPT" >"$MODEL_ATTESTATION_BAD_CHALLENGE_GRADE"; then
+  echo "model-attestation fixture: grade accepted an invalid challenge contract" >&2
+  exit 1
+fi
+
+python3 - "$MODEL_ATTESTATION_BAD_CHALLENGE_GRADE" <<'PY'
+import json
+import sys
+
+result = json.load(open(sys.argv[1], encoding="utf-8"))
+checks = result["checks"]
+assert checks["challenge_matches_snapshot"] is True, result
+assert checks["snapshot_fingerprint_valid"] is True, result
+assert checks["challenge_schema_valid"] is False, result
+assert checks["challenge_nonce_valid"] is False, result
+assert checks["challenge_evidence_path_valid"] is False, result
+assert checks["snapshot_challenge_valid"] is False, result
+assert checks["run_attestation_matches_challenge"] is True, result
+assert checks["run_attestation_matches_fixture"] is True, result
+PY
+
+echo "solve-records model-attestation fixture passed"
