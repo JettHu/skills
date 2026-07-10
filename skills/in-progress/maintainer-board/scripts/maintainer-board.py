@@ -24,6 +24,12 @@ ISSUE_BUCKETS = [
 SOLVE_RECORD_BUCKETS = ["ready", "manual", "cleanup", "recent", "stale_or_malformed"]
 DEFAULT_VISIBLE_ITEMS = 5
 DEFAULT_HTML_PATH = Path(".scratch/maintainer-board/index.html")
+POST_EXECUTION_REVIEW_STATUSES = {"passed", "manual gate", "blocked"}
+ROLLOUT_CONFIG_DISPOSITIONS = {
+    "none",
+    "pre-merge action required",
+    "post-merge activation required",
+}
 SOLVE_RECORD_REQUIRED = {
     "id",
     "kind",
@@ -269,7 +275,7 @@ def classify_issue(issue):
     status = issue["status"]
     if "solve-in-progress" in flags:
         return "claimed_or_in_progress"
-    if status in {"ready-for-human", "needs-info"} or "agent-decision" in flags:
+    if status in {"ready-for-human", "needs-info"}:
         return "needs_human"
     if status == "completed":
         if issue["solve_records"]:
@@ -403,6 +409,14 @@ def status_line(block):
     return ""
 
 
+def post_execution_review_line(block):
+    for line in block.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("post-execution review:"):
+            return stripped.split(":", 1)[1].strip().lower()
+    return ""
+
+
 def is_true(value):
     return str(value).lower() == "true"
 
@@ -440,6 +454,65 @@ def has_low_risk_exception(record):
         "evidence:",
     ]
     return all(fragment in notes for fragment in required_evidence)
+
+
+def post_execution_review_gate_reason(record):
+    review = record.get("review", "")
+    if not review:
+        return "missing Post-Execution Review outcome"
+    if review not in POST_EXECUTION_REVIEW_STATUSES:
+        return "unknown Post-Execution Review outcome"
+    if review != "passed":
+        return f"Post-Execution Review is {review}"
+    return ""
+
+
+def rollout_config_block(record):
+    text = record.get("text", "")
+    return (section(text, "Merge") + "\n" + section(text, "Notes")).lower()
+
+
+def rollout_config_disposition(record):
+    prefixes = (
+        "rollout/config disposition:",
+        "rollout config disposition:",
+        "rollout disposition:",
+        "config disposition:",
+    )
+    for line in rollout_config_block(record).splitlines():
+        normalized = line.strip().lstrip("-*").strip()
+        for prefix in prefixes:
+            if prefix not in normalized:
+                continue
+            value = normalized.split(prefix, 1)[1].strip()
+            for disposition in ROLLOUT_CONFIG_DISPOSITIONS:
+                if value == disposition or value.startswith((disposition + ";", disposition + ".", disposition + ",")):
+                    return disposition
+            return "unknown"
+    return ""
+
+
+def rollout_config_gate_reason(record):
+    disposition = rollout_config_disposition(record)
+    if not disposition:
+        return "missing rollout/config disposition"
+    if disposition == "unknown":
+        return "unknown rollout/config disposition"
+    if disposition == "pre-merge action required":
+        return "rollout/config pre-merge action required"
+    if disposition == "post-merge activation required":
+        block = rollout_config_block(record)
+        required = [
+            (("code merge is safe", "code merge safe"), "code-merge-safety rationale"),
+            (("activation:",), "activation action"),
+            (("rollback:", "disable:"), "rollback or disable note"),
+        ]
+        for fragments, label in required:
+            if not any(fragment in block for fragment in fragments):
+                return f"post-merge activation missing {label}"
+        if "smoke:" not in block and "validation:" not in block:
+            return "post-merge activation missing smoke or validation check"
+    return ""
 
 
 def body_frontmatter_conflict(record):
@@ -491,7 +564,8 @@ def parse_solve_record(repo, path):
         record["malformed"] = f"invalid kind: {record['kind']}"
         return record
 
-    record["checks"] = status_line(section(body, "Checks"))
+    record["checks"] = status_line(section(body, "Verification")) or status_line(section(body, "Checks"))
+    record["review"] = post_execution_review_line(section(body, "Review"))
     record["merge"] = status_line(section(body, "Merge"))
     record["summary_status"] = status_line(section(body, "Summary"))
     record["notes"] = section(body, "Notes").lower()
@@ -528,6 +602,12 @@ def solve_record_merge_gate(repo, record):
                 reasons.append("unavailable checks without low-risk evidence")
         elif record.get("checks") != "passed":
             reasons.append(f"checks status is {record.get('checks') or '<missing>'}")
+        review_reason = post_execution_review_gate_reason(record)
+        if record.get("merge") == "ready" and review_reason:
+            reasons.append(review_reason)
+        rollout_reason = rollout_config_gate_reason(record)
+        if record.get("merge") == "ready" and rollout_reason:
+            reasons.append(rollout_reason)
         if not reasons:
             clean, clean_reason = worktree_clean_check(repo, record)
             if not clean:
@@ -587,6 +667,7 @@ def solve_record_summary(repo, record, include_merge_gate=False):
         "issues": record.get("issues", []),
         "worktree": record.get("worktree"),
         "checks": record.get("checks"),
+        "review": record.get("review"),
         "merge": record.get("merge"),
         "cleanup_done": record.get("cleanup_done"),
         "resource_cleanup": resource_field(record, "Cleanup"),
@@ -600,6 +681,7 @@ def solve_record_summary(repo, record, include_merge_gate=False):
         summary["refs_ok"] = refs_ok
         summary["ref_reason"] = ref_reason
         summary["low_risk_exception"] = has_low_risk_exception(record)
+        summary["rollout_config_disposition"] = rollout_config_disposition(record)
         conflict = body_frontmatter_conflict(record)
         if conflict:
             summary["body_conflict"] = conflict
@@ -1067,7 +1149,6 @@ def render_html(snapshot):
       background: #fff8c5;
       border-color: #f0d98c;
     }}
-    .label-agent-decision,
     .label-stale,
     .label-stale-or-malformed,
     .label-bug {{

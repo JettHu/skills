@@ -40,6 +40,7 @@ git -C "$REPO" worktree add "$TMPDIR_ROOT/wt-ready" solve/ready >/dev/null 2>&1
 git -C "$REPO" worktree add "$TMPDIR_ROOT/wt-adopted-current" feature/adopted-current >/dev/null 2>&1
 
 mkdir -p "$REPO/.scratch/feature-a/issues"
+mkdir -p "$REPO/.scratch/feature-a/execution-digests"
 mkdir -p "$REPO/.scratch/feature-a/solve-records"
 mkdir -p "$REPO/.scratch/feature-b"
 mkdir -p "$REPO/.scratch/solve-records"
@@ -72,8 +73,6 @@ cat >"$REPO/.scratch/feature-a/issues/03-needs-human.md" <<'EOF'
 ---
 status: needs-info
 category: bug
-flags:
-  - agent-decision
 created: 2026-07-02
 ---
 
@@ -145,6 +144,12 @@ created: 2026-07-02
 # Single issue file
 EOF
 
+cat >"$REPO/.scratch/feature-a/execution-digests/03-needs-human.md" <<'EOF'
+# Execution Digest: Must not be discovered
+
+Strategy: fixture only
+EOF
+
 write_record() {
   local path="$1"
   local id="$2"
@@ -163,6 +168,7 @@ write_record() {
 id: $id
 kind: solve_record
 state: $state
+outcome: candidate
 base: master
 base_sha: $BASE_SHA
 head: $head
@@ -176,26 +182,31 @@ cleanup_done: $cleanup_done
 
 # Solve Record: $title
 
-## Summary
-Status: $state
-Next action: merge
+## Ticket
+Linked Ticket: \`.scratch/feature-a/issues/05-completed-linked.md\`
 
-## Issues
-- \`.scratch/feature-a/issues/05-completed-linked.md\` - completed
+## Outcome
+Result: candidate
+Branch/worktree/commit/PR: \`$head\`, \`$worktree\`
+Resource ownership: solve-owned
 
-## Changes
+## What Changed
 - fixture
 
-## Checks
+## Verification
 Status: $checks
 - \`fixture\` - $checks
+
+## Review
+Post-Execution Review: passed
+- fixture
 
 ## Merge
 Status: $merge
 Gate:
 - [ ] Required checks passed
 Reason:
-- fixture
+- Rollout/config disposition: none; fixture
 
 ## Resources
 Base: \`master\`
@@ -262,6 +273,11 @@ assert data["issues"]["counts"]["needs_human"] == 1
 assert data["issues"]["counts"]["blocked_or_dependent"] == 1
 assert data["issues"]["counts"]["completed_with_solve_record"] == 1
 assert data["issues"]["counts"]["completed_without_solve_record"] == 6
+assert "Execution Digest: Must not be discovered" not in {
+    issue["title"]
+    for bucket in data["issues"]["buckets"].values()
+    for issue in bucket
+}
 
 ready = data["issues"]["buckets"]["ready_for_agent"]
 assert {issue["metadata_format"] for issue in ready} == {"header", "frontmatter"}

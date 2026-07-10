@@ -158,6 +158,8 @@ Cleanup: pending | done | blocked
 - <durable low-risk decision, caveat, or none>
 ```
 
+When the Attempt used an Execution Digest, distill each durable decision or deviation here or in `## Review` with its reason, impact, and evidence. Keep the working Digest only while it retains resume value or repo policy requires it; otherwise delete it after this transfer.
+
 Candidate acceptance review, merge, ship, land, and candidate cleanup require
 this candidate-only Git evidence. `post-merge activation required` can be
 ready only when the record explains why code merge is safe, the activation,
@@ -206,6 +208,8 @@ the Needs Attention or Resume view. `abandoned` and `superseded` normally
 close after their disposition is recorded. A resumed Attempt reuses the linked
 recovery record only when it keeps the same retained resources and recovery
 context; a clean restart closes or supersedes the old receipt first.
+
+When the Attempt used an Execution Digest, distill durable decisions and deviations into `## Attempt Summary` or `## Confirmed Findings` with their reason, impact, and evidence. Keep the working Digest only while the retained recovery context has resume value or repo policy requires it; otherwise delete it after this transfer.
 
 Recovery records never enter acceptance, merge, ship, land, or candidate
 cleanup gates. Their resource guidance is ownership-based: verify retained

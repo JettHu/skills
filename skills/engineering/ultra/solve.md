@@ -19,7 +19,7 @@ Use tracker verbs, not hard-coded frontmatter fields, so local markdown trackers
 
 Current mutation support is local markdown trackers, such as `.scratch/<feature>/issues/*.md` or `.scratch/<feature>/issue.md`. If the tracker is remote and no adapter is available, you may read issue context, but stop before claim/update/close operations and report that a remote tracker adapter is needed.
 
-Tracker updates should record state-relevant facts. Use the tracker state, labels, assignment, or project status for claim/progress when available. Use PRs, commits, branches, and CI/check runs for implementation and validation evidence, linking them from the issue when useful. Use issue comments or local issue notes for blockers, missing requirements, agent decisions, or completion notes only when that is the tracker's normal review surface. Keep batch logs and large command output in the final solve summary or validation artifacts.
+Tracker updates should record state-relevant facts. Use the tracker state, labels, assignment, or project status for claim/progress when available. Use PRs, commits, branches, and CI/check runs for implementation and validation evidence, linking them from the issue when useful. Use issue comments or local issue notes for requirement clarification, concise blockers, human decisions, or completion notes only when that is the tracker's normal review surface. Keep batch logs and large command output in the final solve summary or validation artifacts.
 
 ## Invocation
 
@@ -49,7 +49,7 @@ Default completion, when no `--auto-merge` or merge/apply/ship/land intent is pr
 
 Issues are assumed AFK-ready when they are in `ready-for-agent`: the issue body, acceptance criteria, and any agent brief are treated as approved input. Continue the batch unless the issue selection or merge target is ambiguous and cannot be inferred safely.
 
-Agent Briefs are preferred input, not a schema gate. If an Agent Brief is present, use its context, constraints, validation guidance, and optional hints during planning. Re-check optional hints against current code and repo conventions before relying on them. If no usable Agent Brief exists, infer from the issue, codebase, and conversation where possible; missing core requirements become `needs-info`, and human-owned decisions become `ready-for-human`.
+An Agent Brief is an optional, non-duplicative delta to the issue and source Spec, never a schema gate. If present, use only its constraints, validation guidance, and optional hints during planning; re-check hints against current code and repo conventions before relying on them. If it is absent or empty, infer from the issue, codebase, and conversation where possible; missing core requirements become `needs-info`, and human-owned decisions become `ready-for-human`. Agent Brief content never participates in parsing, eligibility, state transitions, or merge gates.
 
 ## Worktree Boundary
 
@@ -124,8 +124,6 @@ Use these logical states even if the local tracker stores them with different fi
 ready-for-agent
   -> claim: add solve-in-progress and link solve branch/worktree
       -> completed
-      -> completed + agent-decision
-      -> ready-for-human + agent-decision
       -> ready-for-human
       -> needs-info
 ```
@@ -135,20 +133,16 @@ State meanings:
 - `ready-for-agent`: unclaimed work that another AFK agent may start.
 - `solve-in-progress`: a claim flag, added immediately after claim to prevent parallel pickup.
 - `completed`: acceptance criteria are implemented and verified.
-- `completed + agent-decision`: implemented and verified, but the agent made a low-risk decision that should remain visible.
-- `ready-for-human + agent-decision`: a decision affects API, architecture, security, data, product semantics, or user-visible behavior and needs human review.
 - `ready-for-human`: semantic conflict, final validation failure, or other non-requirements blocker.
 - `needs-info`: core requirement cannot be inferred from the issue, code, or conversation.
 
-Primary states and flags are separate. `ready-for-agent`, `completed`, `ready-for-human`, and `needs-info` are primary states. `solve-in-progress` and `agent-decision` are flags that may be stored as labels, flags, status metadata, or another tracker-specific convention.
+Primary states and flags are separate. `ready-for-agent`, `completed`, `ready-for-human`, and `needs-info` are primary states. `solve-in-progress` is a temporary claim flag that may be stored as a label, flag, status metadata, or another tracker-specific convention. Record-worthy low-risk decisions belong in the active Execution Digest and then the outcome Solve Record, not in Ticket state or flags.
 
 Flag lifecycle:
 
 - Add `solve-in-progress` only after a claim succeeds.
 - Remove `solve-in-progress` when the issue reaches `completed`, `needs-info`, or `ready-for-human`, unless the branch/worktree is intentionally left as active resumable work for a human conflict resolution.
 - If a stale `solve-in-progress` flag references a missing branch or worktree, inspect the issue history and branch refs. Resume, clear, or ask before mutating; do not silently discard it.
-- Add `agent-decision` when writing an Agent Decision Log.
-- Do not remove `agent-decision` automatically. A human review clears it.
 
 When setting `ready-for-human` or `needs-info`, record a concise blocker reason when the tracker supports state-relevant notes:
 
@@ -162,7 +156,7 @@ When setting `ready-for-human` or `needs-info`, record a concise blocker reason 
 
 A blocker reason explains a state transition; it is not a new state.
 
-Discovery must skip issues carrying `agent-decision` or active `solve-in-progress`, and report them as pending review or already claimed.
+Discovery must skip issues carrying an active `solve-in-progress` claim and report them as already claimed.
 
 ## Workflow
 
@@ -173,7 +167,6 @@ Select candidate issues from explicit ids, `--all`, or the message. Keep only is
 Report skipped issues with a short reason:
 
 - wrong state
-- has `agent-decision`
 - has active `solve-in-progress`
 - stale claim needing manual/resume handling
 
@@ -182,7 +175,7 @@ Report skipped issues with a short reason:
 For every selected issue:
 
 - determine the adoption route and intended branch/worktree reference
-- re-read the issue and confirm it is still `ready-for-agent` with no active `solve-in-progress` or `agent-decision`
+- re-read the issue and confirm it is still `ready-for-agent` with no active `solve-in-progress`
 - claim it by adding `solve-in-progress` and recording the intended branch/worktree through the tracker's existing machine-readable claim surface
 - create or adopt the assigned branch/worktree after the claim succeeds
 
@@ -190,65 +183,73 @@ Do this before code changes. For local markdown, preserve existing structured co
 
 If branch/worktree creation or adoption fails after claiming, clear the claim when no resumable work exists. If resumable work exists, record a blocker reason and retain or clear `solve-in-progress` according to whether a human can resume from the linked branch/worktree.
 
-### 3. Assess: AFK-Safe Planning
+### 3. Assess: Pre-Implementation Checkpoint
 
-For each claimed issue, run AFK-Safe Planning after claim and before implementation edits. Read the issue body, acceptance criteria, comments, linked docs, Agent Brief when present, and relevant repo context.
+For each claimed issue, run the Pre-Implementation Checkpoint after claim and before implementation edits. Read the issue body, acceptance criteria, comments, linked docs, optional Agent Brief, and enough current repository context to decide whether the issue is executable.
 
 Classify the issue disposition:
 
 - `executable`: enough information exists or can be inferred.
 - `needs exploration`: technical details are missing, but the codebase can likely answer them.
 - `needs-info`: a core requirement cannot be inferred.
-- `ready-for-human`: the issue is really an unapproved architecture/product/security decision.
+- `ready-for-human`: the issue is really an unapproved architecture, product, security, data, or significant UX decision.
 
 If an issue becomes `needs-info` or `ready-for-human`, update its state, record the blocker reason, remove `solve-in-progress` unless resumable work is intentionally left active, and continue with the rest of the batch.
 
-Also establish:
+The main Agent records, without requesting approval:
 
-- exploration disposition: `none`, `main-agent-only`, `adaptive subagent fan-out`, or `conditional research`
+- exploration disposition: `direct main-Agent execution`, `narrow main-Agent exploration`, `adaptive read-only subagent fan-out`, or `conditional external research`
 - validation plan: commands, manual evidence, check-run links, or why no meaningful automated check exists
-- digest disposition: `simple` or `digest-worthy`
+- Digest disposition: `simple` or `digest-worthy`
 
-Treat an issue as simple only when acceptance criteria are clear, scope is local to one familiar module, validation is obvious, and no decision, external research, resumability, or cross-module risk is expected.
+Direct main-Agent execution requires positive evidence that the issue is simple, familiar, local, low-risk, fully specified, and obviously verifiable. Existing high-quality exploration in the active context may satisfy part of that evidence and avoid duplicate fan-out. A clear local fix alone is not enough.
 
-Treat an issue as digest-worthy when any trigger applies:
+Bias most non-trivial or uncertain issues toward adaptive read-only subagent fan-out. Use task-shaped lenses only when they add independent evidence: affected modules, contracts, risks, dependencies, validation, or relevant external facts. Subagents return compressed findings—relevant modules, constraints, risks, validation paths, and unresolved questions. The main Agent retains synthesis, implementation edits, validation, tracker transitions, and solve-record finalization. Raw exploration output stays outside the issue, Execution Digest, and Solve Record.
 
-- it touches multiple modules, shared files, or public contracts
-- validation is unclear or requires a non-obvious command or evidence path
-- migration, config, rollout, feature flag, generated artifact, dependency, or operator-action risk is likely
-- architecture is unfamiliar or no obvious local pattern exists
-- delegated execution, interruption recovery, or resumability is likely
-- a low-risk Agent Decision Log is likely
-- external API, framework, standard, or platform facts affect implementation
-- broad main-agent exploration would be better isolated
+Use external research only when a source-verifiable external API, framework, standard, platform, compatibility, or security fact affects implementation or validation and local approved context cannot settle it. Link the source and keep the finding factual. Research never substitutes for a human-owned product, architecture, data-policy, or security-policy choice.
 
-Use adaptive read-only subagent fan-out when exploration would otherwise consume broad main-agent context. Describe subagent work as flexible lenses: architecture, affected surfaces, risks, validation, or external research. Subagents return compressed findings: relevant modules, constraints, risks, likely validation, and unresolved questions. Raw exploration logs stay out of tracker notes and solve records. The main agent remains responsible for synthesis, implementation edits, validation, issue state transitions, and solve-record finalization.
+### Execution Digest: Conditional Working Memory
 
-Use conditional external research when local issue and repo context are insufficient for external APIs, frameworks, standards, platform behavior, unfamiliar domains, or explicit user instructions. Research findings must be source-linked and limited to facts that affect implementation, validation, or risk.
+An Execution Digest is a separate ticket-level working file, never a Ticket-body section, tracker state, schema gate, or second requirement source. Create it at the start of a digest-worthy Attempt: a multi-module, delegated, resumable, interrupted, non-obvious-validation, or likely record-worthy-decision Attempt. A simple Attempt creates no Digest until its first material decision or deviation; create it at that event without rewriting the Ticket.
 
-Write an issue-level Execution Digest only when planning changes future execution, delegation, recovery, or review. Keep it compressed and state-relevant:
+For a local Ticket at `.scratch/<feature>/issues/<ticket-file>.md` or `.scratch/<feature>/issue.md`, use exactly:
+
+```text
+.scratch/<feature>/execution-digests/<digest-key>.md
+```
+
+Derive `digest-key` in this order: use the stable tracker Ticket ID when present and matching `[A-Za-z0-9][A-Za-z0-9._-]*`; otherwise use the local Ticket filename stem when it matches that pattern; otherwise use the full SHA-256 of the canonical Ticket identity (the repo-relative local Ticket path). A feature owns one `issue.md` and each `issues/*.md` filename is unique within that feature, so the feature directory plus this key is collision-safe. The derivation never accepts path separators. The directory is outside normal Ticket discovery: discover only `.scratch/*/issues/*.md` and `.scratch/*/issue.md`, never a broad `.scratch/**/*.md` glob.
+
+Keep the file compressed:
 
 ```markdown
-## Execution Digest
+# Execution Digest: <Ticket>
 
 Strategy:
 Touched surfaces:
 Key risks:
 Validation plan:
-Agent decisions:
+
+## Decisions And Deviations
+
+### <short title>
+Context:
+Decision:
+Reason:
+Impact:
+Evidence:
+Follow-up:
 ```
 
-For simple issues, proceed without an Execution Digest or planning-review artifact. Grouped execution may coordinate multiple issues during the run, but digests stay issue-level by default.
+Record only a non-obvious decision or deviation that is not settled by the Ticket or source Spec and affects acceptance, observable behavior, compatibility, validation, rollout, or recovery. Do not copy exploration transcripts, raw command output, routine implementation choices, or progress logs into it.
 
-For complex or digest-worthy issues, run a Planning Risk Check before implementation edits. Use a read-only planning reviewer subagent by default when available; otherwise perform the same check in the main agent. Review the compressed plan, acceptance criteria, constraints, risks, and validation strategy for omitted steps, unhandled risks, missing validation, and unsafe assumptions. Fold findings into the plan or Execution Digest rather than a standalone durable artifact.
+When the same retained branch, worktree, and recovery context resume, reopen and update the same Digest path. At candidate handoff, distill durable decisions and deviations into `## Review` or `## Notes`; at recovery handoff, distill them into `## Attempt Summary` or `## Confirmed Findings`. Retain the Digest only while it has resume value or repository policy requires it; otherwise delete it after that durable transfer. If a required Digest cannot be written durably, keep the same compact fields in the active conversation and report the reduced interruption-recovery guarantee.
 
-AFK decision handling:
+Complex, delegated, resumable, or digest-worthy Attempts receive a Pre-Edit Plan Review before implementation edits. Prefer a fresh read-only reviewer when that capability exists; otherwise the main Agent performs the equivalent findings-first review. Check the compressed plan, acceptance criteria, constraints, risks, and validation strategy for omitted steps, unsafe assumptions, and validation gaps. Incorporate findings into the plan or Digest; the review creates no standalone lifecycle artifact and no blanket human approval gate.
 
-- Low-risk choices become Agent Decision Logs and keep the issue moving.
-- Human-owned product, API, data, security, architecture, or significant UX choices set the issue to `ready-for-human`.
-- Missing core requirements set the issue to `needs-info`.
+Record-worthy low-risk decisions go in the active Digest and outcome Solve Record. Human-owned product, API, data, security, architecture, or significant UX choices set the issue to `ready-for-human`; missing core requirements set it to `needs-info`.
 
-AFK-Safe Planning is complete when each claimed issue has an issue disposition, exploration disposition, validation plan, digest disposition, and any required Execution Digest or Planning Risk Check incorporated before implementation edits.
+The Pre-Implementation Checkpoint is complete when each claimed issue has an issue disposition, exploration disposition, validation plan, Digest disposition, and any required Digest or Pre-Edit Plan Review incorporated before implementation edits.
 
 ### 4. Group
 
@@ -301,9 +302,9 @@ For `adopted-integration`, temporary group branches are solve-owned resources. T
 
 For each issue in a group:
 
-1. Execute from the AFK-Safe Planning output. Refresh exploration only when code changed since planning or the assigned worktree exposes new facts.
+1. Execute from the Pre-Implementation Checkpoint. Refresh exploration only when code changed since planning or the assigned worktree exposes new facts.
 2. Choose execution route. These are optional routing heuristics, not mandatory skill calls:
-   - simple clear fix: implement directly
+   - direct execution: only when the Checkpoint recorded every required simple-ticket predicate
    - unclear bug: prefer the debugging skill (`/ultra diagnosing-bugs`, or a configured alias) in AFK mode when a diagnosis loop would reduce risk
    - medium feature with clear AC: consider `/ultra tdd` in AFK mode when test-first development would help
    - approved refactor with clear AC: implement directly, or consider `/ultra tdd` when behavior coverage is needed
@@ -376,28 +377,30 @@ If final validation fails:
 
 If no meaningful automated check exists or the environment cannot run it, do not call that a pass. When the candidate is otherwise complete, finalization may create a solve record with checks marked `unavailable`; auto-merge remains blocked unless the change is explicitly trivial and low-risk, and the record says why no meaningful check exists, why no manual-review trigger applies, and what evidence still supports the change.
 
-Do not create a solve record for failed required checks. Failed required checks keep work in issue/attempt blocker state, not in the maintainer-facing solve-record queue.
+Do not create a candidate solve record for failed required checks. A transient failure with no retained evidence or resources stays in issue/attempt blocker state. A required validation or integration failure that retains evidence, a branch, worktree, or another recovery value reaches the outcome-finalization flow as a recovery record instead.
+
+When a blocked, needs-info, ready-for-human, abandoned, superseded, or retained-failure Attempt reaches the outcome-finalization flow, distill durable Digest decisions and deviations into its recovery record's `## Attempt Summary` or `## Confirmed Findings`. Retain the Digest only while its linked resources have resume value or repository policy requires it; otherwise delete it after the transfer.
 
 ### 8.4 Post-Execution Review
 
-After final validation and before solve-record finalization, review the integrated candidate against the claimed issues, acceptance criteria, Agent Briefs, Execution Digests, Agent Decision Logs, side effects, validation evidence, and solve-record readiness. Use reviewer subagents when that improves coverage; otherwise run the same review in the main agent.
+After final validation and before solve-record finalization, review the integrated candidate against the claimed issues, acceptance criteria, optional Agent Briefs, living Execution Digests, side effects, validation evidence, and solve-record readiness. Use reviewer subagents when that improves coverage; otherwise run the same review in the main agent.
 
 Check for:
 
 - acceptance criteria implemented only partially or differently than approved input
 - stale Agent Brief hints or Execution Digest assumptions
-- unrecorded low-risk decisions or human-owned decisions
+- record-worthy low-risk decisions not ready for durable handoff, or human-owned decisions
 - side effects, regressions, or public-contract changes not covered by validation
 - validation gaps, unavailable required checks, or missing manual gates
 - solve-record evidence that would be incomplete or misleading
 
 Fix actionable findings directly, rerun the relevant validation, and repeat Post-Execution Review on the corrected candidate. If a finding prevents a finished candidate and cannot be resolved without human input, record the blocker on the issue, set the issue to `ready-for-human` or `needs-info`, and create no solve record for that issue. If the candidate is finished but still has human acceptance, merge review, rollout approval, or another manual gate, keep the issue completed and record the gate in the solve record.
 
-Post-Execution Review is complete when no fixable findings remain, unresolved state-relevant residue is routed to the issue or solve record, and the review outcome is ready to capture in the solve record.
+Post-Execution Review is complete when no fixable findings remain, unresolved state-relevant residue is routed to the issue or solve record, and every record-worthy Digest item is ready to distill into the applicable outcome section.
 
 ### 8.5 Finalize Solve Record
 
-Create a solve record only after a finished, reviewable merge candidate exists:
+Create a candidate Solve Record only after a finished, reviewable merge candidate exists:
 
 - clean, comparable `head` candidate branch
 - known `base` landing branch and `head` candidate branch refs
@@ -409,7 +412,9 @@ Create a solve record only after a finished, reviewable merge candidate exists:
 - rollout/config disposition in the record body
 - worktree and cleanup resource notes
 
-Do not create solve records for claim-time state, in-progress attempts, missing requirements, failed required checks, unresolved Post-Execution Review findings that prevent a finished candidate, or a human-required decision that prevents the candidate from being finished. If a finished candidate exists but needs human review before merge for product/API/security/data/architecture/rollout risk, create the record as `state: open` with `## Merge` set to `manual required`; do not auto-merge it.
+Create a recovery Solve Record only through the outcome-finalization flow when a blocked, needs-info, ready-for-human, abandoned, superseded, or retained-failure Attempt has a meaningful handoff outcome. Keep transient claim-time failures and fully cleaned work with no recovery value recordless.
+
+Do not create candidate solve records for claim-time state, in-progress attempts, missing requirements, failed required checks, unresolved Post-Execution Review findings that prevent a finished candidate, or a human-required decision that prevents the candidate from being finished. The outcome-finalization flow may create the matching recovery record when retained evidence or resources give the Attempt handoff value. If a finished candidate exists but needs human review before merge for product/API/security/data/architecture/rollout risk, create the record as `state: open` with `## Merge` set to `manual required`; do not auto-merge it.
 
 Checks marked `unavailable` block auto-merge unless the change is explicitly trivial and low-risk, and the record says why no meaningful check exists, why no manual-review trigger applies, and what evidence still supports the change.
 
@@ -423,10 +428,10 @@ During the same finalize step:
 
 - create the solve record in `.scratch/<feature>/solve-records/` or `.scratch/solve-records/`
 - mark linked issues `completed`
-- preserve `agent-decision` on completed low-risk decisions
 - append only a solve-record backlink to each issue; record state stays in the solve record
 - link implementation and validation evidence where the tracker convention needs it
 - remove `solve-in-progress`
+- distill each durable Digest decision or deviation into candidate `## Review` or `## Notes`; retain the Digest only when it still has resume value or repo policy requires it, otherwise delete it
 
 The issue `completed` state means acceptance criteria are implemented and verified. The solve record `merged` state means the candidate entered the base branch. Cleanup status remains on the solve record.
 
@@ -442,7 +447,7 @@ Route requested auto-merge/merge/apply/ship/land wording through the same solve-
 
 All record merge gates must pass:
 
-1. No selected issue remains `needs-info`, `ready-for-human`, or pending human review for `agent-decision`.
+1. No selected issue remains `needs-info` or `ready-for-human`.
 2. Every group passed its local validation.
 3. Every eligible group branch is committed and its worktree is clean.
 4. The integration worktree started from the latest target branch and is clean after committed integration changes.
@@ -460,29 +465,6 @@ If merge succeeds, update the solve record to `state: merged`, set `merged_at` a
 If merge fails or conflicts before completion, abort the merge when possible, keep the solve record open, write `manual required` in the record, do not clean up the candidate branch/worktree, and do not roll linked issues back from `completed` unless the candidate itself is invalidated.
 
 By default, show the issue list, group branches, validation commands and results, pending blockers, and final target branch. Include a full diff only when the user asks for it or review needs it.
-
-## Agent Decisions
-
-When a decision is needed and impact is low, decide, implement, and record an Agent Decision Log in the issue or linked PR according to the tracker convention:
-
-```markdown
-## Agent Decision Log
-
-**Date**: YYYY-MM-DD
-**Problem**: The missing decision or ambiguity.
-**Options**: Option A / Option B / Option C.
-**Decision**: Chosen option.
-**Reason**: Why this follows the issue, codebase, or existing conventions.
-**Risk**: Why this is safe, or what should be reviewed later.
-```
-
-Decision handling:
-
-- Low-risk, AC passes: `completed + agent-decision`.
-- API, architecture, security, data, product semantics, or significant UX impact: `ready-for-human + agent-decision`.
-- Cannot infer the core requirement: `needs-info` without `agent-decision`.
-
-`ready-for-agent` must never mean "implemented but waiting for review".
 
 ## AFK Mode For Routed Skills
 
@@ -514,7 +496,6 @@ For local markdown, detect and preserve the repo's existing issue conventions. E
 - `add_flag(issue_id, flag)`
 - `remove_flag(issue_id, flag)`
 - `record_blocker(issue_id, reason, evidence_link_or_summary)`
-- `record_agent_decision(issue_id, decision_log)`
 - `link_change(issue_id, branch_or_worktree_or_commit_or_pr)`
 - `link_validation(issue_id, command_or_check_run, status)`
 - `close_completed(issue_id)`
