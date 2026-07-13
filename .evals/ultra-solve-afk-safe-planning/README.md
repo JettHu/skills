@@ -40,3 +40,7 @@ must fail: passing requires a model session to leave a completed final state.
 
 After a real run, commit a dated report with the exact treatment SHA, run ID,
 prompt path, model/settings, grader command/output, and final-state result.
+
+The outcome-finalization run for candidate, retained failed-Attempt, and
+same-context resume behavior is recorded in
+[`20260713-attempt-outcomes-model-adherence.md`](20260713-attempt-outcomes-model-adherence.md).
