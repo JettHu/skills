@@ -49,8 +49,19 @@ def main() -> None:
     if manifest["inputs"] != computed_inputs or manifest["contract_sha256"] != computed_contract:
         failures.append("contract manifest does not match supplied runbook/profile input")
 
+    scenario_ids = [scenario.get("id") for scenario in scenarios]
+    expected_ids = set(EXPECTED)
+    if len(scenario_ids) != len(set(scenario_ids)) or set(scenario_ids) != expected_ids:
+        missing = sorted(expected_ids - set(scenario_ids))
+        unexpected = sorted(set(scenario_ids) - expected_ids, key=lambda value: str(value))
+        failures.append(
+            f"scenario set does not exactly match expected: missing={missing}, unexpected={unexpected}"
+        )
+
     for scenario in scenarios:
         scenario_id = scenario["id"]
+        if scenario_id not in EXPECTED:
+            continue
         root = output / "scenarios" / scenario_id
         decision_path = root / "routing-decision.json"
         if not decision_path.is_file():

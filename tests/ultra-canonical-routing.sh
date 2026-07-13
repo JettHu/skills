@@ -131,6 +131,19 @@ command = [sys.executable, str(grader_path), "--output", str(fixture), "--json"]
 quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
 assert subprocess.run(command, check=False, **quiet).returncode == 0, "valid routing traces must grade"
 
+scenarios_path = fixture / "scenarios.json"
+original_scenarios = scenarios_path.read_text(encoding="utf-8")
+scenarios = json.loads(original_scenarios)
+scenarios_path.write_text(
+    json.dumps([scenario for scenario in scenarios if scenario["id"] != "07-legacy-bridge"], indent=2)
+    + "\n",
+    encoding="utf-8",
+)
+assert subprocess.run(command, check=False, **quiet).returncode != 0, (
+    "grader must reject a run missing an expected scenario"
+)
+scenarios_path.write_text(original_scenarios, encoding="utf-8")
+
 path = fixture / "scenarios/01-to-spec-bounded/routing-decision.json"
 decision = json.loads(path.read_text(encoding="utf-8"))
 decision["contract_sha256"] = "not-the-supplied-contract"

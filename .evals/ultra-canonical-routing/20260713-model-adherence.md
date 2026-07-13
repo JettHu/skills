@@ -50,9 +50,9 @@ It returned `{"passed": true, "failures": []}`.
 ## Regression Coverage
 
 `tests/ultra-canonical-routing.sh --expand` constructs a temporary trace run
-and proves the grader passes valid traces but fails closed for both a mismatched
-decision contract identity and post-trace mutation of the supplied profile
-input.
+and proves the grader passes valid traces but fails closed for a missing
+expected scenario, a mismatched decision contract identity, and post-trace
+mutation of the supplied profile input.
 
 ## Historical Note
 
