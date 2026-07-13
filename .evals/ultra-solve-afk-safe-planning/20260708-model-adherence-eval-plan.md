@@ -19,7 +19,7 @@ This change affects multi-agent planning/review behavior, optional Agent Brief b
 
 Durable model-adherence eval plan, run record, and deterministic repository validation.
 
-A real model-adherence run was started in fresh temporary Git repositories on 2026-07-13. Its exact refs, prompts, final-state grading, passed scenarios, and incomplete scenarios are recorded in [20260713-model-adherence-eval.md](20260713-model-adherence-eval.md). Grade final Ticket, Digest, and Solve Record state—not response prose—and do not treat its single-runtime coverage as a cross-model claim.
+A real model-adherence run was started in fresh temporary Git repositories on 2026-07-13. Its exact refs and prompt material, final-state grading, passed scenarios, and incomplete scenarios are recorded in [20260713-model-adherence-eval.md](20260713-model-adherence-eval.md). Grade final Ticket, Digest, and Solve Record state—not response prose—and do not treat its single-runtime coverage as a cross-model claim.
 
 ## Fixture Shape
 
