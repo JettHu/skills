@@ -7,9 +7,9 @@ Each profile controls which ultra steps are **available by default** for a targe
 | Skill | code | research | review | code_review | Rationale |
 |-------|:----:|:--------:|:------:|:-----------:|-----------|
 | improve-codebase-architecture | yes | — | yes | — | Code exploration grounds candidates; review validates safety (risk exclusion + ADR alignment). External research is usually unnecessary for repo-specific architecture work. |
-| to-prd | yes | cond | cond | — | **Default: code-only.** Internal validation found that research/review did not improve known-codebase PRD quality enough to justify the token cost. Enable research only for unfamiliar domains / external API standards. Enable review only for high-risk changes or when pre-exploration surfaces major disagreements. |
+| to-spec | yes | cond | cond | — | **Default: code-only.** Explore current architecture and risks; add external research only when approved local context cannot settle the stated external fact, and fresh-context review only for the stated high-risk boundaries. |
 | diagnosing-bugs | yes | yes | yes | yes | Review catches scope blindness + convention drift; critical for analytical debugging tasks |
-| to-issues | yes | yes | yes | — | Research provides decomposition frameworks for complex PRDs; code grounds them |
+| to-tickets | yes | cond | yes | — | Code grounds acceptance criteria and blocker edges. Fresh-context review repairs the exact Ticket set; research is limited to unresolved source-verifiable facts that directly determine an acceptance criterion or blocker edge. |
 | triage | yes | — | — | — | Parallel context gathering speeds up reproduce + recommend |
 | tdd | — | — | — | yes | TDD self-validates during execution; code review catches what tests miss |
 | prototype | — | yes | — | — | Industry research informs design alternatives |
@@ -23,6 +23,8 @@ Resolve these aliases before profile lookup. Use the canonical profile for ultra
 
 | Requested name | Canonical profile | Notes |
 |----------------|-------------------|-------|
+| to-prd | to-spec | Temporary internal bridge for the still-promoted `ultra-to-prd` wrapper. It is not advertised or a compatibility promise; Ticket 15 removes it during catalog contraction. |
+| to-issues | to-tickets | Temporary internal bridge for the still-promoted `ultra-to-issues` wrapper. It is not advertised or a compatibility promise; Ticket 15 removes it during catalog contraction. |
 | diagnose | diagnosing-bugs | Legacy/local name for Matt Pocock's debugging skill |
 | write-a-skill | writing-great-skills | Legacy/local name for skill-writing guidance; pass through unless a profile is later added |
 
@@ -38,19 +40,25 @@ The profile is a **maximum** — step 2 (context sufficiency check) decides the 
 | Task is in a completely unfamiliar area | Full exploration per profile |
 | Debugging task where the user already traced the code path | Skip architecture; keep risk agent for edge cases |
 
-### to-prd overrides
+### to-spec overrides
 
 Default: **Code-only** (architecture + risk agents only).
 
-Internal validation found that research/review did not improve known-codebase PRD quality enough to justify the token cost. Add modules only when specific conditions are met:
+Add modules only when specific conditions are met:
 
 **Add Research when:**
-- The domain or external convention is unfamiliar and not inferable from repo context
-- External API, security, or industry conventions matter (e.g., OAuth, PCI-DSS, AIP standards)
-- The user explicitly asks for market, product, or competitor context
-- The PRD involves integrating a third-party service with no prior internal precedent
+- An unfamiliar external API, standard, or security requirement affects the Spec and approved local context cannot settle it
+- The user explicitly requests external research and approved local context is insufficient
 
 **Add Review when:**
-- The PRD is large, ambiguous, or spans multiple subsystems
-- Code exploration surfaced conflicting patterns or convention drift
-- Implementation risk is high (data migration, breaking API changes, security-critical)
+- The Spec is large, ambiguous, cross-system, or high-risk
+
+### to-tickets overrides
+
+Default: **Code exploration plus fresh-context review**.
+
+**Add Research only when:**
+- A source-verifiable external fact directly determines an acceptance criterion or blocker edge
+- Approved local context cannot settle that fact
+
+Use research for official platform limits, SDK behavior, standards, or compatibility requirements. Keep product semantics, architecture direction, data/security policy, ownership, and release policy with approved input or an explicit human decision; do not use research for generic decomposition frameworks or unrelated open-source examples.

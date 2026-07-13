@@ -52,9 +52,19 @@ for heading in (
     "# Enhancement Profiles",
     "## Skill aliases",
     "## When to skip or narrow pre-exploration",
-    "### to-prd overrides",
+    "### to-spec overrides",
+    "### to-tickets overrides",
 ):
     assert heading in profiles, f"profile guidance lost its required section: {heading}"
+
+for row in (
+    "| to-spec | yes | cond | cond | — |",
+    "| to-tickets | yes | cond | yes | — |",
+):
+    assert row in profiles, f"canonical profile row missing: {row}"
+
+assert "| to-prd | yes |" not in profiles, "legacy to-prd cannot remain a canonical profile row"
+assert "| to-issues | yes |" not in profiles, "legacy to-issues cannot remain a canonical profile row"
 
 print("ultra lens ownership fixture passed")
 PY

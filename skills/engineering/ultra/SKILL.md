@@ -1,6 +1,6 @@
 ---
 name: ultra
-description: Multi-agent enhancement wrapper for agent skills and ultra subcommands. Adds parallel codebase exploration before and structured review after skill execution, and supports /ultra solve for AFK-ready issue execution. Use when user says "/ultra skill-name" or "/ultra solve", wants deeper analysis before a skill runs, wants multi-perspective review after, or wants to execute ready-for-agent issues. Examples — /ultra to-prd, /ultra diagnosing-bugs, /ultra to-issues, /ultra solve --all.
+description: Multi-agent enhancement wrapper for agent skills and ultra subcommands. Adds parallel codebase exploration before and structured review after skill execution, and supports /ultra solve for AFK-ready issue execution. Use when user says "/ultra skill-name" or "/ultra solve", wants deeper analysis before a skill runs, wants multi-perspective review after, or wants to execute ready-for-agent issues. Examples — /ultra to-spec, /ultra diagnosing-bugs, /ultra to-tickets, /ultra solve --all.
 ---
 
 # Ultra
@@ -68,7 +68,7 @@ Spawn agents based on the profile flags AND the context sufficiency assessment A
 
 **Profile flag semantics**: `yes` = enabled by default. `cond` = disabled unless the profile's override conditions match (see PROFILES.md). `—` = unavailable.
 
-**Task-specific narrowing**: The profile's Rationale column may specify conditions under which certain modules should be narrowed even when context is insufficient. For example, the to-prd profile defaults to code-only for known-codebase PRDs; research and review are enabled only for specific conditions (unfamiliar domain, external API standards, high-risk changes). Apply these task-specific rules before spawning agents.
+**Task-specific narrowing**: The profile's Rationale column may specify conditions under which certain modules should be narrowed even when context is insufficient. For example, the `to-spec` profile defaults to code-only for well-bounded Specs; research and review are enabled only for its stated external-fact and risk conditions. Apply these task-specific rules before spawning agents.
 
 When cited `CONTEXT.md` or `docs/adr/` files are absent, use the nearest project docs, tracker context, or code context.
 
@@ -85,7 +85,7 @@ These are default exploration roles, not a fixed taxonomy. For tasks with a clea
 
 Within the total cap, adapt the exploration roles to the specific task — don't limit yourself to the default profile template. For example:
 - A debugging task might benefit from a "similar bug patterns" search agent
-- A to-prd task in an unfamiliar domain might need a "competitor analysis" agent
+- A `to-spec` task in an unfamiliar domain might need an external-API research agent
 - An architecture task spanning multiple subsystems might need agents split by subsystem
 
 Cap at 3 pre-exploration agents total. Run them in parallel when available; otherwise run the same passes serially.
@@ -101,7 +101,9 @@ Invoke the target skill unmodified, passing through any remaining arguments (e.g
 - **Completeness reviewer**: Cross-reference the skill's output against pre-exploration findings (or conversation context). Flag only concrete omissions, especially *scope blindness* — issues or edge cases raised during exploration that the skill output silently dropped.
 - **Consistency reviewer**: Check that the output uses correct domain vocabulary (CONTEXT.md), respects ADRs, and follows project conventions. Flag only real *convention drift* — patterns, naming, or structures that deviate without justification.
 
-Present findings as a brief checklist of potential gaps. Don't auto-fix — let the user decide.
+For canonical shaping targets `to-spec` and `to-tickets`, review the exact generated artifact on its configured draft or publication surface. The main Agent fixes every finding derivable from approved context and current code: factual drift, canonical Spec/Ticket terminology (use `Ticket`, not `Issue`), acceptance or validation gaps, sizing and split/merge repairs, blocker-edge corrections, and formatting or backlink defects. Re-run the affected review after each repair; complete only when no fixable finding or unresolved human-owned choice remains. Ask the user only for an unresolved scope, product-semantic, ownership, release-policy, data/security-policy, architecture, significant UX, or missing-core-requirement choice.
+
+For other targets, present findings as a brief checklist of potential gaps. Do not auto-fix them through this generic review step.
 
 **When `code_review: true`** — only if the skill produced code changes:
 

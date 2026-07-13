@@ -15,6 +15,8 @@ jobs:
         run: scripts/validate-skills.sh
       - name: Test Ultra lens ownership
         run: bash tests/ultra-lenses.sh
+      - name: Test Ultra canonical routing
+        run: bash tests/ultra-canonical-routing.sh --expand
       - name: Test Ultra solve boundaries
         run: bash tests/ultra-solve-boundaries.sh
       - name: Test Ultra solve eval harness
