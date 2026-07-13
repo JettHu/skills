@@ -52,9 +52,11 @@ assert "Claim itself creates no receipt" in agents
 assert "Claim itself creates no receipt" in wrapper_meta
 for scenario in ("Candidate success", "Retained failed Attempt", "Same-context resume"):
     assert scenario in eval_record
-assert "Treatment ref: `4bf8d66`" in eval_record
-assert "Recovery-field correction ref: `65e34fc`" in eval_record
-assert "Final grader and review-fix ref: `f89bdc0`" in eval_record
+assert "Treatment ref: `cd717cbbe77aab699e784116096e0bdc99bc9edc`" in eval_record
+assert "Model id | `unavailable`" in eval_record
+assert "Reasoning setting | `unavailable`" in eval_record
+assert "Literal output:" in eval_record
+assert eval_record.count('"failed": []') == 3
 
 tool_path = root / "skills/engineering/solve-records/scripts/solve-records.py"
 spec = importlib.util.spec_from_file_location("ultra_outcome_fixture", tool_path)
