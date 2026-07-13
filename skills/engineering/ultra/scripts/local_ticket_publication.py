@@ -17,6 +17,11 @@ import tempfile
 
 
 SCHEMA = "ultra-local-ticket-publication/v1"
+CONTRACT = Path("docs/agents/ultra-tracker.md")
+CANCELLATION_POLICIES = {
+    "retain-until-explicit-cleanup",
+    "delete-on-cancel",
+}
 SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 BEGIN = re.compile(
     r"(?m)^<!-- ultra-ticket:begin id=([A-Za-z0-9][A-Za-z0-9._-]*) -->[ \t]*\n"
@@ -205,6 +210,26 @@ def safe_location(repo: Path, raw: str) -> Path:
     except ValueError as error:
         raise AdapterError("configured Ticket location escapes the repository") from error
     return location
+
+
+def configured_cancellation_policy(repo: Path) -> str:
+    path = repo / CONTRACT
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise AdapterError(f"missing cancellation contract: {path}") from error
+    strategies = re.findall(r"(?m)^Publication strategy:[ \t]*(\S+)[ \t]*$", text)
+    if strategies != ["local-review-pending"]:
+        raise AdapterError(
+            "cancellation contract must select local-review-pending exactly once"
+        )
+    matches = re.findall(r"(?m)^Cancellation policy:[ \t]*(\S+)[ \t]*$", text)
+    if len(matches) != 1:
+        raise AdapterError("cancellation contract must define exactly one machine-readable policy")
+    policy = matches[0]
+    if policy not in CANCELLATION_POLICIES:
+        raise AdapterError(f"unsupported cancellation policy: {policy}")
+    return policy
 
 
 def load_file_per(location: Path) -> list[Ticket]:
@@ -530,7 +555,9 @@ def inspect(repo: Path, representation: str, raw_location: str, run_id: str) -> 
 
 def cleanup(repo: Path, representation: str, raw_location: str, run_id: str, explicit: bool) -> dict:
     if not explicit:
-        raise AdapterError("cancellation retains review-pending artifacts; cleanup requires --explicit")
+        policy = configured_cancellation_policy(repo)
+        if policy == "retain-until-explicit-cleanup":
+            raise AdapterError("cancellation retains review-pending artifacts; cleanup requires --explicit")
     location = safe_location(repo, raw_location)
     path = journal_path(location, representation, run_id)
     with mutation_lock(location, representation):

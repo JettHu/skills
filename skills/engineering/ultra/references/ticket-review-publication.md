@@ -90,6 +90,9 @@ valid `promoted` journal for run-tagged Tickets. A provisional Ticket carrying
 `solve-in-progress` is malformed provisional state, not an active Claim.
 
 Interruption retains the journal and formal Tickets for idempotent resume.
-Cancellation keeps them `review-pending` by default; explicit cleanup may
-remove only the named run after re-reading exact membership. Never silently
-switch representation or create a parallel long-lived draft.
+Cancellation uses the managed contract's exact machine-readable policy.
+`retain-until-explicit-cleanup` keeps the named run `review-pending` unless
+cleanup is explicit; `delete-on-cancel` removes only that named run after the
+same exact membership and preimage validation. Missing, duplicate, or unknown
+policy values fail closed. Never silently switch representation or create a
+parallel long-lived draft.

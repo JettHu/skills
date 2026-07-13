@@ -31,8 +31,10 @@ Use the base contract as evidence for one preset:
   configured `file-per-ticket` or safely delimited `tickets-file`
   representation and path. Formal Tickets start in `review-pending`, carry a
   stable Ticket ID and publication-run identity, become `ready-for-agent` only
-  after complete-set review and promotion, and remain on cancellation until an
-  explicit cleanup policy applies. A tickets-file without exact section
+  after complete-set review and promotion, and use one executable cancellation
+  policy: `retain-until-explicit-cleanup` or `delete-on-cancel`. The adapter
+  reads that exact machine-readable policy from the managed contract; unknown
+  values fail closed. A tickets-file without exact section
   markers, stable IDs, safe state mutation, blocker lookup, and
   conflict-detecting Claim semantics is unsupported.
 - `github` or `gitlab` choose `remote-review-pending` when provisional remote

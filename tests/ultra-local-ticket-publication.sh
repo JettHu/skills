@@ -10,6 +10,15 @@ FILE_REPO="$TMPDIR_ROOT/file-per"
 SECTION_REPO="$TMPDIR_ROOT/tickets-file"
 mkdir -p "$FILE_REPO/.scratch/feature/issues" "$SECTION_REPO/.scratch/feature"
 
+write_contract() {
+  local repo="$1" policy="$2"
+  mkdir -p "$repo/docs/agents"
+  printf 'Publication strategy: local-review-pending\nCancellation policy: %s\n' "$policy" >"$repo/docs/agents/ultra-tracker.md"
+}
+
+write_contract "$FILE_REPO" retain-until-explicit-cleanup
+write_contract "$SECTION_REPO" retain-until-explicit-cleanup
+
 write_file_ticket() {
   local path="$1" id="$2" run="$3" status="$4" blockers="$5" title="$6"
   python3 - "$path" "$id" "$run" "$status" "$blockers" "$title" <<'PY'
@@ -180,6 +189,36 @@ if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run c
   echo "promoted run unexpectedly cleaned" >&2
   exit 1
 fi
+
+# A configured safe alternative is operational rather than descriptive: the
+# adapter reads the managed contract and cleans only the validated named run.
+AUTO_CLEAN_REPO="$TMPDIR_ROOT/auto-clean"
+mkdir -p "$AUTO_CLEAN_REPO/.scratch/feature/issues"
+write_contract "$AUTO_CLEAN_REPO" delete-on-cancel
+write_file_ticket "$AUTO_CLEAN_REPO/.scratch/feature/issues/AUTO-1.md" AUTO-1 auto-clean-run review-pending "" "Auto-cleaned draft"
+adapter "$AUTO_CLEAN_REPO" file-per-ticket .scratch/feature/issues auto-clean-run register >/dev/null
+adapter "$AUTO_CLEAN_REPO" file-per-ticket .scratch/feature/issues auto-clean-run cleanup >/dev/null
+test ! -e "$AUTO_CLEAN_REPO/.scratch/feature/issues/AUTO-1.md"
+
+# Unknown policy text fails closed and cannot authorize deletion.
+UNKNOWN_POLICY_REPO="$TMPDIR_ROOT/unknown-policy"
+mkdir -p "$UNKNOWN_POLICY_REPO/.scratch/feature/issues"
+write_contract "$UNKNOWN_POLICY_REPO" delete-whatever-the-contract-says
+write_file_ticket "$UNKNOWN_POLICY_REPO/.scratch/feature/issues/UNKNOWN-1.md" UNKNOWN-1 unknown-run review-pending "" "Unknown-policy draft"
+adapter "$UNKNOWN_POLICY_REPO" file-per-ticket .scratch/feature/issues unknown-run register >/dev/null
+if adapter "$UNKNOWN_POLICY_REPO" file-per-ticket .scratch/feature/issues unknown-run cleanup >"$TMPDIR_ROOT/unknown-policy.out" 2>&1; then
+  echo "unknown cancellation policy unexpectedly authorized deletion" >&2
+  exit 1
+fi
+grep -Fq 'unsupported cancellation policy' "$TMPDIR_ROOT/unknown-policy.out"
+test -e "$UNKNOWN_POLICY_REPO/.scratch/feature/issues/UNKNOWN-1.md"
+printf 'Publication strategy: remote-review-pending\nCancellation policy: delete-on-cancel\n' >"$UNKNOWN_POLICY_REPO/docs/agents/ultra-tracker.md"
+if adapter "$UNKNOWN_POLICY_REPO" file-per-ticket .scratch/feature/issues unknown-run cleanup >"$TMPDIR_ROOT/wrong-strategy.out" 2>&1; then
+  echo "non-local publication strategy unexpectedly authorized deletion" >&2
+  exit 1
+fi
+grep -Fq 'must select local-review-pending exactly once' "$TMPDIR_ROOT/wrong-strategy.out"
+test -e "$UNKNOWN_POLICY_REPO/.scratch/feature/issues/UNKNOWN-1.md"
 
 # One safely delimited tickets-file is mutated by exact section identity while
 # unrelated content is preserved.

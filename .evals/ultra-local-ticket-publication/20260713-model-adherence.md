@@ -53,9 +53,12 @@ change during that correction.
 `tests/ultra-local-ticket-publication-eval.sh` prepares an isolated run,
 constructs valid final state, proves the grader accepts it, and proves a missing
 scenario fails closed. `tests/ultra-local-ticket-publication.sh` separately
-covers partial promotion, concurrent edits, idempotent resume, default and
-explicit cancellation, stable identity, blockers, conflict-detecting Claim,
-unsafe tickets-file layouts, and unrelated-content preservation.
+covers partial promotion, concurrent edits, idempotent resume, default
+retention, explicit cleanup, configured `delete-on-cancel`, unknown-policy
+refusal, stable identity, blockers, conflict-detecting Claim, unsafe
+tickets-file layouts, and unrelated-content preservation. The
+cancellation-policy additions are deterministic regression coverage added
+after the retained model run; they do not change that run's provenance claim.
 
 ## Provenance boundary
 

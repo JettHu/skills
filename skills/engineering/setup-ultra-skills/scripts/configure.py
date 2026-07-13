@@ -12,6 +12,10 @@ from pathlib import Path
 BASE_CONTRACT = Path("docs/agents/issue-tracker.md")
 EXTENSION_CONTRACT = Path("docs/agents/ultra-tracker.md")
 STAGING_ROOT = ".scratch/.ultra-staging/"
+CANCELLATION_POLICIES = {
+    "retain-until-explicit-cleanup": "retain the named review-pending run until explicit cleanup.",
+    "delete-on-cancel": "delete only the named review-pending run after exact membership and preimage validation.",
+}
 BLOCK_START = "<!-- setup-ultra-skills:begin -->"
 BLOCK_END = "<!-- setup-ultra-skills:end -->"
 PUBLICATION_FIELDS = (
@@ -69,8 +73,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--cancellation-policy",
-        default="Keep review-pending files until explicit cleanup.",
-        help="Recorded Local Markdown cancellation policy.",
+        choices=tuple(CANCELLATION_POLICIES),
+        default="retain-until-explicit-cleanup",
+        help="Executable Local Markdown cancellation policy.",
     )
     parser.add_argument(
         "--local-ticket-representation",
@@ -139,6 +144,10 @@ def validate_policy(args: argparse.Namespace) -> None:
         path_without_templates = re.sub(r"<[^>]+>", "placeholder", args.local_ticket_path)
         if Path(path_without_templates).is_absolute() or ".." in Path(path_without_templates).parts:
             raise ConfigurationError("local Ticket path must stay inside the repository")
+    elif args.cancellation_policy != "retain-until-explicit-cleanup":
+        raise ConfigurationError(
+            "--cancellation-policy applies only to the local-markdown preset"
+        )
     if args.preset == "other":
         if not (args.custom_prose and args.custom_prose.strip()):
             raise ConfigurationError("the other preset requires --custom-prose")
@@ -211,6 +220,7 @@ def local_publication(
             "Partial-publish recovery: interrupted review or promotion retains the formal Tickets and journal; resumption re-discovers the same run, rejects concurrent body changes, and creates no replacements.",
             "Claim safety: a run-tagged Ticket is claimable only when its exact status is `ready-for-agent`, its journal is `promoted`, every run member is ready and unchanged, blockers are resolved, and conflict-detecting Claim metadata is absent.",
             f"Cancellation policy: {cancellation_policy}",
+            f"Cancellation behavior: {CANCELLATION_POLICIES[cancellation_policy]}",
             "",
         ]
     )

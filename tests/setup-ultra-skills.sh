@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 CONFIGURE="$REPO_ROOT/skills/engineering/setup-ultra-skills/scripts/configure.py"
+ADAPTER="$REPO_ROOT/skills/engineering/ultra/scripts/local_ticket_publication.py"
 TMPDIR_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/setup-ultra-skills.XXXXXX")"
 trap 'rm -rf "$TMPDIR_ROOT"' EXIT
 
@@ -29,6 +30,8 @@ configure() {
 
 local_repo="$TMPDIR_ROOT/local"
 local_sections_repo="$TMPDIR_ROOT/local-sections"
+local_delete_repo="$TMPDIR_ROOT/local-delete-on-cancel"
+local_invalid_policy_repo="$TMPDIR_ROOT/local-invalid-policy"
 github_remote_repo="$TMPDIR_ROOT/github-remote"
 github_staging_repo="$TMPDIR_ROOT/github-staging"
 gitlab_remote_repo="$TMPDIR_ROOT/gitlab-remote"
@@ -39,7 +42,7 @@ reconfigured_repo="$TMPDIR_ROOT/reconfigured"
 unmanaged_repo="$TMPDIR_ROOT/unmanaged"
 missing_base_repo="$TMPDIR_ROOT/missing-base"
 
-for repo in "$local_repo" "$local_sections_repo" "$github_remote_repo" "$github_staging_repo" "$gitlab_remote_repo" "$gitlab_staging_repo" "$other_repo" "$other_invalid_repo" "$reconfigured_repo" "$unmanaged_repo"; do
+for repo in "$local_repo" "$local_sections_repo" "$local_delete_repo" "$local_invalid_policy_repo" "$github_remote_repo" "$github_staging_repo" "$gitlab_remote_repo" "$gitlab_staging_repo" "$other_repo" "$other_invalid_repo" "$reconfigured_repo" "$unmanaged_repo"; do
   init_repo "$repo"
 done
 
@@ -61,6 +64,19 @@ configure "$local_repo" local-markdown local-review-pending
 configure "$local_sections_repo" local-markdown local-review-pending \
   --local-ticket-representation tickets-file \
   --local-ticket-path .scratch/product/tickets.md
+configure "$local_delete_repo" local-markdown local-review-pending \
+  --cancellation-policy delete-on-cancel
+mkdir -p "$local_delete_repo/.scratch/feature/issues"
+printf 'Status: review-pending\nTicket ID: SETUP-CANCEL-1\nPublication Run: setup-cancel-run\nSource Spec: docs/spec.md\nBlocked By:\nFlags:\n\n# Setup cancellation integration\n' >"$local_delete_repo/.scratch/feature/issues/SETUP-CANCEL-1.md"
+python3 "$ADAPTER" register --repo "$local_delete_repo" --representation file-per-ticket --location .scratch/feature/issues --run-id setup-cancel-run >/dev/null
+python3 "$ADAPTER" cleanup --repo "$local_delete_repo" --representation file-per-ticket --location .scratch/feature/issues --run-id setup-cancel-run >/dev/null
+test ! -e "$local_delete_repo/.scratch/feature/issues/SETUP-CANCEL-1.md"
+if configure "$local_invalid_policy_repo" local-markdown local-review-pending \
+  --cancellation-policy arbitrary-prose >"$TMPDIR_ROOT/local-invalid-policy.out" 2>&1; then
+  echo "local fixture accepted an unsupported cancellation policy" >&2
+  exit 1
+fi
+test ! -e "$local_invalid_policy_repo/docs/agents/ultra-tracker.md"
 configure "$github_remote_repo" github remote-review-pending
 configure "$github_staging_repo" github local-staging
 configure "$gitlab_remote_repo" gitlab remote-review-pending
@@ -106,11 +122,11 @@ grep -Fq 'Publication strategy: local-staging' "$TMPDIR_ROOT/reconfigure-preview
 grep -Fq 'Publication strategy: remote-review-pending' "$reconfigured_repo/docs/agents/ultra-tracker.md"
 configure "$reconfigured_repo" github local-staging
 
-python3 - "$REPO_ROOT" "$local_repo" "$local_sections_repo" "$github_remote_repo" "$github_staging_repo" "$gitlab_remote_repo" "$gitlab_staging_repo" "$other_repo" "$reconfigured_repo" "$unmanaged_repo" <<'PY'
+python3 - "$REPO_ROOT" "$local_repo" "$local_sections_repo" "$local_delete_repo" "$github_remote_repo" "$github_staging_repo" "$gitlab_remote_repo" "$gitlab_staging_repo" "$other_repo" "$reconfigured_repo" "$unmanaged_repo" <<'PY'
 from pathlib import Path
 import sys
 
-catalog, local, local_sections, github_remote, github_staging, gitlab_remote, gitlab_staging, other, reconfigured, unmanaged = map(Path, sys.argv[1:])
+catalog, local, local_sections, local_delete, github_remote, github_staging, gitlab_remote, gitlab_staging, other, reconfigured, unmanaged = map(Path, sys.argv[1:])
 
 skill = (catalog / "skills/engineering/setup-ultra-skills/SKILL.md").read_text(encoding="utf-8")
 metadata = (catalog / "skills/engineering/setup-ultra-skills/agents/openai.yaml").read_text(encoding="utf-8")
@@ -149,7 +165,8 @@ assert "Local Ticket path: .scratch/<feature>/issues/<ticket-file>.md" in local_
 assert "Status: review-pending" in local_contract
 assert "Status: ready-for-agent" in local_contract
 assert "not a sixth global triage role" in local_contract
-assert "Keep review-pending files until explicit cleanup." in local_contract
+assert "Cancellation policy: retain-until-explicit-cleanup" in local_contract
+assert "Cancellation behavior: retain the named review-pending run until explicit cleanup." in local_contract
 for field in (
     "Stable identity:",
     "Publication journal:",
@@ -162,6 +179,10 @@ assert "Local Ticket representation: tickets-file" in sections_contract
 assert "Local Ticket path: .scratch/product/tickets.md" in sections_contract
 assert "<!-- ultra-ticket:begin id=<Ticket-ID> -->" in sections_contract
 assert "heading- or title-based identity is unsafe" in sections_contract
+
+delete_contract = (local_delete / "docs/agents/ultra-tracker.md").read_text(encoding="utf-8")
+assert "Cancellation policy: delete-on-cancel" in delete_contract
+assert "Cancellation behavior: delete only the named review-pending run after exact membership and preimage validation." in delete_contract
 
 for repo in (github_remote, gitlab_remote):
     contract = (repo / "docs/agents/ultra-tracker.md").read_text(encoding="utf-8")
