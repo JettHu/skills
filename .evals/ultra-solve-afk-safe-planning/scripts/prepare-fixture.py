@@ -370,6 +370,7 @@ def failed_check() -> dict:
             "backlink_count": 1,
             "receipt_count": 1,
             "retained_markers": ["solve/", "worktree"],
+            "retained_commit": True,
             "required_check_fails": True,
         },
     }

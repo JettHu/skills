@@ -5,6 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 python3 - "$REPO_ROOT" <<'PY'
 import importlib.util
+import shutil
 import tempfile
 from pathlib import Path
 import sys
@@ -18,6 +19,7 @@ readme = (root / "README.md").read_text(encoding="utf-8")
 ultra_meta = (root / "skills/engineering/ultra/agents/openai.yaml").read_text(encoding="utf-8")
 wrapper = (root / "skills/engineering/ultra-solve/SKILL.md").read_text(encoding="utf-8")
 wrapper_meta = (root / "skills/engineering/ultra-solve/agents/openai.yaml").read_text(encoding="utf-8")
+eval_record = (root / ".evals/ultra-solve-afk-safe-planning/20260713-attempt-outcomes-model-adherence.md").read_text(encoding="utf-8")
 
 assert "### 8.5 Outcome Finalization" in solve
 assert "Every Attempt that stops or hands off routes through this decision once." in solve
@@ -25,9 +27,6 @@ assert "Claim remains the temporary concurrency lock; it never creates a receipt
 assert "Immediate Claim release, transient failure, or fully cleaned work with no useful finding" in solve
 assert "source Specs, approved decisions" in solve
 assert "recovery edge cases" in solve
-assert "exact retained-resource set" in solve
-assert "Repeated resumes update that receipt in place" in solve
-assert "The new Attempt creates its own receipt only when it later reaches a meaningful handoff." in solve
 assert "Apply this section only after the Outcome gate re-reads `outcome: candidate`." in solve
 assert "record the pending evidence in `## Verification` or `## Merge`" in solve
 assert "record the pending evidence in `## Checks`" not in solve
@@ -38,7 +37,11 @@ for link in (format_link, edge_link):
     assert (root / "skills/engineering/ultra" / link).resolve().is_file(), link
 assert "outcome: candidate" in record_format
 edge_cases = (root / "skills/engineering/solve-records/references/edge-cases.md").read_text(encoding="utf-8")
-assert "Repeated resumes keep one receipt and one Ticket backlink." in edge_cases
+assert "Repeated resumes keep one receipt and one Ticket" in edge_cases
+assert "backlink." in edge_cases
+assert "exact retained-resource set" in edge_cases
+assert "release the old Claim before the new Claim" in edge_cases
+assert "The new Attempt creates its own receipt only when it later reaches a" in edge_cases
 for outcome in ("blocked", "needs-info", "ready-for-human", "abandoned", "superseded"):
     assert outcome in solve
     assert outcome in record_format
@@ -47,6 +50,10 @@ for text in (agents, readme, ultra_meta, wrapper, wrapper_meta):
     assert "outcome" in text.lower()
 assert "Claim itself creates no receipt" in agents
 assert "Claim itself creates no receipt" in wrapper_meta
+for scenario in ("Candidate success", "Retained failed Attempt", "Same-context resume"):
+    assert scenario in eval_record
+assert "Treatment ref: `4bf8d66`" in eval_record
+assert "Corrected grader ref: `65e34fc`" in eval_record
 
 tool_path = root / "skills/engineering/solve-records/scripts/solve-records.py"
 spec = importlib.util.spec_from_file_location("ultra_outcome_fixture", tool_path)
@@ -67,8 +74,11 @@ def ticket(status: str, record, claim: bool, retained: str = "") -> str:
     if retained:
         lines.extend((f"Solve branch: {retained}", "Solve worktree: ../attempt-wt"))
     lines.extend(("", "# Fixture Ticket"))
-    if record:
-        lines.extend(("", "## Comments", "", "### Solve Record", "", f"- `../solve-records/{record}.md`"))
+    records = record if isinstance(record, list) else ([record] if record else [])
+    if records:
+        heading = "### Solve Records" if len(records) > 1 else "### Solve Record"
+        lines.extend(("", "## Comments", "", heading, ""))
+        lines.extend(f"- `../solve-records/{item}.md`" for item in records)
     return "\n".join(lines) + "\n"
 
 
@@ -118,7 +128,7 @@ Cleanup: pending
 """
 
 
-def candidate_record(record_id: str, issue_path: str) -> str:
+def candidate_record(record_id: str, issue_path: str, branch: str = "solve/fixture", worktree: str = "../attempt-wt") -> str:
     return f"""---
 id: {record_id}
 kind: solve_record
@@ -126,11 +136,11 @@ state: open
 outcome: candidate
 base: main
 base_sha: 1111111111111111111111111111111111111111
-head: solve/fixture
+head: {branch}
 head_sha: 2222222222222222222222222222222222222222
 issues:
   - {issue_path}
-worktree: ../attempt-wt
+worktree: {worktree}
 created_at: 2026-07-13T12:00:00+08:00
 cleanup_done: false
 ---
@@ -142,7 +152,7 @@ Linked Ticket: `{issue_path}`
 
 ## Outcome
 Result: candidate
-Branch/worktree/commit/PR: solve/fixture, ../attempt-wt, 2222222
+Branch/worktree/commit/PR: {branch}, {worktree}, 2222222
 Resource ownership: solve-owned; candidate cleanup owns the temporary resources
 
 ## What Changed
@@ -182,6 +192,21 @@ with tempfile.TemporaryDirectory() as temp:
     assert not list(records.glob("*.md"))
     write(issue_file, ticket("ready-for-agent", None, False))
     assert "solve-in-progress" not in issue_file.read_text(encoding="utf-8")
+    assert not list(records.glob("*.md"))
+
+    # A transient failure with partial resources cleans them and their Ticket links, then stays recordless.
+    transient_worktree = repo / "transient-attempt-wt"
+    transient_branch = repo / ".scratch/outcomes/refs/solve-transient"
+    transient_worktree.mkdir()
+    write(transient_branch, "partial\n")
+    write(issue_file, ticket("ready-for-agent", None, True, "solve/transient"))
+    shutil.rmtree(transient_worktree)
+    transient_branch.unlink()
+    write(issue_file, ticket("ready-for-agent", None, False))
+    no_value_text = issue_file.read_text(encoding="utf-8")
+    assert "solve-in-progress" not in no_value_text
+    assert "Solve branch:" not in no_value_text and "Solve worktree:" not in no_value_text
+    assert not transient_worktree.exists() and not transient_branch.exists()
     assert not list(records.glob("*.md"))
 
     expected_states = {
@@ -246,19 +271,30 @@ with tempfile.TemporaryDirectory() as temp:
     superseded = resume_path.read_text(encoding="utf-8")
     superseded = superseded.replace("state: open", "state: closed", 1).replace("outcome: blocked", "outcome: superseded", 1)
     superseded = superseded.replace("Result: blocked", "Result: superseded", 1).replace("Next action: resume", "Next action: supersede", 1)
+    superseded = superseded.replace("cleanup_done: false", "cleanup_done: true", 1)
+    superseded = superseded.replace("branch: solve/fixture\nworktree: ../attempt-wt\ncommit: 3333333\n", "", 1)
+    superseded = superseded.replace("Branch/worktree/commit/PR: solve/fixture, ../attempt-wt, 5555555", "Branch/worktree/commit/PR: none", 1)
+    superseded = superseded.replace("Resource ownership: solve-owned; resume owns cleanup", "Resource ownership: no retained resources; prior resources cleaned before restart", 1)
+    superseded = superseded.replace("Cleanup: pending", "Cleanup: done", 1)
     write(resume_path, superseded)
     write(issue_file, ticket("ready-for-agent", resume_id, True))
     old = helper.parse_record(repo, resume_path)
     assert old["outcome"] == "superseded" and old["state"] == "closed"
+    assert old["retained_resources"] == "none" and old["cleanup_done"] == "true"
     assert len(list(records.glob("fixture-resume*.md"))) == 1
 
     candidate_id = "fixture-restart-candidate"
-    write(records / f"{candidate_id}.md", candidate_record(candidate_id, issue_path))
-    write(issue_file, ticket("completed", candidate_id, False, "solve/fixture"))
+    write(records / f"{candidate_id}.md", candidate_record(candidate_id, issue_path, "solve/restart", "../restart-wt"))
+    write(issue_file, ticket("completed", [resume_id, candidate_id], False, "solve/restart"))
     candidate = helper.parse_record(repo, records / f"{candidate_id}.md")
     assert not candidate.get("malformed"), candidate
     assert candidate["outcome"] == "candidate"
     assert not helper.candidate_operation_refusal(candidate)
+    restart_ticket = issue_file.read_text(encoding="utf-8")
+    assert "### Solve Records" in restart_ticket
+    assert restart_ticket.count(f"../solve-records/{resume_id}.md") == 1
+    assert restart_ticket.count(f"../solve-records/{candidate_id}.md") == 1
+    assert candidate["head"] == "solve/restart" and Path(candidate["worktree"]).name == "restart-wt"
     assert sorted(path.name for path in records.glob("fixture-*.md")).count(f"{candidate_id}.md") == 1
 
 print("ultra solve attempt outcome fixture passed")

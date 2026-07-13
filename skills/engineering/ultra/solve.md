@@ -427,7 +427,7 @@ For every recorded outcome, complete one atomic tracker handoff:
 - release or intentionally retain `solve-in-progress` according to the table, recording the active resume owner when retained
 - distill each durable Digest decision or deviation into candidate `## Review` or `## Notes`, or recovery `## Attempt Summary` or `## Confirmed Findings`; retain the Digest only while the same recovery context has resume value or repo policy requires it
 
-A resumed Attempt reuses an open recovery receipt only when the linked Ticket, exact retained-resource set, unresolved blocker or requested information, and next action still describe the same recovery context. Reclaim the Ticket through the tracker contract before continuing. Repeated resumes update that receipt in place and keep one Ticket backlink by following the linked recovery edge cases. If any identity fact changed materially or a clean restart is safer, close or mark the old receipt `superseded`, release its Claim, record its resource disposition, and reclaim the Ticket for a new Attempt. The new Attempt creates its own receipt only when it later reaches a meaningful handoff.
+For resume or clean restart, follow the linked recovery edge cases. Outcome Finalization completes after the resulting receipt identity, Ticket backlink, Claim state, and resource disposition satisfy the atomic handoff above.
 
 Create a `candidate` receipt only after a finished, reviewable merge candidate exists with:
 

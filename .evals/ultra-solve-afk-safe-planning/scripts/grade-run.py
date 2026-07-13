@@ -208,6 +208,30 @@ def grade(repo: Path) -> Grade:
                 ),
                 "receipt names the retained registered branch and worktree",
             )
+        if expected.get("retained_commit") or receipt.get("commit"):
+            branch = receipt.get("branch", "")
+            worktree_value = receipt.get("worktree", "")
+            commit = receipt.get("commit", "")
+            retained_worktree = Path(worktree_value)
+            if not retained_worktree.is_absolute():
+                retained_worktree = (repo / retained_worktree).resolve()
+            branch_head = subprocess.run(
+                ["git", "rev-parse", f"refs/heads/{branch}"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+            )
+            worktree_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=retained_worktree if retained_worktree.is_dir() else repo,
+                text=True,
+                capture_output=True,
+            )
+            result.check(bool(branch and worktree_value and commit), "receipt stores retained branch, worktree, and commit fields")
+            result.check(branch_head.returncode == 0 and branch_head.stdout.strip() == commit, "retained commit equals branch head")
+            result.check(retained_worktree.is_dir() and worktree_head.returncode == 0 and worktree_head.stdout.strip() == commit, "retained commit equals worktree head")
+            result.check(all(value in issue_text for value in (branch, worktree_value, commit)), "Ticket resource surface links the retained branch, worktree, and commit")
+            result.check(all(value in receipt.get("retained_resources", "") for value in (branch, worktree_value, commit)), "receipt outcome names the retained branch, worktree, and commit")
         if expected.get("required_check_fails"):
             attempts = [Path(entry["worktree"]) for entry in worktrees(repo) if entry.get("worktree") != str(repo)]
             failures = [check_result(path) for path in attempts if (path / "scripts/check.py").is_file()]
