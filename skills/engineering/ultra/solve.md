@@ -394,7 +394,7 @@ Check for:
 - validation gaps, unavailable required checks, or missing manual gates
 - solve-record evidence that would be incomplete or misleading
 
-Fix actionable findings directly, rerun the relevant validation, and repeat Post-Execution Review on the corrected candidate. If a finding prevents a finished candidate and cannot be resolved without human input, record the blocker on the issue, set the issue to `ready-for-human` or `needs-info`, and create no solve record for that issue. If the candidate is finished but still has human acceptance, merge review, rollout approval, or another manual gate, keep the issue completed and record the gate in the solve record.
+Fix actionable findings directly, rerun the relevant validation, and repeat Post-Execution Review on the corrected candidate. If a finding prevents a finished candidate and cannot be resolved without human input, record the blocker on the issue and set the issue to `ready-for-human` or `needs-info`. Do not create a **candidate** solve record for that issue. During Outcome Finalization, create a recovery receipt when the stopped Attempt leaves meaningful decision, evidence, or retained-resource context; a transient Attempt that is fully cleaned up stays recordless. If the candidate is finished but still has human acceptance, merge review, rollout approval, or another manual gate, keep the issue completed and record the gate in the solve record.
 
 Post-Execution Review is complete when no fixable findings remain, unresolved state-relevant residue is routed to the issue or solve record, and every record-worthy Digest item is ready to distill into the applicable outcome section.
 

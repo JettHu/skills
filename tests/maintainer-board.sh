@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 BOARD_SCRIPT="$REPO_ROOT/skills/in-progress/maintainer-board/scripts/maintainer-board.py"
+SOLVE_RECORDS_SCRIPT="$REPO_ROOT/skills/engineering/solve-records/scripts/solve-records.py"
 TMPDIR_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_ROOT"' EXIT
 
@@ -237,6 +238,44 @@ write_record "$REPO/.scratch/feature-a/solve-records/20260703-adopted-current.md
   "20260703-adopted-current" open feature/adopted-current "$ADOPTED_HEAD" "../wt-adopted-current" true "Adopted current branch" passed "manual required" \
   "done; adopted worktree and candidate branch are user-owned"
 
+cat >"$REPO/.scratch/feature-a/solve-records/20260703-needs-info.md" <<'EOF'
+---
+id: 20260703-needs-info
+kind: solve_record
+state: open
+outcome: needs-info
+issues:
+  - .scratch/feature-a/issues/03-needs-human.md
+created_at: 2026-07-03T10:00:00+08:00
+cleanup_done: true
+---
+
+# Solve Record: Needs information receipt
+
+## Ticket
+Linked Ticket: `.scratch/feature-a/issues/03-needs-human.md`
+
+## Outcome
+Result: needs-info
+Branch/worktree/commit/PR: none retained
+Resource ownership: none
+
+## Attempt Summary
+- Investigated the available repository facts.
+
+## Confirmed Findings
+- The required API contract is absent from the approved Ticket.
+
+## Blocker Or Requested Information
+- Confirm the external API contract before implementation resumes.
+
+## Resume Or Cleanup
+Next action: maintainers provide the API contract, then resume from the Ticket.
+
+## Resources
+Cleanup: complete; no resources retained
+EOF
+
 JSON_OUT="$TMPDIR_ROOT/board.json"
 HTML_OUT="$TMPDIR_ROOT/board.html"
 DEFAULT_HTML_OUT="$(git -C "$REPO" rev-parse --show-toplevel)/.scratch/maintainer-board/index.html"
@@ -248,6 +287,8 @@ python3 "$BOARD_SCRIPT" --repo "$REPO" --html "$HTML_OUT" >"$TMPDIR_ROOT/html-pa
 DEFAULT_STDOUT="$(cd "$REPO" && python3 "$BOARD_SCRIPT")"
 mkdir -p "$(dirname "$STANDALONE_SCRIPT")"
 cp "$BOARD_SCRIPT" "$STANDALONE_SCRIPT"
+mkdir -p "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/solve-records/scripts"
+cp "$SOLVE_RECORDS_SCRIPT" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/solve-records/scripts/solve-records.py"
 python3 "$STANDALONE_SCRIPT" --repo "$REPO" --json >"$FALLBACK_JSON_OUT"
 
 if [[ "$DEFAULT_STDOUT" != "$DEFAULT_HTML_OUT" ]]; then
@@ -295,10 +336,11 @@ ready_issue = next(issue for issue in ready if issue["title"] == "Ready issue")
 assert ready_issue["checklist"] == {"total": 2, "done": 1, "open": 1}
 
 records = data["solve_records"]
-assert records["count"] == 5
+assert records["count"] == 6
 assert records["counts"]["ready"] == 1
 assert records["counts"]["manual"] == 2
 assert records["counts"]["recent"] == 1
+assert records["counts"]["recovery"] == 1
 assert records["counts"]["stale_or_malformed"] == 1
 adopted = next(
     record for record in records["buckets"]["manual"] if record["id"] == "20260703-adopted-current"
@@ -306,11 +348,16 @@ adopted = next(
 assert adopted["base"] == "master"
 assert adopted["head"] == "feature/adopted-current"
 assert "user-owned" in adopted["resource_cleanup"]
+recovery = records["buckets"]["recovery"][0]
+assert recovery["id"] == "20260703-needs-info"
+assert recovery["outcome"] == "needs-info"
+assert recovery["recovery_action"].startswith("maintainers provide")
 
 assert "Maintainer Board" in html
 assert "Ready issue" in html
 assert "Ready record" in html
 assert "Adopted current branch" in html
+assert "Needs information receipt" in html
 assert "Landing branch (base)" in html
 assert "Candidate branch (head)" in html
 assert "Cleanup ownership" in html

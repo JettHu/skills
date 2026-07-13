@@ -66,6 +66,8 @@ for predicate in (
 assert "distill each durable Digest decision or deviation" in solve
 assert "distill each durable decision or deviation" in record_format
 assert "distill durable decisions and deviations" in record_format
+assert "Do not create a **candidate** solve record" in solve
+assert "a transient Attempt that is fully cleaned up stays recordless" in solve
 
 safe_key = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
