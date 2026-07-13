@@ -21,6 +21,18 @@ Durable model-adherence eval plan, run record, and deterministic repository vali
 
 A real model-adherence run was started in fresh temporary Git repositories on 2026-07-13. Its exact refs and prompt material, final-state grading, passed scenarios, and historical incomplete attempt are recorded in [20260713-model-adherence-eval.md](20260713-model-adherence-eval.md). The final-head stale-hint replay is recorded separately in [20260713-final-head-stale-hint.md](20260713-final-head-stale-hint.md). Grade final Ticket, Digest, and Solve Record state—not response prose—and do not treat its single-runtime coverage as a cross-model claim.
 
+## Harness
+
+Fixture preparation and grading scripts are now available:
+
+- `README.md`
+- `scripts/prepare-fixture.py`
+- `scripts/grade-run.py`
+
+The harness creates independent Git repositories per scenario and per variant, so multiple models can run concurrently without sharing branches, worktrees, tickets, or solve records.
+
+It supports treatment-versus-ablation fixtures. By default, treatment skill docs come from `HEAD`, while ablation skill docs come from `8753d5c^`. Use `--treatment-ref working-tree` when validating uncommitted skill-doc changes.
+
 ## Fixture Shape
 
 Create an isolated temporary Git repository per scenario with:
@@ -67,7 +79,7 @@ The grader should inspect Ticket bodies and state, Digest presence/content/lifec
 ## Grader Assertions
 
 - The Pre-Implementation Checkpoint follows Claim metadata and precedes implementation edits.
-- Every claimed Ticket has an issue disposition, exploration disposition, validation plan, and Digest disposition.
+- Every claimed Ticket has a ticket disposition, exploration disposition, validation plan, and Digest disposition.
 - Direct execution has explicit positive evidence for all six simple-ticket predicates.
 - Simple Attempts do not accumulate no-op Digests or review artifacts.
 - Digest-worthy Attempts use the external safe path and contain only strategy, touched surfaces, risks, validation, and record-worthy decisions or deviations.
@@ -79,6 +91,16 @@ The grader should inspect Ticket bodies and state, Digest presence/content/lifec
 - Ticket bodies contain no Digest section or progress log, and normal Ticket discovery excludes `execution-digests/`.
 - Finished candidates create Solve Records with `## Checks`, `## Review`, `## Merge`, rollout/config disposition, manual gates, and caveats as applicable.
 - Auto-merge and cleanup semantics remain governed by the existing solve-record landing and cleanup gates.
+
+## Ablation
+
+Compare treatment versus ablation on the most load-bearing scenarios first:
+
+- Digest-worthy Ticket
+- Stale Agent Brief hint
+- Post-Execution Review finding
+
+The expected signal is that treatment produces stronger pre-edit planning, stale-hint correction, and final review behavior than the ablated skill docs.
 
 ## Deterministic Validation
 

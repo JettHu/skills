@@ -1,0 +1,3 @@
+# Treat Agent Briefs as Preferred Input
+
+`Agent Brief` belongs to ticket shaping, but `/ultra solve` must not require it as a schema gate. It is an optional, non-duplicative delta with only `Constraints`, `Validation`, and optional `Hints`; it does not repeat the Ticket or source Spec. Solve should consume a present Brief as subordinate approved input, re-check any hints during the Pre-Implementation Checkpoint, infer missing execution context when possible, and move the ticket to `needs-info` or `ready-for-human` only when the core requirement or a human-owned decision cannot be recovered from the ticket, code, or repository context.
