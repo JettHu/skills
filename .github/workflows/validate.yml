@@ -17,6 +17,8 @@ jobs:
         run: bash tests/ultra-lenses.sh
       - name: Test Ultra solve boundaries
         run: bash tests/ultra-solve-boundaries.sh
+      - name: Test Ultra solve eval harness
+        run: bash tests/ultra-solve-eval-harness.sh
       - name: Test Maintainer Board
         run: bash tests/maintainer-board.sh
       - name: Test agent-worktree
