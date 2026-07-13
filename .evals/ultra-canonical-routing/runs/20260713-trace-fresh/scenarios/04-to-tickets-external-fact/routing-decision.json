@@ -1,0 +1,11 @@
+{
+  "requested_route": "/ultra to-tickets",
+  "resolved_profile": "to-tickets",
+  "contract_sha256": "30edec855e8c2ca5ea31651eaf0167904cfe12b8724d712c09d4269bba317094",
+  "code": true,
+  "research": true,
+  "review": true,
+  "human_choice": false,
+  "review_iterations": 1,
+  "evidence": "| to-tickets | yes | cond | yes | — | Code grounds acceptance criteria and blocker edges. Fresh-context review repairs the exact Ticket set; research is limited to unresolved source-verifiable facts that directly determine an acceptance criterion or blocker edge. |\n\n**Add Research only when:**\n- A source-verifiable external fact directly determines an acceptance criterion or blocker edge\n- Approved local context cannot settle that fact\n\nUse research for official platform limits, SDK behavior, standards, or compatibility requirements."
+}

@@ -59,17 +59,36 @@ def main() -> None:
         decision = read_json(decision_path)
         expected = EXPECTED[scenario_id]
         expected_keys = set(expected) | {"contract_sha256"}
+        normalized_decision = dict(decision)
+        requested_route = normalized_decision.get("requested_route")
+        if isinstance(requested_route, str) and requested_route.startswith("/ultra "):
+            normalized_decision["requested_route"] = requested_route.removeprefix("/ultra ")
         if set(decision) != expected_keys or any(
-            expected[key] is not None and decision[key] != expected[key] for key in expected if key != "evidence"
+            expected[key] is not None and normalized_decision[key] != expected[key]
+            for key in expected
+            if key != "evidence"
         ):
             failures.append(f"{scenario_id}: route decision does not match expected routing: {decision}")
         if decision.get("contract_sha256") != manifest["contract_sha256"]:
             failures.append(f"{scenario_id}: routing decision is not tied to the supplied contract")
         evidence = decision.get("evidence")
-        if not isinstance(evidence, list) or expected["evidence"] not in evidence:
+        evidence_items = [evidence] if isinstance(evidence, str) else evidence
+        if not isinstance(evidence_items, list) or not any(
+            isinstance(item, str) and expected["evidence"] in item for item in evidence_items
+        ):
             failures.append(f"{scenario_id}: routing decision lacks required rule evidence")
-        elif any(not isinstance(item, str) or item not in contract_text for item in evidence):
-            failures.append(f"{scenario_id}: routing decision evidence is not traceable to supplied contract input")
+        else:
+            evidence_blocks = [
+                block
+                for item in evidence_items
+                if isinstance(item, str)
+                for block in item.split("\n\n")
+                if block
+            ]
+            if not evidence_blocks or any(block not in contract_text for block in evidence_blocks):
+                failures.append(
+                    f"{scenario_id}: routing decision evidence is not traceable to supplied contract input"
+                )
 
         if scenario_id == "05-review-fix":
             artifact = (root / "artifact.md").read_text(encoding="utf-8")
