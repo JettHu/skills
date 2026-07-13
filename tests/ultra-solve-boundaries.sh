@@ -68,6 +68,12 @@ assert "distill each durable decision or deviation" in record_format
 assert "distill durable decisions and deviations" in record_format
 assert "Do not create a **candidate** solve record" in solve
 assert "a transient Attempt that is fully cleaned up stays recordless" in solve
+assert "Before creating either outcome, read the [Solve Record format]" in solve
+record_link = re.search(r"\[Solve Record format\]\(([^)]+)\)", solve)
+assert record_link, "solve must name the receipt format before finalization"
+assert (repo / "skills/engineering/ultra" / record_link.group(1)).is_file(), (
+    "Solve Record format reference must resolve"
+)
 
 safe_key = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 

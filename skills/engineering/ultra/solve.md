@@ -400,6 +400,8 @@ Post-Execution Review is complete when no fixable findings remain, unresolved st
 
 ### 8.5 Finalize Solve Record
 
+Before creating either outcome, read the [Solve Record format](../solve-records/references/record-format.md). It owns the current outcome-aware frontmatter and body shape. Every new receipt uses that format; do not invent a legacy or hybrid candidate shape.
+
 Create a candidate Solve Record only after a finished, reviewable merge candidate exists:
 
 - clean, comparable `head` candidate branch
