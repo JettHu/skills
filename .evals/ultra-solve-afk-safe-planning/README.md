@@ -39,7 +39,9 @@ evidence, stale-hint forbidden paths, and same-receipt reuse. A base fixture
 must fail: passing requires a model session to leave a completed final state.
 
 After a real run, commit a dated report with the exact treatment SHA, run ID,
-prompt path, model/settings, grader command/output, and final-state result.
+prompt path, explicit runtime/model/settings fields, grader command and literal
+output, and final-state result. Record unavailable runtime metadata as
+`unavailable` with the reason instead of inferring it.
 
 The outcome-finalization run for candidate, retained failed-Attempt, and
 same-context resume behavior is recorded in

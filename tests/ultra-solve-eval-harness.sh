@@ -37,6 +37,7 @@ for path in expectations:
     assert "Context:" not in issue
     assert "## Execution Digest" not in issue
     assert (repo / "skills/engineering/solve-records/scripts/solve-records.py").is_file()
+    assert (repo / "skills/engineering/solve-records/references/edge-cases.md").is_file()
 
 failed = run / "07-failed-check-retained/repo"
 failed_expectation = json.loads((failed / "EVAL_EXPECTATIONS.json").read_text(encoding="utf-8"))["expected"]

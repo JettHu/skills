@@ -21,6 +21,7 @@ SKILL_PATHS = (
     "skills/engineering/ultra-to-issues/SKILL.md",
     "skills/engineering/ultra-to-issues/references/agent-brief.md",
     "skills/engineering/solve-records/SKILL.md",
+    "skills/engineering/solve-records/references/edge-cases.md",
     "skills/engineering/solve-records/references/record-format.md",
     "skills/engineering/solve-records/scripts/solve-records.py",
 )
