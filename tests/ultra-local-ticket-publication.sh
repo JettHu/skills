@@ -190,6 +190,75 @@ if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run c
   exit 1
 fi
 
+# Explicit cleanup overrides the default retain choice, not the managed
+# contract or promotion-state safety gates.
+cancellation_safety_failures=0
+MISSING_CONTRACT_REPO="$TMPDIR_ROOT/missing-contract"
+mkdir -p "$MISSING_CONTRACT_REPO/.scratch/feature/issues"
+write_contract "$MISSING_CONTRACT_REPO" retain-until-explicit-cleanup
+write_file_ticket "$MISSING_CONTRACT_REPO/.scratch/feature/issues/MISSING-1.md" MISSING-1 missing-contract-run review-pending "" "Missing-contract draft"
+adapter "$MISSING_CONTRACT_REPO" file-per-ticket .scratch/feature/issues missing-contract-run register >/dev/null
+rm "$MISSING_CONTRACT_REPO/docs/agents/ultra-tracker.md"
+if adapter "$MISSING_CONTRACT_REPO" file-per-ticket .scratch/feature/issues missing-contract-run cleanup --explicit >"$TMPDIR_ROOT/missing-contract.out" 2>&1; then
+  echo "explicit cleanup bypassed a missing cancellation contract" >&2
+  cancellation_safety_failures=1
+fi
+if ! test -e "$MISSING_CONTRACT_REPO/.scratch/feature/issues/MISSING-1.md"; then
+  echo "missing-contract cleanup deleted its Ticket" >&2
+  cancellation_safety_failures=1
+fi
+grep -Fq 'missing cancellation contract' "$TMPDIR_ROOT/missing-contract.out"
+
+PROMOTING_REPO="$TMPDIR_ROOT/promoting-cleanup"
+mkdir -p "$PROMOTING_REPO/.scratch/feature/issues"
+write_contract "$PROMOTING_REPO" retain-until-explicit-cleanup
+write_file_ticket "$PROMOTING_REPO/.scratch/feature/issues/PROMOTING-1.md" PROMOTING-1 promoting-run review-pending "" "First promoting draft"
+write_file_ticket "$PROMOTING_REPO/.scratch/feature/issues/PROMOTING-2.md" PROMOTING-2 promoting-run review-pending "" "Second promoting draft"
+adapter "$PROMOTING_REPO" file-per-ticket .scratch/feature/issues promoting-run register >/dev/null
+if ULTRA_PUBLICATION_FAIL_AFTER=1 adapter "$PROMOTING_REPO" file-per-ticket .scratch/feature/issues promoting-run promote >"$TMPDIR_ROOT/promoting.out" 2>&1; then
+  echo "injected promoting interruption unexpectedly succeeded" >&2
+  exit 1
+fi
+if adapter "$PROMOTING_REPO" file-per-ticket .scratch/feature/issues promoting-run cleanup --explicit >"$TMPDIR_ROOT/promoting-cleanup.out" 2>&1; then
+  echo "explicit cleanup deleted a partially promoted set" >&2
+  cancellation_safety_failures=1
+fi
+for ticket in PROMOTING-1 PROMOTING-2; do
+  if ! test -e "$PROMOTING_REPO/.scratch/feature/issues/$ticket.md"; then
+    echo "promoting cleanup deleted $ticket" >&2
+    cancellation_safety_failures=1
+  fi
+done
+grep -Fq 'cleanup requires journal phase review-pending, found promoting' "$TMPDIR_ROOT/promoting-cleanup.out"
+
+MIXED_STATE_REPO="$TMPDIR_ROOT/mixed-state-cleanup"
+mkdir -p "$MIXED_STATE_REPO/.scratch/feature/issues"
+write_contract "$MIXED_STATE_REPO" retain-until-explicit-cleanup
+write_file_ticket "$MIXED_STATE_REPO/.scratch/feature/issues/MIXED-1.md" MIXED-1 mixed-state-run review-pending "" "Mixed-state draft"
+adapter "$MIXED_STATE_REPO" file-per-ticket .scratch/feature/issues mixed-state-run register >/dev/null
+python3 - "$MIXED_STATE_REPO/.scratch/feature/issues/MIXED-1.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(
+    path.read_text(encoding="utf-8").replace(
+        "Status: review-pending", "Status: ready-for-agent", 1
+    ),
+    encoding="utf-8",
+)
+PY
+if adapter "$MIXED_STATE_REPO" file-per-ticket .scratch/feature/issues mixed-state-run cleanup --explicit >"$TMPDIR_ROOT/mixed-state-cleanup.out" 2>&1; then
+  echo "explicit cleanup deleted a non-review-pending member" >&2
+  cancellation_safety_failures=1
+fi
+if ! test -e "$MIXED_STATE_REPO/.scratch/feature/issues/MIXED-1.md"; then
+  echo "mixed-state cleanup deleted MIXED-1" >&2
+  cancellation_safety_failures=1
+fi
+grep -Fq 'cleanup requires every run member to be review-pending' "$TMPDIR_ROOT/mixed-state-cleanup.out"
+test "$cancellation_safety_failures" -eq 0
+
 # A configured safe alternative is operational rather than descriptive: the
 # adapter reads the managed contract and cleans only the validated named run.
 AUTO_CLEAN_REPO="$TMPDIR_ROOT/auto-clean"
@@ -212,12 +281,31 @@ if adapter "$UNKNOWN_POLICY_REPO" file-per-ticket .scratch/feature/issues unknow
 fi
 grep -Fq 'unsupported cancellation policy' "$TMPDIR_ROOT/unknown-policy.out"
 test -e "$UNKNOWN_POLICY_REPO/.scratch/feature/issues/UNKNOWN-1.md"
+if adapter "$UNKNOWN_POLICY_REPO" file-per-ticket .scratch/feature/issues unknown-run cleanup --explicit >"$TMPDIR_ROOT/unknown-policy-explicit.out" 2>&1; then
+  echo "explicit cleanup bypassed an unknown cancellation policy" >&2
+  exit 1
+fi
+grep -Fq 'unsupported cancellation policy' "$TMPDIR_ROOT/unknown-policy-explicit.out"
+test -e "$UNKNOWN_POLICY_REPO/.scratch/feature/issues/UNKNOWN-1.md"
 printf 'Publication strategy: remote-review-pending\nCancellation policy: delete-on-cancel\n' >"$UNKNOWN_POLICY_REPO/docs/agents/ultra-tracker.md"
 if adapter "$UNKNOWN_POLICY_REPO" file-per-ticket .scratch/feature/issues unknown-run cleanup >"$TMPDIR_ROOT/wrong-strategy.out" 2>&1; then
   echo "non-local publication strategy unexpectedly authorized deletion" >&2
   exit 1
 fi
 grep -Fq 'must select local-review-pending exactly once' "$TMPDIR_ROOT/wrong-strategy.out"
+test -e "$UNKNOWN_POLICY_REPO/.scratch/feature/issues/UNKNOWN-1.md"
+if adapter "$UNKNOWN_POLICY_REPO" file-per-ticket .scratch/feature/issues unknown-run cleanup --explicit >"$TMPDIR_ROOT/wrong-strategy-explicit.out" 2>&1; then
+  echo "explicit cleanup bypassed a non-local publication strategy" >&2
+  exit 1
+fi
+grep -Fq 'must select local-review-pending exactly once' "$TMPDIR_ROOT/wrong-strategy-explicit.out"
+test -e "$UNKNOWN_POLICY_REPO/.scratch/feature/issues/UNKNOWN-1.md"
+printf 'Publication strategy: local-review-pending\nCancellation policy: delete-on-cancel\nCancellation policy: retain-until-explicit-cleanup\n' >"$UNKNOWN_POLICY_REPO/docs/agents/ultra-tracker.md"
+if adapter "$UNKNOWN_POLICY_REPO" file-per-ticket .scratch/feature/issues unknown-run cleanup --explicit >"$TMPDIR_ROOT/duplicate-policy-explicit.out" 2>&1; then
+  echo "explicit cleanup bypassed duplicate cancellation policies" >&2
+  exit 1
+fi
+grep -Fq 'must define exactly one machine-readable policy' "$TMPDIR_ROOT/duplicate-policy-explicit.out"
 test -e "$UNKNOWN_POLICY_REPO/.scratch/feature/issues/UNKNOWN-1.md"
 
 # One safely delimited tickets-file is mutated by exact section identity while

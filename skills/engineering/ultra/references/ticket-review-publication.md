@@ -94,5 +94,9 @@ Cancellation uses the managed contract's exact machine-readable policy.
 `retain-until-explicit-cleanup` keeps the named run `review-pending` unless
 cleanup is explicit; `delete-on-cancel` removes only that named run after the
 same exact membership and preimage validation. Missing, duplicate, or unknown
-policy values fail closed. Never silently switch representation or create a
-parallel long-lived draft.
+policy values and non-Local publication contracts fail closed even when cleanup
+is explicit. Explicit cleanup overrides only the retain choice, never contract
+validation. Cleanup requires both the journal and every member to remain
+exactly `review-pending`; a `promoting` or `promoted` run must be resumed rather
+than deleted. Never silently switch representation or create a parallel
+long-lived draft.

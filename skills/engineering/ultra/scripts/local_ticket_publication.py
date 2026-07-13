@@ -554,19 +554,25 @@ def inspect(repo: Path, representation: str, raw_location: str, run_id: str) -> 
 
 
 def cleanup(repo: Path, representation: str, raw_location: str, run_id: str, explicit: bool) -> dict:
-    if not explicit:
-        policy = configured_cancellation_policy(repo)
-        if policy == "retain-until-explicit-cleanup":
-            raise AdapterError("cancellation retains review-pending artifacts; cleanup requires --explicit")
     location = safe_location(repo, raw_location)
     path = journal_path(location, representation, run_id)
     with mutation_lock(location, representation):
+        policy = configured_cancellation_policy(repo)
+        if not explicit and policy == "retain-until-explicit-cleanup":
+            raise AdapterError("cancellation retains review-pending artifacts; cleanup requires --explicit")
         location, tickets, data = validate_against_journal(
             repo, representation, raw_location, run_id
         )
-        if data.get("phase") == "promoted":
-            raise AdapterError("refusing to cleanup a promoted Ticket set")
+        phase = data.get("phase")
+        if phase != "review-pending":
+            raise AdapterError(
+                f"cleanup requires journal phase review-pending, found {phase or '<missing>'}"
+            )
         selected = run_tickets(tickets, run_id)
+        if any(ticket.status != "review-pending" for ticket in selected):
+            raise AdapterError(
+                "cleanup requires every run member to be review-pending"
+            )
         if representation == "file-per-ticket":
             for ticket in selected:
                 if ticket.path.read_text(encoding="utf-8") != ticket.text:
