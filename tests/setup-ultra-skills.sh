@@ -28,6 +28,7 @@ configure() {
 }
 
 local_repo="$TMPDIR_ROOT/local"
+local_sections_repo="$TMPDIR_ROOT/local-sections"
 github_remote_repo="$TMPDIR_ROOT/github-remote"
 github_staging_repo="$TMPDIR_ROOT/github-staging"
 gitlab_remote_repo="$TMPDIR_ROOT/gitlab-remote"
@@ -38,7 +39,7 @@ reconfigured_repo="$TMPDIR_ROOT/reconfigured"
 unmanaged_repo="$TMPDIR_ROOT/unmanaged"
 missing_base_repo="$TMPDIR_ROOT/missing-base"
 
-for repo in "$local_repo" "$github_remote_repo" "$github_staging_repo" "$gitlab_remote_repo" "$gitlab_staging_repo" "$other_repo" "$other_invalid_repo" "$reconfigured_repo" "$unmanaged_repo"; do
+for repo in "$local_repo" "$local_sections_repo" "$github_remote_repo" "$github_staging_repo" "$gitlab_remote_repo" "$gitlab_staging_repo" "$other_repo" "$other_invalid_repo" "$reconfigured_repo" "$unmanaged_repo"; do
   init_repo "$repo"
 done
 
@@ -57,6 +58,9 @@ if grep -Fq '<!-- setup-ultra-skills:begin -->' "$local_repo/AGENTS.md"; then
 fi
 
 configure "$local_repo" local-markdown local-review-pending
+configure "$local_sections_repo" local-markdown local-review-pending \
+  --local-ticket-representation tickets-file \
+  --local-ticket-path .scratch/product/tickets.md
 configure "$github_remote_repo" github remote-review-pending
 configure "$github_staging_repo" github local-staging
 configure "$gitlab_remote_repo" gitlab remote-review-pending
@@ -102,11 +106,11 @@ grep -Fq 'Publication strategy: local-staging' "$TMPDIR_ROOT/reconfigure-preview
 grep -Fq 'Publication strategy: remote-review-pending' "$reconfigured_repo/docs/agents/ultra-tracker.md"
 configure "$reconfigured_repo" github local-staging
 
-python3 - "$REPO_ROOT" "$local_repo" "$github_remote_repo" "$github_staging_repo" "$gitlab_remote_repo" "$gitlab_staging_repo" "$other_repo" "$reconfigured_repo" "$unmanaged_repo" <<'PY'
+python3 - "$REPO_ROOT" "$local_repo" "$local_sections_repo" "$github_remote_repo" "$github_staging_repo" "$gitlab_remote_repo" "$gitlab_staging_repo" "$other_repo" "$reconfigured_repo" "$unmanaged_repo" <<'PY'
 from pathlib import Path
 import sys
 
-catalog, local, github_remote, github_staging, gitlab_remote, gitlab_staging, other, reconfigured, unmanaged = map(Path, sys.argv[1:])
+catalog, local, local_sections, github_remote, github_staging, gitlab_remote, gitlab_staging, other, reconfigured, unmanaged = map(Path, sys.argv[1:])
 
 skill = (catalog / "skills/engineering/setup-ultra-skills/SKILL.md").read_text(encoding="utf-8")
 metadata = (catalog / "skills/engineering/setup-ultra-skills/agents/openai.yaml").read_text(encoding="utf-8")
@@ -127,7 +131,7 @@ required_sections = (
     "Unsupported operations:",
 )
 
-for repo in (local, github_remote, github_staging, gitlab_remote, gitlab_staging, other, reconfigured, unmanaged):
+for repo in (local, local_sections, github_remote, github_staging, gitlab_remote, gitlab_staging, other, reconfigured, unmanaged):
     contract = (repo / "docs/agents/ultra-tracker.md").read_text(encoding="utf-8")
     instructions = (repo / "AGENTS.md").read_text(encoding="utf-8")
     for section in required_sections:
@@ -140,10 +144,24 @@ for repo in (local, github_remote, github_staging, gitlab_remote, gitlab_staging
 
 local_contract = (local / "docs/agents/ultra-tracker.md").read_text(encoding="utf-8")
 assert "Publication strategy: local-review-pending" in local_contract
+assert "Local Ticket representation: file-per-ticket" in local_contract
+assert "Local Ticket path: .scratch/<feature>/issues/<ticket-file>.md" in local_contract
 assert "Status: review-pending" in local_contract
 assert "Status: ready-for-agent" in local_contract
 assert "not a sixth global triage role" in local_contract
 assert "Keep review-pending files until explicit cleanup." in local_contract
+for field in (
+    "Stable identity:",
+    "Publication journal:",
+    "Claim safety:",
+):
+    assert field in local_contract
+
+sections_contract = (local_sections / "docs/agents/ultra-tracker.md").read_text(encoding="utf-8")
+assert "Local Ticket representation: tickets-file" in sections_contract
+assert "Local Ticket path: .scratch/product/tickets.md" in sections_contract
+assert "<!-- ultra-ticket:begin id=<Ticket-ID> -->" in sections_contract
+assert "heading- or title-based identity is unsafe" in sections_contract
 
 for repo in (github_remote, gitlab_remote):
     contract = (repo / "docs/agents/ultra-tracker.md").read_text(encoding="utf-8")

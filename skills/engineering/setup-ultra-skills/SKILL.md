@@ -27,9 +27,14 @@ known without changing project files.
 
 Use the base contract as evidence for one preset:
 
-- `local-markdown` uses `local-review-pending`. Formal Ticket files start in
-  `review-pending`, become `ready-for-agent` only after review, and remain on
-  cancellation until an explicit cleanup policy applies.
+- `local-markdown` uses `local-review-pending`. Select the base contract's
+  configured `file-per-ticket` or safely delimited `tickets-file`
+  representation and path. Formal Tickets start in `review-pending`, carry a
+  stable Ticket ID and publication-run identity, become `ready-for-agent` only
+  after complete-set review and promotion, and remain on cancellation until an
+  explicit cleanup policy applies. A tickets-file without exact section
+  markers, stable IDs, safe state mutation, blocker lookup, and
+  conflict-detecting Claim semantics is unsupported.
 - `github` or `gitlab` choose `remote-review-pending` when provisional remote
   Tickets are acceptable, or `local-staging` when the remote must contain only
   reviewed Tickets.
@@ -57,7 +62,9 @@ Render a draft with the bundled helper before any write. Replace
 ```text
 python3 <skill-dir>/scripts/configure.py \
   --repo . --preset <preset> --publication-strategy <strategy> \
-  --instructions <AGENTS.md-or-CLAUDE.md> [--custom-prose "..."]
+  --instructions <AGENTS.md-or-CLAUDE.md> \
+  [--local-ticket-representation <file-per-ticket|tickets-file>] \
+  [--local-ticket-path <configured-path>] [--custom-prose "..."]
 ```
 
 Show the generated `docs/agents/ultra-tracker.md`, the short managed pointer,

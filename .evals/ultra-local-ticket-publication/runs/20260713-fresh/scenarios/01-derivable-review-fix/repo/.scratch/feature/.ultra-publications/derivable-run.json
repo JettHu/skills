@@ -1,0 +1,15 @@
+{
+  "body_digests": {
+    "RECOVERY-BACKEND": "2ee27a0b0614c461e984fd0adb949b2187363b488bc7fb66b1f41368b750eacc",
+    "RECOVERY-FRONTEND": "abddb1f0db4c78d881f43ba8566c89228ff0bf1586461b48f417ec5166f4e804"
+  },
+  "location": ".scratch/feature/tickets.md",
+  "members": [
+    "RECOVERY-BACKEND",
+    "RECOVERY-FRONTEND"
+  ],
+  "phase": "promoted",
+  "representation": "tickets-file",
+  "run_id": "derivable-run",
+  "schema": "ultra-local-ticket-publication/v1"
+}

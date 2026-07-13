@@ -17,7 +17,7 @@ Use tracker verbs, not hard-coded frontmatter fields, so local markdown trackers
 - link branches, worktrees, commits, PRs, solve records, or validation runs
 - close completed issues
 
-Current mutation support is local markdown trackers, such as `.scratch/<feature>/issues/*.md` or `.scratch/<feature>/issue.md`. If the tracker is remote and no adapter is available, you may read issue context, but stop before claim/update/close operations and report that a remote tracker adapter is needed.
+Current mutation support is configured Local Markdown trackers, such as `.scratch/<feature>/issues/*.md`, `.scratch/<feature>/issue.md`, or safely delimited Ticket sections in a configured `tickets.md`. Read `docs/agents/ultra-tracker.md` before discovery when present. A tickets-file adapter requires exact machine-readable section boundaries, stable Ticket IDs, safe state mutation, blocker lookup, and conflict-detecting Claim semantics; otherwise fail closed without mutation. If the tracker is remote and no adapter is available, you may read issue context, but stop before claim/update/close operations and report that a remote tracker adapter is needed.
 
 Tracker updates should record state-relevant facts. Use the tracker state, labels, assignment, or project status for claim/progress when available. Use PRs, commits, branches, and CI/check runs for implementation and validation evidence, linking them from the issue when useful. Use issue comments or local issue notes for requirement clarification, concise blockers, human decisions, or completion notes only when that is the tracker's normal review surface. Keep batch logs and large command output in the final solve summary or validation artifacts.
 
@@ -161,17 +161,22 @@ A blocker reason explains a state transition; it is not a new state.
 
 Discovery must skip issues carrying an active `solve-in-progress` claim and report them as already claimed.
 
+`review-pending` is a Local Markdown Ultra adapter state, not a global triage role. It is never claimable through explicit selection or `--all`. A run-tagged Ticket is eligible only when its exact state is `ready-for-agent`, the configured publication journal is `promoted`, the complete registered set re-verifies unchanged and ready, blocker targets are resolved, and Claim metadata is free. A provisional Ticket carrying `solve-in-progress` is malformed provisional state, not an active Claim; report it and do not execute it.
+
 ## Workflow
 
 ### 1. Discover
 
 Select candidate issues from explicit ids, `--all`, or the message. Keep only issues in `ready-for-agent`.
 
+For configured Local Markdown publication runs, route both explicit and batch discovery through the adapter's complete-set Claim check. Do not infer readiness from a heading, filename, section title, or `Status: ready-for-agent` alone when `Publication Run` metadata is present.
+
 Report skipped issues with a short reason:
 
 - wrong state
 - has active `solve-in-progress`
 - stale claim needing manual/resume handling
+- `review-pending`, incomplete promotion, malformed publication metadata, or an unsafe tickets-file adapter
 
 ### 2. Claim
 
@@ -182,7 +187,7 @@ For every selected issue:
 - claim it by adding `solve-in-progress` and recording the intended branch/worktree through the tracker's existing machine-readable claim surface
 - create or adopt the assigned branch/worktree after the claim succeeds
 
-Do this before code changes. For local markdown, preserve existing structured conventions such as `state`/`status`, `flags`/`labels`, and `branch`/`worktree`/`solve_branch`/`solve_worktree`. Batch or parallel solve requires a machine-readable claim surface. If no reliable claim surface exists, do not run unsafe batch claims; for an explicit single issue, proceed only when user intent is clear and report the claim limitation.
+Do this before code changes. For Local Markdown, preserve existing structured conventions such as `state`/`status`, `flags`/`labels`, `branch`/`worktree`/`solve_branch`/`solve_worktree`, stable Ticket IDs, and publication-run identities. A configured tickets-file must use its exact safe section markers; title- or heading-based section inference is never sufficient for mutation. Batch or parallel solve requires a machine-readable conflict-detecting Claim surface. Run-tagged Tickets additionally require the complete-set promoted journal gate before either single or batch Claim. If no reliable Claim surface exists, do not run unsafe mutation even for an explicit Ticket; report the adapter limitation.
 
 If branch/worktree creation or adoption fails after claiming, clean any partial resources and release the Claim when the failure leaves no useful finding or recovery value. When partial resources, evidence, or a durable blocker make the failed Attempt worth handing off, route it through Outcome Finalization as `blocked`; keep `solve-in-progress` only when the same assignment remains actively resumable.
 
@@ -506,7 +511,7 @@ This is a feedback loop, not a schema gate: `to-issues -> solve notices missing 
 
 Current mutation support is local markdown trackers. The conceptual contract for future remote tracker support is:
 
-For local markdown, detect and preserve the repo's existing issue conventions. Existing structured fields may include frontmatter keys such as `state`/`status`, `flags`/`labels`, comments/notes, or branch/worktree links. Use existing body-marker conventions only when they are already part of the tracker. Batch claims require a machine-readable claim surface.
+For Local Markdown, detect and preserve the repo's configured Ticket conventions. Existing structured fields may include frontmatter keys such as `state`/`status`, `flags`/`labels`, comments/notes, branch/worktree links, stable Ticket IDs, and publication-run identities. Use existing body-marker conventions only when they are already part of the tracker. A configured tickets-file must use exact safe section markers; title- or heading-based inference is never sufficient for mutation. Batch claims require a machine-readable conflict-detecting Claim surface. Run-tagged Tickets additionally require the complete-set promoted journal gate before either single or batch Claim.
 
 - `list_ready_for_agent(filter)`
 - `read_issue(issue_id)`

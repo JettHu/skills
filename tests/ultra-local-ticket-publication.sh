@@ -1,0 +1,331 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+ADAPTER="$REPO_ROOT/skills/engineering/ultra/scripts/local_ticket_publication.py"
+TMPDIR_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ultra-local-publication.XXXXXX")"
+trap 'rm -rf "$TMPDIR_ROOT"' EXIT
+
+FILE_REPO="$TMPDIR_ROOT/file-per"
+SECTION_REPO="$TMPDIR_ROOT/tickets-file"
+mkdir -p "$FILE_REPO/.scratch/feature/issues" "$SECTION_REPO/.scratch/feature"
+
+write_file_ticket() {
+  local path="$1" id="$2" run="$3" status="$4" blockers="$5" title="$6"
+  python3 - "$path" "$id" "$run" "$status" "$blockers" "$title" <<'PY'
+from pathlib import Path
+import sys
+
+path, ticket_id, run_id, status, blockers, title = sys.argv[1:]
+Path(path).write_text(
+    f"Status: {status}\n"
+    f"Ticket ID: {ticket_id}\n"
+    f"Publication Run: {run_id}\n"
+    "Source Spec: docs/spec.md\n"
+    f"Blocked By: {blockers}\n"
+    "Flags:\n\n"
+    f"# {title}\n\n"
+    "## Acceptance criteria\n\n- [ ] independently verifiable\n",
+    encoding="utf-8",
+)
+PY
+}
+
+adapter() {
+  local repo="$1" representation="$2" location="$3" run="$4" action="$5"
+  shift 5
+  python3 "$ADAPTER" "$action" \
+    --repo "$repo" --representation "$representation" \
+    --location "$location" --run-id "$run" "$@"
+}
+
+write_file_ticket "$FILE_REPO/.scratch/feature/issues/T-1.md" T-1 review-fix-run review-pending "" "Oversized draft"
+write_file_ticket "$FILE_REPO/.scratch/feature/issues/T-2.md" T-2 review-fix-run review-pending T-1 "Dependent draft"
+adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run register >/dev/null
+
+# A read-only review can cause a derivable split/blocker repair. The main Agent
+# changes the same formal set and must explicitly re-register membership.
+write_file_ticket "$FILE_REPO/.scratch/feature/issues/T-3.md" T-3 review-fix-run review-pending T-1 "Reviewer-derived split"
+write_file_ticket "$FILE_REPO/.scratch/feature/issues/T-2.md" T-2 review-fix-run review-pending T-3 "Corrected blocker"
+if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run register >"$TMPDIR_ROOT/membership.out" 2>&1; then
+  echo "membership drift registered without explicit review-fix authorization" >&2
+  exit 1
+fi
+adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run register --allow-membership-change >/dev/null
+
+# Concurrent content changes fail before any promotion mutation.
+printf '\nconcurrent mutation\n' >>"$FILE_REPO/.scratch/feature/issues/T-3.md"
+before_concurrent="$(sha256sum "$FILE_REPO/.scratch/feature/issues/T-1.md" | cut -d' ' -f1)"
+if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run promote >"$TMPDIR_ROOT/concurrent.out" 2>&1; then
+  echo "concurrent Ticket change unexpectedly promoted" >&2
+  exit 1
+fi
+after_concurrent="$(sha256sum "$FILE_REPO/.scratch/feature/issues/T-1.md" | cut -d' ' -f1)"
+test "$before_concurrent" = "$after_concurrent"
+grep -Fq 'changed after review registration' "$TMPDIR_ROOT/concurrent.out"
+python3 - "$FILE_REPO/.scratch/feature/issues/T-3.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+path.write_text(path.read_text(encoding="utf-8").replace("\nconcurrent mutation\n", ""), encoding="utf-8")
+PY
+adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run register >/dev/null
+
+# Mid-promotion interruption leaves the journal in `promoting`; even a member
+# already carrying ready state is not claimable. Resumption is idempotent.
+if ULTRA_PUBLICATION_FAIL_AFTER=1 adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run promote >"$TMPDIR_ROOT/interrupted.out" 2>&1; then
+  echo "injected interruption unexpectedly succeeded" >&2
+  exit 1
+fi
+adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run inspect >"$TMPDIR_ROOT/interrupted.json"
+python3 - "$TMPDIR_ROOT/interrupted.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["phase"] == "promoting"
+assert data["claimable"] == []
+assert set(data["statuses"].values()) == {"review-pending", "ready-for-agent"}
+PY
+if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim-check --ticket-id T-1 >/dev/null 2>&1; then
+  echo "partial set became claimable" >&2
+  exit 1
+fi
+adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run promote >/dev/null
+adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run promote >/dev/null
+adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim-check --ticket-id T-1 >/dev/null
+if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim-check --ticket-id T-2 >/dev/null 2>&1; then
+  echo "blocked Ticket became claimable" >&2
+  exit 1
+fi
+adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim --ticket-id T-1 >/dev/null
+if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim --ticket-id T-1 >/dev/null 2>&1; then
+  echo "conflicting second Claim unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -Fq 'Flags: solve-in-progress' "$FILE_REPO/.scratch/feature/issues/T-1.md"
+grep -Fq 'Status: ready-for-agent' "$FILE_REPO/.scratch/feature/issues/T-1.md"
+python3 - "$FILE_REPO/.scratch/feature/issues/T-1.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace("Status: ready-for-agent", "Status: completed", 1)
+text = text.replace("Flags: solve-in-progress", "Flags:", 1)
+path.write_text(text, encoding="utf-8")
+PY
+adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim --ticket-id T-3 >/dev/null
+python3 - "$FILE_REPO/.scratch/feature/issues/T-3.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace("Status: ready-for-agent", "Status: completed", 1)
+text = text.replace("Flags: solve-in-progress", "Flags:", 1)
+path.write_text(text, encoding="utf-8")
+PY
+adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim-check --ticket-id T-2 >/dev/null
+python3 - "$FILE_REPO/.scratch/feature/issues/T-2.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+path.write_text(
+    path.read_text(encoding="utf-8").replace("Status: ready-for-agent", "Status: needs-info", 1),
+    encoding="utf-8",
+)
+PY
+adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run inspect >/dev/null
+if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim-check --ticket-id T-2 >/dev/null 2>&1; then
+  echo "needs-info Ticket unexpectedly became claimable" >&2
+  exit 1
+fi
+
+# Frontmatter State/Labels aliases preserve their configured field spelling for
+# promotion and conflict-detecting Claim.
+ALIAS_REPO="$TMPDIR_ROOT/alias-file-per"
+mkdir -p "$ALIAS_REPO/.scratch/feature/issues"
+python3 - "$ALIAS_REPO/.scratch/feature/issues/A-1.md" <<'PY'
+from pathlib import Path
+import sys
+Path(sys.argv[1]).write_text("""---
+State: review-pending
+Ticket ID: A-1
+Publication Run: alias-run
+Source Spec: docs/spec.md
+Blocked By: []
+Labels: []
+---
+
+# Alias Ticket
+""", encoding="utf-8")
+PY
+adapter "$ALIAS_REPO" file-per-ticket .scratch/feature/issues alias-run register >/dev/null
+adapter "$ALIAS_REPO" file-per-ticket .scratch/feature/issues alias-run promote >/dev/null
+adapter "$ALIAS_REPO" file-per-ticket .scratch/feature/issues alias-run claim --ticket-id A-1 >/dev/null
+grep -Fq 'State: ready-for-agent' "$ALIAS_REPO/.scratch/feature/issues/A-1.md"
+grep -Fq 'Labels: solve-in-progress' "$ALIAS_REPO/.scratch/feature/issues/A-1.md"
+
+# Cancellation retains formal artifacts by default. Explicit cleanup is scoped
+# to the named provisional run and cannot delete a promoted run.
+write_file_ticket "$FILE_REPO/.scratch/feature/issues/C-1.md" C-1 cancel-run review-pending "" "Cancelled draft"
+adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues cancel-run register >/dev/null
+cancel_before="$(sha256sum "$FILE_REPO/.scratch/feature/issues/C-1.md" | cut -d' ' -f1)"
+if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues cancel-run cleanup >"$TMPDIR_ROOT/cancel.out" 2>&1; then
+  echo "default cancellation unexpectedly deleted artifacts" >&2
+  exit 1
+fi
+test -f "$FILE_REPO/.scratch/feature/issues/C-1.md"
+test "$cancel_before" = "$(sha256sum "$FILE_REPO/.scratch/feature/issues/C-1.md" | cut -d' ' -f1)"
+adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues cancel-run cleanup --explicit >/dev/null
+test ! -e "$FILE_REPO/.scratch/feature/issues/C-1.md"
+if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run cleanup --explicit >/dev/null 2>&1; then
+  echo "promoted run unexpectedly cleaned" >&2
+  exit 1
+fi
+
+# One safely delimited tickets-file is mutated by exact section identity while
+# unrelated content is preserved.
+python3 - "$SECTION_REPO/.scratch/feature/tickets.md" <<'PY'
+from pathlib import Path
+import sys
+Path(sys.argv[1]).write_text("""# Project Tickets
+
+Unrelated introduction stays byte-for-byte.
+
+<!-- ultra-ticket:begin id=S-1 -->
+Status: review-pending
+Ticket ID: S-1
+Publication Run: section-run
+Source Spec: docs/spec.md
+Blocked By:
+Flags:
+
+## Ticket S-1
+
+Independent acceptance.
+<!-- ultra-ticket:end -->
+
+<!-- ultra-ticket:begin id=S-2 -->
+Status: review-pending
+Ticket ID: S-2
+Publication Run: section-run
+Source Spec: docs/spec.md
+Blocked By: S-1
+Flags:
+
+## Ticket S-2
+
+Dependent acceptance.
+<!-- ultra-ticket:end -->
+
+<!-- ultra-ticket:begin id=S-3 -->
+State: review-pending
+Ticket ID: S-3
+Publication Run: second-section-run
+Source Spec: docs/spec.md
+Blocked By:
+Labels:
+
+## Ticket S-3
+
+Independent second-run acceptance.
+<!-- ultra-ticket:end -->
+
+Unrelated footer stays byte-for-byte.
+""", encoding="utf-8")
+PY
+mkdir -p "$SECTION_REPO/.scratch/feature/.ultra-publications"
+touch "$SECTION_REPO/.scratch/feature/.ultra-publications/.adapter.lock"
+adapter "$SECTION_REPO" tickets-file .scratch/feature/tickets.md section-run register >/dev/null
+adapter "$SECTION_REPO" tickets-file .scratch/feature/tickets.md second-section-run register >/dev/null
+adapter "$SECTION_REPO" tickets-file .scratch/feature/tickets.md section-run promote >"$TMPDIR_ROOT/section-promote.out" &
+section_pid=$!
+adapter "$SECTION_REPO" tickets-file .scratch/feature/tickets.md second-section-run promote >"$TMPDIR_ROOT/second-section-promote.out" &
+second_section_pid=$!
+wait "$section_pid"
+wait "$second_section_pid"
+grep -Fq 'Unrelated introduction stays byte-for-byte.' "$SECTION_REPO/.scratch/feature/tickets.md"
+grep -Fq 'Unrelated footer stays byte-for-byte.' "$SECTION_REPO/.scratch/feature/tickets.md"
+test "$(grep -Fc 'Status: ready-for-agent' "$SECTION_REPO/.scratch/feature/tickets.md")" -eq 2
+grep -Fq 'State: ready-for-agent' "$SECTION_REPO/.scratch/feature/tickets.md"
+adapter "$SECTION_REPO" tickets-file .scratch/feature/tickets.md section-run claim-check --ticket-id S-1 >/dev/null
+adapter "$SECTION_REPO" tickets-file .scratch/feature/tickets.md second-section-run claim --ticket-id S-3 >/dev/null
+grep -Fq 'Labels: solve-in-progress' "$SECTION_REPO/.scratch/feature/tickets.md"
+
+# Unsafe tickets-file adapters fail closed without changing any byte.
+for kind in duplicate missing-status nested unresolved heading-only mixed-identity; do
+  repo="$TMPDIR_ROOT/unsafe-$kind"
+  mkdir -p "$repo/.scratch/feature"
+  python3 - "$repo/.scratch/feature/tickets.md" "$kind" <<'PY'
+from pathlib import Path
+import sys
+path, kind = Path(sys.argv[1]), sys.argv[2]
+base = """# Tickets
+<!-- ultra-ticket:begin id=U-1 -->
+Status: review-pending
+Ticket ID: U-1
+Publication Run: unsafe-run
+Source Spec: docs/spec.md
+Blocked By:
+Flags:
+
+## Ticket U-1
+<!-- ultra-ticket:end -->
+"""
+if kind == "duplicate":
+    text = base + base.replace("# Tickets\n", "")
+elif kind == "missing-status":
+    text = base.replace("Status: review-pending\n", "")
+elif kind == "nested":
+    text = base.replace("Status: review-pending", "<!-- ultra-ticket:begin id=U-2 -->\nStatus: review-pending")
+elif kind == "unresolved":
+    text = base.replace("Blocked By:\n", "Blocked By: DOES-NOT-EXIST\n")
+elif kind == "mixed-identity":
+    text = base + "\n## Ticket unsafe title-only sibling\n\nStatus: review-pending\n"
+else:
+    text = "# Tickets\n\n## Ticket inferred only from title\n\nStatus: review-pending\n"
+path.write_text(text, encoding="utf-8")
+PY
+  unsafe_before="$(sha256sum "$repo/.scratch/feature/tickets.md" | cut -d' ' -f1)"
+  if adapter "$repo" tickets-file .scratch/feature/tickets.md unsafe-run register >"$TMPDIR_ROOT/unsafe-$kind.out" 2>&1; then
+    echo "unsafe tickets-file fixture passed: $kind" >&2
+    exit 1
+  fi
+  test "$unsafe_before" = "$(sha256sum "$repo/.scratch/feature/tickets.md" | cut -d' ' -f1)"
+done
+
+if adapter "$FILE_REPO" file-per-ticket ../outside review-fix-run inspect >"$TMPDIR_ROOT/escape.out" 2>&1; then
+  echo "path escape unexpectedly accepted" >&2
+  exit 1
+fi
+
+python3 - "$REPO_ROOT" <<'PY'
+from pathlib import Path
+import sys
+
+repo = Path(sys.argv[1])
+core = (repo / "skills/engineering/ultra/SKILL.md").read_text(encoding="utf-8")
+reference = (repo / "skills/engineering/ultra/references/ticket-review-publication.md").read_text(encoding="utf-8")
+solve = (repo / "skills/engineering/ultra/solve.md").read_text(encoding="utf-8")
+setup = (repo / "skills/engineering/setup-ultra-skills/SKILL.md").read_text(encoding="utf-8")
+
+for text in (
+    "allocate or resume its stable publication-run identity",
+    "rediscover the complete formal set by publication-run identity",
+    "independent acceptance, context-window sizing, validation, source pointers, and true blocker edges",
+    "only the fully verified set becomes `ready-for-agent`",
+):
+    assert text in core, text
+for text in (
+    "The approved Spec or approved conversation already authorizes ordinary Ticket",
+    "conversation-only review is not a successful tracker mutation",
+    "journal `promoting`",
+    "A provisional Ticket carrying",
+):
+    assert text in reference, text
+assert "never claimable through explicit selection or `--all`" in solve
+assert "title- or heading-based section inference is never sufficient" in solve
+assert "safely delimited `tickets-file`" in setup
+assert "remote Tickets" not in reference, "Local Markdown reference drifted into remote publication mechanics"
+PY
+
+python3 -m py_compile "$ADAPTER"
+echo "ultra Local Markdown Ticket publication fixture passed"

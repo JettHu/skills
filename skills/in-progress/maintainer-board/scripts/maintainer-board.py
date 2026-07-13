@@ -61,6 +61,25 @@ def find_solve_records_helper():
     return None
 
 
+def find_local_publication_helper():
+    for parent in Path(__file__).resolve().parents:
+        helper_path = parent / "skills/engineering/ultra/scripts/local_ticket_publication.py"
+        if helper_path.is_file():
+            return helper_path
+    return None
+
+
+def load_local_publication_helper():
+    helper_path = find_local_publication_helper()
+    if not helper_path:
+        return None
+    spec = importlib.util.spec_from_file_location("local_ticket_publication_helper", helper_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def normalize_key(key):
     key = key.strip().lower()
     key = re.sub(r"[^a-z0-9]+", "_", key)
@@ -202,6 +221,25 @@ def discover_issue_paths(repo):
     return sorted(paths)
 
 
+def local_ticket_contract(repo):
+    path = repo / "docs/agents/ultra-tracker.md"
+    if not path.is_file():
+        return None
+    fields = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        fields[normalize_key(key)] = value.strip().strip("`")
+    if fields.get("publication_strategy") != "local-review-pending":
+        return None
+    representation = fields.get("local_ticket_representation")
+    location = fields.get("local_ticket_path")
+    if representation not in {"file-per-ticket", "tickets-file"} or not location:
+        raise RuntimeError("Local Markdown publication contract lacks a safe representation or path")
+    return {"representation": representation, "location": location}
+
+
 def feature_from_path(repo, path):
     rel_parts = path.relative_to(repo).parts
     if len(rel_parts) >= 2 and rel_parts[0] == ".scratch":
@@ -209,12 +247,11 @@ def feature_from_path(repo, path):
     return ""
 
 
-def parse_issue(repo, path):
-    text = path.read_text(encoding="utf-8")
+def parse_issue_text(repo, path, text, identity="", metadata_format_hint=""):
     frontmatter, body = split_frontmatter(text)
     metadata = frontmatter if frontmatter is not None else parse_header_metadata(text.splitlines())
 
-    rel = str(path.relative_to(repo))
+    rel = str(path.relative_to(repo)) + (f"#{identity}" if identity else "")
     parent = as_list(metadata.get("parent"))
     if not parent:
         parent = paths_from_lines(
@@ -236,12 +273,15 @@ def parse_issue(repo, path):
     )
 
     flags = as_list(metadata.get("flags") or metadata.get("labels"), split_words=True)
-    status = str(metadata.get("status", "")).strip()
+    status = str(metadata.get("status") or metadata.get("state") or "").strip()
     issue = {
         "path": rel,
         "feature": feature_from_path(repo, path),
         "title": first_heading(body) or first_heading(text) or path.stem,
         "status": status,
+        "ticket_id": str(metadata.get("ticket_id") or metadata.get("id") or identity).strip(),
+        "publication_run": str(metadata.get("publication_run", "")).strip(),
+        "publication_promoted": False,
         "category": str(metadata.get("category", "")).strip(),
         "flags": flags,
         "created": str(metadata.get("created", "")).strip(),
@@ -251,16 +291,94 @@ def parse_issue(repo, path):
         "blocked_by": sorted(dict.fromkeys(blockers)),
         "solve_records": sorted(dict.fromkeys(solve_records)),
         "checklist": checklist_counts(body),
-        "metadata_format": "frontmatter" if frontmatter is not None else "header",
+        "metadata_format": metadata_format_hint or ("frontmatter" if frontmatter is not None else "header"),
+        "source_path": str(path.relative_to(repo)),
         "warnings": [],
     }
     issue["bucket"] = classify_issue(issue)
     return issue
 
 
+def parse_issue(repo, path):
+    return parse_issue_text(repo, path, path.read_text(encoding="utf-8"))
+
+
+def discover_issues(repo):
+    contract = local_ticket_contract(repo)
+    paths = set(discover_issue_paths(repo))
+    if contract and contract["representation"] == "file-per-ticket":
+        pattern = re.sub(r"<[^>]+>", "*", contract["location"])
+        pattern_path = Path(pattern)
+        if pattern_path.is_absolute() or ".." in pattern_path.parts:
+            raise RuntimeError("configured Local Ticket path escapes the repository")
+        paths.update(path for path in repo.glob(pattern) if path.is_file())
+    issues = [parse_issue(repo, path) for path in sorted(paths)]
+    if not contract or contract["representation"] != "tickets-file":
+        return issues, contract
+    helper = load_local_publication_helper()
+    if helper is None:
+        raise RuntimeError("Maintainer Board requires the Local Markdown publication adapter for tickets-file discovery")
+    pattern = re.sub(r"<[^>]+>", "*", contract["location"])
+    for path in sorted(repo.glob(pattern)):
+        try:
+            tickets = helper.load_tickets_file(path.resolve())
+        except helper.AdapterError as error:
+            raise RuntimeError(f"unsafe configured tickets-file {path.relative_to(repo)}: {error}") from error
+        for ticket in tickets:
+            issues.append(
+                parse_issue_text(
+                    repo,
+                    path,
+                    ticket.inner,
+                    identity=ticket.ticket_id,
+                    metadata_format_hint="tickets-file-section",
+                )
+            )
+    return issues, contract
+
+
+def apply_publication_gates(repo, issues, contract):
+    helper = load_local_publication_helper()
+    for issue in issues:
+        run_id = issue.get("publication_run")
+        if not run_id:
+            continue
+        if helper is None:
+            issue["warnings"].append(
+                {"code": "publication_adapter_missing", "message": "run-tagged Ticket cannot be verified"}
+            )
+            continue
+        representation = "tickets-file" if issue["metadata_format"] == "tickets-file-section" else "file-per-ticket"
+        source = repo / issue["source_path"]
+        location = source if representation == "tickets-file" else source.parent
+        try:
+            _location, tickets, journal = helper.validate_against_journal(
+                repo, representation, str(location.relative_to(repo)), run_id
+            )
+            selected = helper.run_tickets(tickets, run_id)
+            promoted = journal.get("phase") == "promoted" and all(
+                ticket.status
+                in {"ready-for-agent", "completed", "ready-for-human", "needs-info"}
+                for ticket in selected
+            )
+            issue["publication_promoted"] = promoted
+            if not promoted:
+                issue["warnings"].append(
+                    {"code": "publication_not_promoted", "message": "publication run is provisional or incomplete"}
+                )
+        except (helper.AdapterError, OSError) as error:
+            issue["warnings"].append(
+                {"code": "publication_invalid", "message": str(error)}
+            )
+
+
 def classify_issue(issue):
     flags = set(issue["flags"])
     status = issue["status"]
+    if status == "review-pending" or (
+        issue.get("publication_run") and not issue.get("publication_promoted")
+    ):
+        return "other"
     if "solve-in-progress" in flags:
         return "claimed_or_in_progress"
     if status in {"ready-for-human", "needs-info"}:
@@ -400,7 +518,10 @@ def load_solve_records_dashboard(repo):
 
 
 def build_snapshot(repo):
-    issues = [parse_issue(repo, path) for path in discover_issue_paths(repo)]
+    issues, contract = discover_issues(repo)
+    apply_publication_gates(repo, issues, contract)
+    for issue in issues:
+        issue["bucket"] = classify_issue(issue)
     issue_warnings = add_issue_git_warnings(repo, issues)
     issue_buckets = bucket_items(issues, ISSUE_BUCKETS)
     solve_records = load_solve_records_dashboard(repo)

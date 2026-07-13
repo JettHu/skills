@@ -73,6 +73,16 @@ def parse_args() -> argparse.Namespace:
         help="Recorded Local Markdown cancellation policy.",
     )
     parser.add_argument(
+        "--local-ticket-representation",
+        choices=("file-per-ticket", "tickets-file"),
+        default="file-per-ticket",
+        help="Configured Local Markdown storage representation.",
+    )
+    parser.add_argument(
+        "--local-ticket-path",
+        help="Configured Local Markdown directory pattern or tickets-file path.",
+    )
+    parser.add_argument(
         "--custom-prose",
         help="Required backend policy prose for the other preset.",
     )
@@ -117,6 +127,18 @@ def validate_policy(args: argparse.Namespace) -> None:
     args.publication_marker_prefix = require_single_line(
         args.publication_marker_prefix, "publication marker prefix"
     )
+    if args.preset == "local-markdown":
+        default_path = (
+            ".scratch/<feature>/issues/<ticket-file>.md"
+            if args.local_ticket_representation == "file-per-ticket"
+            else ".scratch/<feature>/tickets.md"
+        )
+        args.local_ticket_path = require_single_line(
+            args.local_ticket_path or default_path, "local Ticket path"
+        )
+        path_without_templates = re.sub(r"<[^>]+>", "placeholder", args.local_ticket_path)
+        if Path(path_without_templates).is_absolute() or ".." in Path(path_without_templates).parts:
+            raise ConfigurationError("local Ticket path must stay inside the repository")
     if args.preset == "other":
         if not (args.custom_prose and args.custom_prose.strip()):
             raise ConfigurationError("the other preset requires --custom-prose")
@@ -165,18 +187,34 @@ def staging_publication() -> list[str]:
     ]
 
 
-def local_publication(cancellation_policy: str) -> list[str]:
-    return [
+def local_publication(
+    cancellation_policy: str, representation: str, ticket_path: str
+) -> list[str]:
+    lines = [
         "## Ticket Review Publication",
         "",
         "Publication strategy: local-review-pending",
-        "Draft or review-pending representation: formal Ticket files are created in the configured issue directory with `Status: review-pending`.",
-        "Review update operation: reviewers and the main Agent revise the same formal files in place.",
-        "Publish or promote operation: after review passes, set the same Ticket files to `Status: ready-for-agent`.",
-        "Partial-publish recovery: interrupted review retains the formal files in `review-pending`; resumption re-reads and updates those files rather than creating replacements.",
-        f"Cancellation policy: {cancellation_policy}",
-        "",
+        f"Local Ticket representation: {representation}",
+        f"Local Ticket path: {ticket_path}",
+        "Stable identity: every formal Ticket carries unique `Ticket ID` and `Publication Run` metadata.",
+        "Draft or review-pending representation: formal Tickets are created at the configured path with `Status: review-pending`; they are the sole source of Ticket content.",
     ]
+    if representation == "tickets-file":
+        lines.append(
+            "Tickets-file section boundary: each Ticket is enclosed by `<!-- ultra-ticket:begin id=<Ticket-ID> -->` and `<!-- ultra-ticket:end -->`; heading- or title-based identity is unsafe."
+        )
+    lines.extend(
+        [
+            "Publication journal: `.ultra-publications/<run-id>.json` beside the configured surface records only complete-set membership, reviewed body digests, representation, location, and phase; it is not a Ticket draft.",
+            "Review update operation: reviewers are read-only; the main Agent revises the same formal Tickets in place and re-registers intentional membership changes under the same run.",
+            "Publish or promote operation: after exact-artifact review passes, atomically gate the run as promoting, update only configured status fields to `Status: ready-for-agent`, re-read the complete set, and gate it as promoted.",
+            "Partial-publish recovery: interrupted review or promotion retains the formal Tickets and journal; resumption re-discovers the same run, rejects concurrent body changes, and creates no replacements.",
+            "Claim safety: a run-tagged Ticket is claimable only when its exact status is `ready-for-agent`, its journal is `promoted`, every run member is ready and unchanged, blockers are resolved, and conflict-detecting Claim metadata is absent.",
+            f"Cancellation policy: {cancellation_policy}",
+            "",
+        ]
+    )
+    return lines
 
 
 def custom_publication(policy: dict[str, str]) -> list[str]:
@@ -241,7 +279,11 @@ def render_contract(args: argparse.Namespace) -> str:
     elif args.publication_strategy == "local-staging":
         publication = staging_publication()
     elif args.publication_strategy == "local-review-pending":
-        publication = local_publication(args.cancellation_policy)
+        publication = local_publication(
+            args.cancellation_policy,
+            args.local_ticket_representation,
+            args.local_ticket_path,
+        )
     else:
         return "\n".join(
             common

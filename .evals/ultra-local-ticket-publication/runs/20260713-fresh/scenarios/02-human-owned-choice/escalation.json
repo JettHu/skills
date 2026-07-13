@@ -1,0 +1,19 @@
+{
+  "scenario": "02-human-owned-choice",
+  "run_id": "human-run",
+  "status": "needs-human-choice",
+  "unresolved_choices": [
+    {
+      "choice": "release owner",
+      "reason": "The approved Spec intentionally leaves release ownership undecided."
+    },
+    {
+      "choice": "release coordination mode",
+      "reason": "The approved Spec intentionally leaves coordinated versus independent release undecided."
+    }
+  ],
+  "publication_phase": "review-pending",
+  "claimable": false,
+  "promoted": false,
+  "next_action": "A human must choose the release owner and release coordination mode before review can complete and promotion can resume."
+}

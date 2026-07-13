@@ -1,0 +1,13 @@
+{
+  "body_digests": {
+    "CLIENT-RELEASE": "8364a520cbe3e2e92f1051b92dd0afdc2e52273a960af7865f1d8d39f0ac986e"
+  },
+  "location": ".scratch/feature/tickets.md",
+  "members": [
+    "CLIENT-RELEASE"
+  ],
+  "phase": "review-pending",
+  "representation": "tickets-file",
+  "run_id": "human-run",
+  "schema": "ultra-local-ticket-publication/v1"
+}

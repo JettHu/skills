@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 BOARD_SCRIPT="$REPO_ROOT/skills/in-progress/maintainer-board/scripts/maintainer-board.py"
 SOLVE_RECORDS_SCRIPT="$REPO_ROOT/skills/engineering/solve-records/scripts/solve-records.py"
+LOCAL_PUBLICATION_SCRIPT="$REPO_ROOT/skills/engineering/ultra/scripts/local_ticket_publication.py"
 TMPDIR_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_ROOT"' EXIT
 
@@ -45,6 +46,15 @@ mkdir -p "$REPO/.scratch/feature-a/execution-digests"
 mkdir -p "$REPO/.scratch/feature-a/solve-records"
 mkdir -p "$REPO/.scratch/feature-b"
 mkdir -p "$REPO/.scratch/solve-records"
+mkdir -p "$REPO/docs/agents"
+
+cat >"$REPO/docs/agents/ultra-tracker.md" <<'EOF'
+# Ultra Tracker Extension
+
+Publication strategy: local-review-pending
+Local Ticket representation: tickets-file
+Local Ticket path: .scratch/feature-a/tickets.md
+EOF
 
 cat >"$REPO/.scratch/feature-a/issues/01-ready.md" <<'EOF'
 Status: ready-for-agent
@@ -134,6 +144,43 @@ Created: 2026-07-02
 
 # Missing worktree issue
 EOF
+
+cat >"$REPO/.scratch/feature-a/issues/08-review-pending.md" <<'EOF'
+Status: review-pending
+Ticket ID: RP-1
+Publication Run: incomplete-run
+Source Spec: docs/spec.md
+Flags: solve-in-progress
+Category: feature
+Created: 2026-07-02
+
+# Review-pending must not be claimed
+EOF
+
+cat >"$REPO/.scratch/feature-a/tickets.md" <<'EOF'
+# Section Tickets
+
+<!-- ultra-ticket:begin id=TF-1 -->
+Status: review-pending
+Ticket ID: TF-1
+Publication Run: tickets-file-run
+Source Spec: docs/spec.md
+Blocked By:
+Category: feature
+Created: 2026-07-02
+
+## Ticket TF-1
+
+- [ ] section-backed acceptance
+<!-- ultra-ticket:end -->
+EOF
+
+python3 "$LOCAL_PUBLICATION_SCRIPT" register \
+  --repo "$REPO" --representation tickets-file \
+  --location .scratch/feature-a/tickets.md --run-id tickets-file-run >/dev/null
+python3 "$LOCAL_PUBLICATION_SCRIPT" promote \
+  --repo "$REPO" --representation tickets-file \
+  --location .scratch/feature-a/tickets.md --run-id tickets-file-run >/dev/null
 
 cat >"$REPO/.scratch/feature-b/issue.md" <<'EOF'
 ---
@@ -289,6 +336,8 @@ mkdir -p "$(dirname "$STANDALONE_SCRIPT")"
 cp "$BOARD_SCRIPT" "$STANDALONE_SCRIPT"
 mkdir -p "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/solve-records/scripts"
 cp "$SOLVE_RECORDS_SCRIPT" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/solve-records/scripts/solve-records.py"
+mkdir -p "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts"
+cp "$LOCAL_PUBLICATION_SCRIPT" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts/local_ticket_publication.py"
 python3 "$STANDALONE_SCRIPT" --repo "$REPO" --json >"$FALLBACK_JSON_OUT"
 
 if [[ "$DEFAULT_STDOUT" != "$DEFAULT_HTML_OUT" ]]; then
@@ -307,13 +356,14 @@ default_html = Path(sys.argv[3]).read_text(encoding="utf-8")
 fallback = json.loads(Path(sys.argv[4]).read_text(encoding="utf-8"))
 
 assert data["schema_version"] == "maintainer-board/v1"
-assert data["issues"]["count"] == 13
-assert data["issues"]["counts"]["ready_for_agent"] == 2
+assert data["issues"]["count"] == 15
+assert data["issues"]["counts"]["ready_for_agent"] == 3
 assert data["issues"]["counts"]["claimed_or_in_progress"] == 2
 assert data["issues"]["counts"]["needs_human"] == 1
 assert data["issues"]["counts"]["blocked_or_dependent"] == 1
 assert data["issues"]["counts"]["completed_with_solve_record"] == 1
 assert data["issues"]["counts"]["completed_without_solve_record"] == 6
+assert data["issues"]["counts"]["other"] == 1
 assert "Execution Digest: Must not be discovered" not in {
     issue["title"]
     for bucket in data["issues"]["buckets"].values()
@@ -321,12 +371,16 @@ assert "Execution Digest: Must not be discovered" not in {
 }
 
 ready = data["issues"]["buckets"]["ready_for_agent"]
-assert {issue["metadata_format"] for issue in ready} == {"header", "frontmatter"}
+assert {issue["metadata_format"] for issue in ready} == {"header", "frontmatter", "tickets-file-section"}
 
 claimed = data["issues"]["buckets"]["claimed_or_in_progress"]
 warnings = [warning["code"] for issue in claimed for warning in issue["warnings"]]
 assert "missing_solve_branch" in warnings
 assert "missing_solve_worktree" in warnings
+assert all(issue["title"] != "Review-pending must not be claimed" for issue in ready + claimed)
+provisional = data["issues"]["buckets"]["other"][0]
+assert provisional["title"] == "Review-pending must not be claimed"
+assert "publication_invalid" in {warning["code"] for warning in provisional["warnings"]}
 
 completed = data["issues"]["buckets"]["completed_with_solve_record"][0]
 assert completed["solve_records"] == ["../solve-records/20260702-ready.md"]
@@ -375,6 +429,64 @@ assert "status:" not in html.lower()
 assert default_html == html
 assert fallback["issues"]["counts"] == data["issues"]["counts"]
 assert fallback["solve_records"]["counts"] == data["solve_records"]["counts"]
+PY
+
+CONFIGURED_FILE_REPO="$TMPDIR_ROOT/configured-file-per"
+git init -b master "$CONFIGURED_FILE_REPO" >/dev/null
+git -C "$CONFIGURED_FILE_REPO" config user.email "maintainer-board@example.test"
+git -C "$CONFIGURED_FILE_REPO" config user.name "Maintainer Board Test"
+mkdir -p "$CONFIGURED_FILE_REPO/docs/agents" "$CONFIGURED_FILE_REPO/.tracker/tickets"
+cat >"$CONFIGURED_FILE_REPO/docs/agents/ultra-tracker.md" <<'EOF'
+# Ultra Tracker Extension
+
+Publication strategy: local-review-pending
+Local Ticket representation: file-per-ticket
+Local Ticket path: .tracker/tickets/<ticket-file>.md
+EOF
+cat >"$CONFIGURED_FILE_REPO/.tracker/tickets/CONFIG-1.md" <<'EOF'
+State: review-pending
+Ticket ID: CONFIG-1
+Publication Run: configured-run
+Source Spec: docs/spec.md
+Blocked By:
+Labels:
+
+# Configured file-per Ticket
+EOF
+python3 "$LOCAL_PUBLICATION_SCRIPT" register \
+  --repo "$CONFIGURED_FILE_REPO" --representation file-per-ticket \
+  --location .tracker/tickets --run-id configured-run >/dev/null
+python3 "$BOARD_SCRIPT" --repo "$CONFIGURED_FILE_REPO" --json >"$TMPDIR_ROOT/configured-provisional.json"
+python3 "$LOCAL_PUBLICATION_SCRIPT" promote \
+  --repo "$CONFIGURED_FILE_REPO" --representation file-per-ticket \
+  --location .tracker/tickets --run-id configured-run >/dev/null
+python3 "$BOARD_SCRIPT" --repo "$CONFIGURED_FILE_REPO" --json >"$TMPDIR_ROOT/configured-promoted.json"
+python3 - "$CONFIGURED_FILE_REPO/.tracker/tickets/CONFIG-1.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+path.write_text(
+    path.read_text(encoding="utf-8").replace("State: ready-for-agent", "State: completed", 1),
+    encoding="utf-8",
+)
+PY
+python3 "$BOARD_SCRIPT" --repo "$CONFIGURED_FILE_REPO" --json >"$TMPDIR_ROOT/configured-completed.json"
+python3 - "$TMPDIR_ROOT/configured-provisional.json" "$TMPDIR_ROOT/configured-promoted.json" "$TMPDIR_ROOT/configured-completed.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+provisional = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+promoted = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+completed = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
+assert provisional["issues"]["counts"]["ready_for_agent"] == 0
+assert provisional["issues"]["counts"]["other"] == 1
+ready = promoted["issues"]["buckets"]["ready_for_agent"]
+assert len(ready) == 1
+assert ready[0]["path"] == ".tracker/tickets/CONFIG-1.md"
+terminal = completed["issues"]["buckets"]["completed_without_solve_record"]
+assert len(terminal) == 1
+assert terminal[0]["status"] == "completed"
 PY
 
 python3 -m py_compile "$BOARD_SCRIPT"
