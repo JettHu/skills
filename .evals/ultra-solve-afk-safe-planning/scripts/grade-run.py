@@ -145,6 +145,8 @@ def grade(repo: Path) -> Grade:
         return result
     result.check(not receipt.get("malformed"), "receipt passes canonical parser")
     result.check(receipt.get("outcome") == expected["outcome"], f"receipt outcome is {expected['outcome']}")
+    receipt_backlink = Path(receipt["path"]).name
+    result.check(issue_text.count(receipt_backlink) == 1, "Ticket links the selected receipt exactly once")
     if "receipt_id" in expected:
         result.check(receipt.get("id") == expected["receipt_id"], f"receipt id remains {expected['receipt_id']}")
     if "claim" in expected:
@@ -177,6 +179,7 @@ def grade(repo: Path) -> Grade:
         result.check(not digest.exists(), "no unnecessary external Digest")
 
     if expected["outcome"] == "candidate":
+        result.check("solve-in-progress" not in issue_text, "candidate handoff released the Claim")
         result.check(receipt.get("base") and receipt.get("head") and receipt.get("worktree"), "candidate has live Git fields")
         result.check(any(item.get("id") == receipt.get("id") for item in buckets["ready"] + buckets["manual"]), "candidate uses a candidate dashboard route")
         if "head" in expected:
@@ -186,7 +189,10 @@ def grade(repo: Path) -> Grade:
         if expected.get("check"):
             result.check(run_check(candidate_dir(repo, receipt)), "candidate check passes")
     else:
-        result.check(not any(receipt.get(field) for field in ("base", "base_sha", "head", "head_sha", "worktree")), "recovery receipt has no candidate-only fields")
+        result.check(
+            not any(receipt.get(field) for field in ("base", "base_sha", "head", "head_sha")),
+            "recovery receipt has no candidate-gate fields",
+        )
         result.check(any(item.get("id") == receipt.get("id") for item in buckets["recovery"]), "recovery receipt uses recovery dashboard route")
         for marker in expected.get("retained_markers", []):
             result.check(marker.lower() in receipt.get("retained_resources", "").lower(), f"retained resources contain {marker}")

@@ -75,6 +75,9 @@ def ticket(status: str, record, claim: bool, retained: str = "") -> str:
 def recovery_record(record_id: str, outcome: str, issue_path: str, retained: str, action: str, finding: str) -> str:
     ownership = "solve-owned; resume owns cleanup" if retained != "none" else "no retained resources; no cleanup needed"
     state = "closed" if outcome in {"abandoned", "superseded"} else "open"
+    resource_fields = ""
+    if retained != "none":
+        resource_fields = "branch: solve/fixture\nworktree: ../attempt-wt\ncommit: 3333333\n"
     return f"""---
 id: {record_id}
 kind: solve_record
@@ -84,7 +87,7 @@ issues:
   - {issue_path}
 created_at: 2026-07-13T12:00:00+08:00
 cleanup_done: false
----
+{resource_fields}---
 
 # Solve Record: {outcome}
 
