@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -55,6 +56,10 @@ def write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
@@ -66,6 +71,7 @@ def main() -> None:
         shutil.rmtree(output)
     output.mkdir(parents=True)
 
+    contract_inputs = {}
     for relative in (
         Path("skills/engineering/ultra/SKILL.md"),
         Path("skills/engineering/ultra/PROFILES.md"),
@@ -73,7 +79,14 @@ def main() -> None:
         input_path = source / relative
         if not input_path.is_file():
             raise SystemExit(f"missing skill input: {input_path}")
-        write(output / "skill-input" / relative, input_path.read_text(encoding="utf-8"))
+        contents = input_path.read_text(encoding="utf-8")
+        write(output / "skill-input" / relative, contents)
+        contract_inputs[str(relative)] = sha256(contents)
+    contract_sha256 = sha256(json.dumps(contract_inputs, sort_keys=True))
+    write(
+        output / "contract-manifest.json",
+        json.dumps({"inputs": contract_inputs, "contract_sha256": contract_sha256}, indent=2) + "\n",
+    )
 
     write(output / "scenarios.json", json.dumps(SCENARIOS, indent=2) + "\n")
     for scenario in SCENARIOS:
@@ -87,7 +100,7 @@ def main() -> None:
 
     write(
         output / "AGENT_PROMPT.md",
-        """# Fresh-session task\n\nFor every scenario, execute the requested route as a real `/ultra <target>` run: read only the supplied `skill-input/skills/engineering/ultra/SKILL.md` and `PROFILES.md`, then invoke the installed target skill when it is available. The fixture deliberately excludes its grader and expected results. Do not modify this prompt, `scenarios.json`, `TASK.md`, or `APPROVED_CONTEXT.md`.\n\nEvery output belongs in its existing directory under `<fixture-root>/scenarios/<scenario-id>/`; do not create a top-level `<fixture-root>/<scenario-id>/` directory. Write `result.json` there after each run with exactly `target`, `resolved_profile`, `code`, `research`, `review`, `human_choice`, and `review_iterations`. Record the route actually selected from the supplied runbook.\n\nFor `05-review-fix`, apply the full review-fix loop to that scenario's `artifact.md` against its read-only `APPROVED_CONTEXT.md`: repair all derivable defects, re-review the repaired artifact, and record two review iterations.\n\nFor `06-human-owned-choice`, write `escalation.json` in that scenario directory describing the unresolved release-owner choice and do not create an invented Ticket or blocker edge.\n\nWhen complete, do not run a grader.\n""",
+        """# Fresh-session task\n\nFor every scenario, execute the requested route as a real `/ultra <target>` run: read only the supplied `skill-input/skills/engineering/ultra/SKILL.md` and `PROFILES.md`, then invoke the installed target skill when it is available. The fixture deliberately excludes its grader and expected results. Do not modify this prompt, `contract-manifest.json`, `scenarios.json`, `TASK.md`, or `APPROVED_CONTEXT.md`.\n\nEvery output belongs in its existing directory under `<fixture-root>/scenarios/<scenario-id>/`; do not create a top-level `<fixture-root>/<scenario-id>/` directory. Write `routing-decision.json` there after each run with exactly `requested_route`, `resolved_profile`, `contract_sha256`, `code`, `research`, `review`, `human_choice`, `review_iterations`, and `evidence`. Copy `contract_sha256` from the manifest. `evidence` must contain the relevant verbatim profile row and condition or bridge rule from the supplied runbook/profile input.\n\nFor `05-review-fix`, apply the full review-fix loop to that scenario's `artifact.md` against its read-only `APPROVED_CONTEXT.md`: repair all derivable defects, re-review the repaired artifact, and record two review iterations in the routing decision.\n\nFor `06-human-owned-choice`, write `escalation.json` in that scenario directory describing the unresolved release-owner choice and do not create an invented Ticket or blocker edge.\n\nWhen complete, do not run a grader.\n""",
     )
     print(output)
 

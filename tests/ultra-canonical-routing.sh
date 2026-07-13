@@ -83,3 +83,67 @@ assert "final-state grader" in eval_record, "eval record must name final-state g
 
 print(f"ultra canonical routing fixture passed ({phase[2:]} phase)")
 PY
+
+fixture_root="$(mktemp -d)"
+trap 'rm -rf "$fixture_root"' EXIT
+python3 "$REPO_ROOT/.evals/ultra-canonical-routing/scripts/prepare-fixture.py" \
+  --source "$REPO_ROOT" --output "$fixture_root" >/dev/null
+python3 - "$REPO_ROOT" "$fixture_root" <<'PY'
+import importlib.util
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+repo = Path(sys.argv[1])
+fixture = Path(sys.argv[2])
+grader_path = repo / ".evals/ultra-canonical-routing/scripts/grade-run.py"
+spec = importlib.util.spec_from_file_location("canonical_routing_grader", grader_path)
+grader = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(grader)
+
+manifest = json.loads((fixture / "contract-manifest.json").read_text(encoding="utf-8"))
+for scenario_id, expected in grader.EXPECTED.items():
+    decision = {key: value for key, value in expected.items() if key != "evidence"}
+    decision["contract_sha256"] = manifest["contract_sha256"]
+    decision["evidence"] = [expected["evidence"]]
+    path = fixture / "scenarios" / scenario_id / "routing-decision.json"
+    path.write_text(json.dumps(decision, indent=2) + "\n", encoding="utf-8")
+
+review_artifact = fixture / "scenarios/05-review-fix/artifact.md"
+review_artifact.write_text(
+    """# Generated Tickets
+
+## Ticket: rename endpoint
+
+POST /v2/accounts/rename requires auth.required: true.
+
+Validation: pnpm test -- endpoint-rename
+""",
+    encoding="utf-8",
+)
+(fixture / "scenarios/06-human-owned-choice/escalation.json").write_text(
+    json.dumps({"choice": "release owner"}) + "\n", encoding="utf-8"
+)
+
+command = [sys.executable, str(grader_path), "--output", str(fixture), "--json"]
+quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+assert subprocess.run(command, check=False, **quiet).returncode == 0, "valid routing traces must grade"
+
+path = fixture / "scenarios/01-to-spec-bounded/routing-decision.json"
+decision = json.loads(path.read_text(encoding="utf-8"))
+decision["contract_sha256"] = "not-the-supplied-contract"
+path.write_text(json.dumps(decision, indent=2) + "\n", encoding="utf-8")
+assert subprocess.run(command, check=False, **quiet).returncode != 0, (
+    "grader must reject a routing trace not tied to the supplied contract"
+)
+
+decision["contract_sha256"] = manifest["contract_sha256"]
+path.write_text(json.dumps(decision, indent=2) + "\n", encoding="utf-8")
+profiles = fixture / "skill-input/skills/engineering/ultra/PROFILES.md"
+profiles.write_text(profiles.read_text(encoding="utf-8") + "\ntrace mutation\n", encoding="utf-8")
+assert subprocess.run(command, check=False, **quiet).returncode != 0, (
+    "grader must reject a trace whose supplied contract content changed"
+)
+PY

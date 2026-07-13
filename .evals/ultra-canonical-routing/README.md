@@ -3,7 +3,8 @@
 This fixture exercises the v1.1 canonical shaping profiles without altering a
 project tracker. It prepares seven isolated artifact directories, asks one fresh
 Agent session to apply the installed `ultra` routing contract, and grades final
-artifact and routing-decision state rather than response prose.
+artifacts plus routing-decision traces tied to the supplied contract rather
+than response prose or an untraceable self-report.
 
 ```bash
 python3 .evals/ultra-canonical-routing/scripts/prepare-fixture.py \
@@ -12,6 +13,7 @@ python3 .evals/ultra-canonical-routing/scripts/prepare-fixture.py \
 python3 .evals/ultra-canonical-routing/scripts/grade-run.py --output /tmp/ultra-canonical-routing
 ```
 
-The grader proves only final-state conformance. The run record identifies the
-fresh session separately; neither the fixture nor a local JSON result proves a
-model session on its own.
+The grader proves only final-state artifact and trace consistency with the
+supplied contract. The run record identifies the fresh session separately;
+neither the fixture nor its routing-decision JSON proves a model session or
+cryptographic execution provenance on its own.

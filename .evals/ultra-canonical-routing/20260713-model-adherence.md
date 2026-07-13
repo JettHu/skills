@@ -4,10 +4,11 @@ Date: 2026-07-13
 
 ## Evidence Type
 
-One fresh-session model-adherence run plus a deterministic final-state grader.
-The session executed each requested `/ultra <target>` route using the candidate
-core runbook and installed shaping targets. The grader checks routing decisions
-and generated artifacts, not response prose.
+One historical fresh-session model-adherence run plus a deterministic
+final-state grader. The session executed each requested `/ultra <target>` route
+using the candidate core runbook and installed shaping targets. Its original
+`result.json` outputs are not independent evidence that routing decisions were
+verified; they are retained only as historical run evidence.
 
 ## Fixture And Runtime
 
@@ -23,7 +24,7 @@ into the isolated fixture's `skill-input/` directory. The child session read
 that supplied input, executed the requested routes against isolated artifacts,
 and had no fixture grader or expected-result map in its supplied input.
 
-## Scenarios And Final-State Grade
+## Historical Scenarios And Final-State Grade
 
 | Scenario | Final-state assertion | Result |
 | --- | --- | --- |
@@ -42,7 +43,7 @@ python3 .evals/ultra-canonical-routing/scripts/grade-run.py \
   --output /tmp/ultra-canonical-routing-20260713-isolated --json
 ```
 
-It returned `{"passed": true, "failures": []}`.
+It returned `{"passed": true, "failures": []}` for the historical harness.
 
 ## Corrections During Evaluation
 
@@ -55,10 +56,26 @@ later real run found that the review-fix wording did not explicitly
 repair old `Issue` terminology. Core Ultra was updated to require canonical
 `Ticket` terminology, and the corrected fresh-session run above passed.
 
+## Routing-Trace Follow-Up
+
+The original harness accepted a self-reported `result.json` for route choices.
+That did not independently grade routing decisions, so this record does not
+claim it did. The current harness replaces it with a required
+`routing-decision.json` for every scenario. The grader recomputes the SHA-256
+identity of the supplied runbook/profile input, verifies each decision carries
+that identity, and requires verbatim rule evidence traceable to the input; its
+deterministic fixture test proves mismatched decision identity and mutated
+contract content both fail closed.
+
+A new fresh-session model run using the trace format remains follow-up work.
+Until it exists, use the trace grader as deterministic contract evidence and
+the historical session only as evidence that an Agent ran the preceding
+harness.
+
 ## Provenance Boundary
 
-The final-state grade proves the isolated artifacts satisfy the routing and
-review-fix assertions. The retained child-session reference is the in-session
-evidence that an Agent produced those artifacts. Neither local files nor the
-grader output cryptographically proves model identity or provides cross-model
-coverage.
+The current final-state grade proves isolated artifacts and routing-decision
+traces are consistent with the supplied contract. The retained child-session
+reference is in-session evidence only for the historical harness. Neither local
+files nor grader output cryptographically proves model identity, actual target
+execution, or cross-model coverage.
