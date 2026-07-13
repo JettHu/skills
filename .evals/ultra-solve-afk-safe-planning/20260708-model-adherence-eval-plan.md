@@ -19,7 +19,7 @@ This change affects multi-agent planning/review behavior, optional Agent Brief b
 
 Durable model-adherence eval plan, run record, and deterministic repository validation.
 
-A real model-adherence run was started in fresh temporary Git repositories on 2026-07-13. Its exact refs and prompt material, final-state grading, passed scenarios, and incomplete scenarios are recorded in [20260713-model-adherence-eval.md](20260713-model-adherence-eval.md). Grade final Ticket, Digest, and Solve Record state—not response prose—and do not treat its single-runtime coverage as a cross-model claim.
+A real model-adherence run was started in fresh temporary Git repositories on 2026-07-13. Its exact refs and prompt material, final-state grading, passed scenarios, and historical incomplete attempt are recorded in [20260713-model-adherence-eval.md](20260713-model-adherence-eval.md). The final-head stale-hint replay is recorded separately in [20260713-final-head-stale-hint.md](20260713-final-head-stale-hint.md). Grade final Ticket, Digest, and Solve Record state—not response prose—and do not treat its single-runtime coverage as a cross-model claim.
 
 ## Fixture Shape
 
@@ -87,6 +87,9 @@ The grader should inspect Ticket bodies and state, Digest presence/content/lifec
 - `bash tests/ultra-lenses.sh` - passed on 2026-07-10
 - `bash tests/solve-records.sh` - passed on 2026-07-10
 - `scripts/validate-skills.sh` - passed on 2026-07-10
+- `bash tests/ultra-solve-eval-harness.sh` - passed on 2026-07-13; it proves
+  the committed constructor/grader can build and distinguish an unfinalized
+  stale-hint fixture, but is not a model-adherence result by itself.
 - `git diff --check` - passed on 2026-07-10
 
 These deterministic results validate the installable-skill contract and final-state fixture logic. They are not evidence that a fresh model session executed the seven scenarios; retain that distinction until a real run records its model, settings, prompts, refs, and grader results.

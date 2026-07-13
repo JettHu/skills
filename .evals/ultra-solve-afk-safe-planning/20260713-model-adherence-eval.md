@@ -4,7 +4,9 @@ Date: 2026-07-13
 
 ## Scope And Model Settings
 
-- Treatment refs: initial `f3eb12b`, then corrected `b5d8c4f`.
+- Treatment refs: initial `f3eb12b`, then corrected `b5d8c4f`. The final
+  stale-hint replay uses `95ca1ab`, which commits the constructor and grader
+  used to create and grade that fixture.
 - Fixture roots: `/tmp/ultra-model-adherence-20260713*`; each scenario had an independent Git repository, base tag, and candidate worktree.
 - Prompt: the exact fixture prompt and evaluator supplements appear below. Each fresh session was told to read the embedded runbook and canonical receipt format, avoid merge/push/cleanup, and leave final state for grading.
 - Successful fresh sessions: Codex Desktop GPT-5 default child sessions; no model override was supplied by the evaluator. The child-session service does not expose a model-id or reasoning setting, so this record does not infer one.
@@ -51,8 +53,12 @@ The grader inspected final repository state rather than response prose:
 - `python3 <candidate-worktree>/scripts/check.py`
 - Ticket body, external Digest path, receipt frontmatter/body, live Git refs, candidate worktree cleanliness, and `git diff --check` where applicable.
 
-The fixture constructor was the local AFK-safe planning harness at
-`/Users/lingjie/workspace/jett-skills/.evals/ultra-solve-afk-safe-planning/scripts/prepare-fixture.py`, invoked with the named treatment ref. The first-deviation fixture added an approved local compatibility deviation before the session began; all changes were committed to that fixture's `eval-base` before the model ran.
+The committed fixture constructor and grader are
+`scripts/prepare-fixture.py` and `scripts/grade-run.py` beside this record;
+both are included at treatment `95ca1ab`. The constructor is invoked with the
+named treatment ref. The first-deviation fixture added an approved local
+compatibility deviation before the session began; all changes were committed to
+that fixture's `eval-base` before the model ran.
 
 ## Results
 
@@ -62,7 +68,8 @@ The fixture constructor was the local AFK-safe planning harness at
 | Cross-module planning and Pre-Edit review | `b5d8c4f` | Digest held strategy, surfaces, risks, validation, and an incorporated review finding; Ticket stayed a Work Order; candidate receipt had valid live refs and passed helper gate. Capacity was unavailable for actual subagents, so the session used the documented serial two-lens fallback. | Pass with fallback |
 | First compatibility deviation and handoff distillation | `b5d8c4f` | Session created an external Digest, distilled the decision into `## Notes`, and removed the non-resumable Digest. Ticket had no Digest section; candidate receipt passed the helper's live gate and the app check passed. Creation timing is supported by session evidence; final state intentionally retains no Digest. | Pass |
 | Meaningful human-owned stop | `b5d8c4f` | Ticket became `ready-for-human` with `semantic_conflict`; no app files changed; a no-resource `outcome: ready-for-human` receipt with resume action was classified in `recovery`. | Pass |
-| Stale Agent Brief hint | `b5d8c4f` | A fresh noninteractive session verified the deleted hint, changed the current receipt implementation, committed it, and the candidate worktree check passed. Terminal streaming interrupted before Ticket/receipt finalization, so no final-state candidate receipt was available to grade. | Incomplete — do not count as a pass |
+| Stale Agent Brief hint (initial) | `b5d8c4f` | A fresh noninteractive session verified the deleted hint, changed the current receipt implementation, committed it, and the candidate worktree check passed. Terminal streaming interrupted before Ticket/receipt finalization, so no final-state candidate receipt was available to grade. | Historical incomplete — superseded by the final-head replay |
+| Stale Agent Brief hint (final-head replay) | `95ca1ab` | A new fixture from the committed harness completed the Ticket and created a canonical candidate receipt. The committed grader passed all Ticket, receipt, dashboard, Git, deterministic-check, and forbidden-path assertions. | Pass — see [20260713-final-head-stale-hint.md](20260713-final-head-stale-hint.md) |
 
 ## Discovery And Correction
 
@@ -70,4 +77,9 @@ The first treatment (`f3eb12b`) completed the simple code change but created a l
 
 ## Interpretation
 
-This run replaces the prior plan-only claim with actual model-session and final-state evidence. It does **not** close the stale-hint scenario or prove true parallel fan-out, and it does not justify any cross-model claim. The originating candidate therefore remains `manual required` until a fresh stale-hint finalization run (and, if required for stronger assurance, an available-capacity fan-out run) is graded.
+This run replaces the prior plan-only claim with actual model-session and
+final-state evidence. The final-head replay closes the stale-hint scenario. It
+does not prove true parallel fan-out or justify any cross-model claim; the
+approved runbook permits the documented serial, capability-equivalent fallback
+when subagent capacity is unavailable, so that fallback is not a remaining
+candidate gate.
