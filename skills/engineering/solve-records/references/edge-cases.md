@@ -37,7 +37,10 @@ For a resume request:
    proposed resume. Missing candidate `base`, `head`, SHA, or worktree fields
    are not a defect in a recovery receipt that does not own them.
 3. Reclaim the Ticket through its tracker contract. Reuse the receipt only
-   when the same recovery context and retained resources remain valid.
+   when the same recovery context and retained resources remain valid. At the
+   next meaningful handoff, atomically replace its prior outcome-specific
+   fields and sections with the current canonical candidate or recovery
+   outcome. Repeated resumes keep one receipt and one Ticket backlink.
 4. If a clean restart is safer, close or supersede the old receipt before the
    new Attempt later creates its own meaningful-outcome receipt.
 

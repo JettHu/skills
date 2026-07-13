@@ -1,6 +1,6 @@
 interface:
   display_name: "Ultra Solve"
-  short_description: "Run ultra solve"
-  default_prompt: "Use $ultra-solve to execute ready-for-agent issues through ultra solve."
+  short_description: "Run outcome-aware ultra solve"
+  default_prompt: "Use $ultra-solve to execute ready-for-agent Tickets through candidate or recovery outcome receipts; Claim itself creates no receipt."
 policy:
   allow_implicit_invocation: false

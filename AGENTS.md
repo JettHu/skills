@@ -58,7 +58,7 @@ An eval should be executable by one Agent session end to end: create isolated te
 
 The `ultra-*` skills are thin wrapper entrypoints. Keep them explicit and delegation-only; put orchestration behavior in `skills/engineering/ultra/`.
 
-`/ultra solve` creates solve records only after finished, reviewable candidates exist. Failed required checks do not create initial solve records. `$solve-records` owns listing, explaining, merge/ship/land gates, record-only closure, and safe cleanup semantics.
+`/ultra solve` creates outcome Solve Records only when an Attempt reaches a meaningful handoff; Claim itself creates no receipt. Finished candidates become `candidate` receipts only after validation and Post-Execution Review, while substantive failed checks or stopped Attempts become recovery receipts and fully cleaned no-value Attempts remain recordless. `$solve-records` owns listing, explaining, candidate merge/ship/land gates, record-only closure, and safe outcome-specific cleanup semantics.
 
 Do not split `skills/engineering/ultra/solve.md` just because it is large. Before extracting reference-only material, evaluate the candidate split with concrete evidence:
 

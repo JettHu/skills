@@ -1,6 +1,6 @@
 ---
 name: ultra-solve
-description: Completion-friendly wrapper for /ultra solve.
+description: Completion-friendly wrapper for outcome-aware /ultra solve.
 disable-model-invocation: true
 ---
 

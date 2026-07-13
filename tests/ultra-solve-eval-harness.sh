@@ -24,6 +24,8 @@ assert [path.parent.parent.name for path in expectations] == [
     "04-stale-hint",
     "05-recovery-handoff",
     "06-no-digest-residue",
+    "07-failed-check-retained",
+    "08-resume-reuse",
 ]
 for path in expectations:
     repo = path.parent
@@ -35,12 +37,29 @@ for path in expectations:
     assert "Context:" not in issue
     assert "## Execution Digest" not in issue
     assert (repo / "skills/engineering/solve-records/scripts/solve-records.py").is_file()
+
+failed = run / "07-failed-check-retained/repo"
+failed_expectation = json.loads((failed / "EVAL_EXPECTATIONS.json").read_text(encoding="utf-8"))["expected"]
+assert failed_expectation["outcome"] == "blocked"
+assert failed_expectation["required_check_fails"] is True
+
+resume = run / "08-resume-reuse/repo"
+resume_expectation = json.loads((resume / "EVAL_EXPECTATIONS.json").read_text(encoding="utf-8"))["expected"]
+initial_receipt = resume / resume_expectation["initial_receipt_path"]
+assert "outcome: blocked" in initial_receipt.read_text(encoding="utf-8")
+assert resume_expectation["receipt_count"] == 1
+assert (run / "08-resume-reuse/resume-worktree").is_dir()
 PY
 
-STALE="$TMPDIR_ROOT/fixtures/04-stale-hint/repo"
-if python3 "$GRADER" "$STALE"; then
-  echo "base fixture unexpectedly passed" >&2
-  exit 1
-fi
+for BASE in \
+  "$TMPDIR_ROOT/fixtures/04-stale-hint/repo" \
+  "$TMPDIR_ROOT/fixtures/07-failed-check-retained/repo" \
+  "$TMPDIR_ROOT/fixtures/08-resume-reuse/repo"
+do
+  if python3 "$GRADER" "$BASE"; then
+    echo "base fixture unexpectedly passed: $BASE" >&2
+    exit 1
+  fi
+done
 
 echo "ultra solve eval harness fixture passed"

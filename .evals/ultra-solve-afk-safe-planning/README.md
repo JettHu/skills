@@ -16,9 +16,10 @@ python3 .evals/ultra-solve-afk-safe-planning/scripts/prepare-fixture.py \
   --treatment-ref <commit-sha>
 ```
 
-Use `--scenario all` for the six current-contract fixtures: simple direct
+Use `--scenario all` for the eight current-contract fixtures: simple direct
 execution, fan-out/Pre-Edit planning, first-deviation distillation, stale hint,
-meaningful recovery handoff, and no Digest residue.
+meaningful recovery handoff, no Digest residue, retained failed-check recovery,
+and same-context receipt reuse.
 
 Each generated `repo/EVAL_PROMPT.md` is the exact model prompt. Start a fresh
 model session in that fixture, send that prompt unchanged, and do not merge,
@@ -31,9 +32,10 @@ python3 .evals/ultra-solve-afk-safe-planning/scripts/grade-run.py \
   /tmp/ultra-solve-evals/20260713-ticket-boundaries/04-stale-hint/repo
 ```
 
-The grader reads Ticket state, external Digest lifecycle, current receipt
-shape/outcome/dashboard route through the embedded canonical helper, candidate
-Git evidence, stale-hint forbidden paths, and scenario checks. A base fixture
+The grader reads Ticket state and Claim flags, backlinks, external Digest
+lifecycle, current receipt shape/outcome/dashboard route through the embedded
+canonical helper, retained resources, candidate Git evidence, failed-check
+evidence, stale-hint forbidden paths, and same-receipt reuse. A base fixture
 must fail: passing requires a model session to leave a completed final state.
 
 After a real run, commit a dated report with the exact treatment SHA, run ID,

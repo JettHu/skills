@@ -43,9 +43,9 @@ The installer creates symlinks, so `git pull` in this repository updates install
 | --- | --- |
 | [`solve-records`](skills/engineering/solve-records/SKILL.md) | List and explain local Attempt receipts, safely advance candidate records, and surface recovery next actions. |
 | [`setup-ultra-skills`](skills/engineering/setup-ultra-skills/SKILL.md) | Configure the Ultra extension for an existing Matt tracker setup. |
-| [`ultra`](skills/engineering/ultra/SKILL.md) | Coordinate enhanced skill runs and the `/ultra solve` issue-to-candidate workflow. |
+| [`ultra`](skills/engineering/ultra/SKILL.md) | Coordinate enhanced skill runs and the `/ultra solve` Ticket-to-outcome-receipt workflow. |
 | [`ultra-diagnose`](skills/engineering/ultra-diagnose/SKILL.md) | Completion-friendly entry for `/ultra diagnose`. |
-| [`ultra-solve`](skills/engineering/ultra-solve/SKILL.md) | Completion-friendly entry for `/ultra solve`. |
+| [`ultra-solve`](skills/engineering/ultra-solve/SKILL.md) | Completion-friendly entry for outcome-aware `/ultra solve`. |
 | [`ultra-to-issues`](skills/engineering/ultra-to-issues/SKILL.md) | Completion-friendly entry for `/ultra to-issues`. |
 | [`ultra-to-prd`](skills/engineering/ultra-to-prd/SKILL.md) | Completion-friendly entry for `/ultra to-prd`. |
 

@@ -1,6 +1,6 @@
 ---
 name: ultra
-description: Multi-agent enhancement wrapper for agent skills and ultra subcommands. Adds parallel codebase exploration before and structured review after skill execution, and supports /ultra solve for AFK-ready issue execution. Use when user says "/ultra skill-name" or "/ultra solve", wants deeper analysis before a skill runs, wants multi-perspective review after, or wants to execute ready-for-agent issues. Examples — /ultra to-spec, /ultra diagnosing-bugs, /ultra to-tickets, /ultra solve --all.
+description: Multi-agent enhancement wrapper for agent skills and ultra subcommands. Adds parallel codebase exploration before and structured review after skill execution, and supports /ultra solve for AFK-ready Ticket execution with outcome receipts. Use when user says "/ultra skill-name" or "/ultra solve", wants deeper analysis before a skill runs, wants multi-perspective review after, or wants to execute ready-for-agent issues. Examples — /ultra to-spec, /ultra diagnosing-bugs, /ultra to-tickets, /ultra solve --all.
 ---
 
 # Ultra

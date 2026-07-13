@@ -1,6 +1,6 @@
 # Ultra Solve
 
-`/ultra solve` is a subcommand of `/ultra`. It picks up AFK-ready issues, coordinates execution worktrees, integrates results, validates the final branch, creates solve records for finished candidates, updates issue state, and optionally merges when the user explicitly asks for it.
+`/ultra solve` is a subcommand of `/ultra`. It picks up AFK-ready issues, coordinates execution worktrees, integrates results, validates finished candidates, and creates outcome Solve Records when an Attempt reaches a meaningful candidate or recovery handoff. Claim remains the temporary concurrency lock; it never creates a receipt. The command optionally merges eligible candidates when the user explicitly asks for it.
 
 It has its own state machine and coordination workflow, so handle it before normal target-skill profile lookup.
 
@@ -35,17 +35,18 @@ Tracker updates should record state-relevant facts. Use the tracker state, label
 
 ## Core Semantics
 
-`/ultra solve` is the coordinator. It must keep five surfaces consistent:
+`/ultra solve` is the coordinator. It must keep six surfaces consistent:
 
 - issue tracker state
 - group worktrees and branches
 - validation evidence
 - solve records
+- retained Attempt resources
 - candidate and landing branches
 
 Group worktrees produce candidate changes. The coordinator owns integration and merge. A group worktree must not merge directly into the target branch.
 
-Default completion, when no `--auto-merge` or merge/apply/ship/land intent is present, is a clean committed candidate branch plus a solve record. `head` is the candidate branch whose current head contains finished work. `base` is the landing branch the candidate is meant to enter later. Push, deploy, and cleanup happen only when the user's latest wording explicitly asks for them or when a later solve-record command advances the candidate.
+Default successful completion, when no `--auto-merge` or merge/apply/ship/land intent is present, is a clean committed candidate branch plus an `outcome: candidate` receipt. `head` is the candidate branch whose current head contains finished work. `base` is the landing branch the candidate is meant to enter later. A meaningful stopped Attempt instead creates the matching recovery receipt; a transient or fully cleaned no-value Attempt releases its Claim without leaving a record. Push, deploy, and cleanup happen only when the user's latest wording explicitly asks for them or when a later solve-record command advances the recorded outcome.
 
 Issues are assumed AFK-ready when they are in `ready-for-agent`: the issue body, acceptance criteria, and any agent brief are treated as approved input. Continue the batch unless the issue selection or merge target is ambiguous and cannot be inferred safely.
 
@@ -126,6 +127,7 @@ ready-for-agent
       -> completed
       -> ready-for-human
       -> needs-info
+      -> ready-for-agent
 ```
 
 State meanings:
@@ -135,13 +137,14 @@ State meanings:
 - `completed`: acceptance criteria are implemented and verified.
 - `ready-for-human`: semantic conflict, final validation failure, or other non-requirements blocker.
 - `needs-info`: core requirement cannot be inferred from the issue, code, or conversation.
+- `ready-for-agent`: also receives an abandoned or clean-restart Ticket that remains valid and claimable.
 
-Primary states and flags are separate. `ready-for-agent`, `completed`, `ready-for-human`, and `needs-info` are primary states. `solve-in-progress` is a temporary claim flag that may be stored as a label, flag, status metadata, or another tracker-specific convention. Record-worthy low-risk decisions belong in the active Execution Digest and then the outcome Solve Record, not in Ticket state or flags.
+Primary states, Claim flags, and receipt outcomes are separate. `ready-for-agent`, `completed`, `ready-for-human`, and `needs-info` are primary states. `solve-in-progress` is a temporary claim flag that may be stored as a label, flag, status metadata, or another tracker-specific convention. `candidate`, `blocked`, `needs-info`, `ready-for-human`, `abandoned`, and `superseded` are Solve Record outcomes; a recovery outcome does not add a new Ticket state. Record-worthy low-risk decisions belong in the active Execution Digest and then the outcome Solve Record, not in Ticket state or flags.
 
 Flag lifecycle:
 
 - Add `solve-in-progress` only after a claim succeeds.
-- Remove `solve-in-progress` when the issue reaches `completed`, `needs-info`, or `ready-for-human`, unless the branch/worktree is intentionally left as active resumable work for a human conflict resolution.
+- Remove `solve-in-progress` whenever the Attempt hands off and no actor remains actively assigned to resume the same retained resources and recovery context. Retain it only when the recovery next action is `resume`, the same assignment is intentionally still active, and the tracker contract supports a resumable Claim; otherwise a later resume must reclaim the Ticket.
 - If a stale `solve-in-progress` flag references a missing branch or worktree, inspect the issue history and branch refs. Resume, clear, or ask before mutating; do not silently discard it.
 
 When setting `ready-for-human` or `needs-info`, record a concise blocker reason when the tracker supports state-relevant notes:
@@ -181,7 +184,7 @@ For every selected issue:
 
 Do this before code changes. For local markdown, preserve existing structured conventions such as `state`/`status`, `flags`/`labels`, and `branch`/`worktree`/`solve_branch`/`solve_worktree`. Batch or parallel solve requires a machine-readable claim surface. If no reliable claim surface exists, do not run unsafe batch claims; for an explicit single issue, proceed only when user intent is clear and report the claim limitation.
 
-If branch/worktree creation or adoption fails after claiming, clear the claim when no resumable work exists. If resumable work exists, record a blocker reason and retain or clear `solve-in-progress` according to whether a human can resume from the linked branch/worktree.
+If branch/worktree creation or adoption fails after claiming, clean any partial resources and release the Claim when the failure leaves no useful finding or recovery value. When partial resources, evidence, or a durable blocker make the failed Attempt worth handing off, route it through Outcome Finalization as `blocked`; keep `solve-in-progress` only when the same assignment remains actively resumable.
 
 ### 3. Assess: Pre-Implementation Checkpoint
 
@@ -194,7 +197,7 @@ Classify the issue disposition:
 - `needs-info`: a core requirement cannot be inferred.
 - `ready-for-human`: the issue is really an unapproved architecture, product, security, data, or significant UX decision.
 
-If an issue becomes `needs-info` or `ready-for-human`, update its state, record the blocker reason, remove `solve-in-progress` unless resumable work is intentionally left active, and continue with the rest of the batch.
+If an issue becomes `needs-info` or `ready-for-human`, record the blocker reason and route the Attempt through Outcome Finalization. A substantive assessment with durable findings creates the matching recovery receipt; an immediate no-value stop releases its Claim without a record. Continue with the rest of the batch after the Ticket, Claim, resources, and backlink reflect that disposition.
 
 The main Agent records, without requesting approval:
 
@@ -352,7 +355,7 @@ Suggested names:
 Merge or cherry-pick committed, locally validated group branches into integration in dependency order. Each group worktree must be clean before integration starts.
 
 - Mechanical conflicts: the coordinator may resolve them.
-- Semantic conflicts: stop integration for the affected issues, set them `ready-for-human`, and do not force a merge.
+- Semantic conflicts: stop integration for the affected issues and route each meaningful stopped Attempt through Outcome Finalization as `ready-for-human`; the remaining batch may continue without those issues.
 - Any mechanical conflict resolution or integration-only fix must be committed on the integration branch before final validation is considered complete.
 
 The integration stage exists to catch hidden coupling between parallel work: shared types, migrations, router registration, scheduler registration, config defaults, fixtures, generated artifacts, and dependency changes.
@@ -370,20 +373,19 @@ If final validation passes:
 If final validation fails:
 
 - identify affected issues when possible
-- set them `ready-for-human`
 - record the blocker reason and a concise failing command summary or check-run link
-- do not merge
-- retain `solve-in-progress` only when the branch/worktree is intentionally left for a human to resume
+- route every affected substantive Attempt through Outcome Finalization as `blocked`, with `ready-for-human` as the default actionable Ticket state
+- retain `solve-in-progress` only when the same assignment remains actively resumable on the linked resources
 
 If no meaningful automated check exists or the environment cannot run it, do not call that a pass. When the candidate is otherwise complete, finalization may create a solve record with checks marked `unavailable`; auto-merge remains blocked unless the change is explicitly trivial and low-risk, and the record says why no meaningful check exists, why no manual-review trigger applies, and what evidence still supports the change.
 
-Do not create a candidate solve record for failed required checks. A transient failure with no retained evidence or resources stays in issue/attempt blocker state. A required validation or integration failure that retains evidence, a branch, worktree, or another recovery value reaches the outcome-finalization flow as a recovery record instead.
+Failed required checks never produce a candidate receipt. A transient failure that is fully cleaned and leaves no useful evidence releases its Claim without a receipt. A required validation or integration failure with retained evidence, a branch, worktree, or another recovery value produces a `blocked` recovery receipt instead.
 
 When a blocked, needs-info, ready-for-human, abandoned, superseded, or retained-failure Attempt reaches the outcome-finalization flow, distill durable Digest decisions and deviations into its recovery record's `## Attempt Summary` or `## Confirmed Findings`. Retain the Digest only while its linked resources have resume value or repository policy requires it; otherwise delete it after the transfer.
 
 ### 8.4 Post-Execution Review
 
-After final validation and before solve-record finalization, review the integrated candidate against the claimed issues, acceptance criteria, optional Agent Briefs, living Execution Digests, side effects, validation evidence, and solve-record readiness. Use reviewer subagents when that improves coverage; otherwise run the same review in the main agent.
+After final validation and before Outcome Finalization, review the integrated candidate against the claimed Tickets, acceptance criteria, source Specs, approved decisions, optional Agent Briefs, applicable living Execution Digests, repository standards, side effects, validation evidence, and receipt readiness. Use reviewer subagents when that improves coverage; otherwise run the same review in the main agent.
 
 Check for:
 
@@ -398,44 +400,57 @@ Fix actionable findings directly, rerun the relevant validation, and repeat Post
 
 Post-Execution Review is complete when no fixable findings remain, unresolved state-relevant residue is routed to the issue or solve record, and every record-worthy Digest item is ready to distill into the applicable outcome section.
 
-### 8.5 Finalize Solve Record
+### 8.5 Outcome Finalization
 
-Before creating either outcome, read the [Solve Record format](../solve-records/references/record-format.md). It owns the current outcome-aware frontmatter and body shape. Every new receipt uses that format; do not invent a legacy or hybrid candidate shape.
+Every Attempt that stops or hands off routes through this decision once. Read the [Solve Record format](../solve-records/references/record-format.md) before writing a receipt; it owns the outcome-aware frontmatter and body shape. Read the [recovery edge cases](../solve-records/references/edge-cases.md) when resuming, closing, superseding, or cleaning a recovery receipt. This runbook owns Attempt classification and the atomic Ticket, Claim, backlink, and resource transition; it does not duplicate either reference.
 
-Create a candidate Solve Record only after a finished, reviewable merge candidate exists:
+Classify the handoff before applying any candidate-only Git gate:
+
+| Attempt result | Receipt outcome | Actionable Ticket state | Claim disposition |
+| --- | --- | --- | --- |
+| Finished, validated, and Post-Execution Review passed | `candidate` | `completed` | release |
+| Required validation, integration, or tooling failure with retained evidence or resources | `blocked` | `ready-for-human` unless the tracker contract provides a more specific actionable blocker state | retain only for the same actively assigned resume; otherwise release |
+| Substantive assessment discovers missing core information | `needs-info` | `needs-info` | retain only for the same actively assigned resume; otherwise release |
+| A human-owned decision or review finding prevents a finished candidate | `ready-for-human` | `ready-for-human` | retain only for the same actively assigned resume; otherwise release |
+| The current Attempt is intentionally stopped while the Ticket remains valid | `abandoned` | `ready-for-agent` | release |
+| A prior recovery context is replaced by a clean restart or another Attempt | `superseded` on the prior receipt | preserve the Ticket's current actionable state, then reclaim it for the new Attempt | release the old Claim before reclaiming |
+| Immediate Claim release, transient failure, or fully cleaned work with no useful finding | none | restore the prior claimable or actionable state | release |
+
+The meaningful-handoff test is positive: create or update a receipt when durable findings, failed-check evidence, retained resources, a requested decision, or resource disposition gives a future maintainer something to resume, review, close, supersede, or clean. When none of those exists, remove partial solve-owned resources, release the Claim, remove stale Attempt resource links, and leave no receipt or backlink.
+
+For every recorded outcome, complete one atomic tracker handoff:
+
+- create or update one receipt under `.scratch/<feature>/solve-records/` or `.scratch/solve-records/`
+- append its path-only backlink to the Ticket, using the plural backlink heading when historical receipts already exist
+- keep each retained branch, worktree, commit, or PR linked through the tracker's resource surface and named in the receipt with its owner, resume action, cleanup owner, and current disposition
+- set the Ticket to the outcome's actionable state
+- release or intentionally retain `solve-in-progress` according to the table, recording the active resume owner when retained
+- distill each durable Digest decision or deviation into candidate `## Review` or `## Notes`, or recovery `## Attempt Summary` or `## Confirmed Findings`; retain the Digest only while the same recovery context has resume value or repo policy requires it
+
+A resumed Attempt reuses an open recovery receipt only when the linked Ticket, exact retained-resource set, unresolved blocker or requested information, and next action still describe the same recovery context. Reclaim the Ticket through the tracker contract before continuing. Repeated resumes update that receipt in place and keep one Ticket backlink by following the linked recovery edge cases. If any identity fact changed materially or a clean restart is safer, close or mark the old receipt `superseded`, release its Claim, record its resource disposition, and reclaim the Ticket for a new Attempt. The new Attempt creates its own receipt only when it later reaches a meaningful handoff.
+
+Create a `candidate` receipt only after a finished, reviewable merge candidate exists with:
 
 - clean, comparable `head` candidate branch
 - known `base` landing branch and `head` candidate branch refs
 - recorded `base_sha` and `head_sha`
-- linked issue paths
+- linked Ticket paths
 - checks status and validation evidence
-- Post-Execution Review outcome
-- merge-gate disposition
-- rollout/config disposition in the record body
+- passed Post-Execution Review
+- merge-gate and rollout/config dispositions
 - worktree and cleanup resource notes
 
-Create a recovery Solve Record only through the outcome-finalization flow when a blocked, needs-info, ready-for-human, abandoned, superseded, or retained-failure Attempt has a meaningful handoff outcome. Keep transient claim-time failures and fully cleaned work with no recovery value recordless.
-
-Do not create candidate solve records for claim-time state, in-progress attempts, missing requirements, failed required checks, unresolved Post-Execution Review findings that prevent a finished candidate, or a human-required decision that prevents the candidate from being finished. The outcome-finalization flow may create the matching recovery record when retained evidence or resources give the Attempt handoff value. If a finished candidate exists but needs human review before merge for product/API/security/data/architecture/rollout risk, create the record as `state: open` with `## Merge` set to `manual required`; do not auto-merge it.
+Claim-time state, an in-progress Attempt, missing requirements, failed required checks, or an unresolved finding that prevents a finished candidate cannot produce a candidate receipt. A finished candidate awaiting human acceptance, merge review, rollout approval, or another manual gate remains a candidate: set `state: open`, set `## Merge` to `manual required`, and keep the Ticket `completed`.
 
 Checks marked `unavailable` block auto-merge unless the change is explicitly trivial and low-risk, and the record says why no meaningful check exists, why no manual-review trigger applies, and what evidence still supports the change.
 
-Before creating an auto-mergeable or ready solve record, explicitly consider rollout/config/operator-action signals. Use already-known project context when it is sufficient; otherwise scan the changed files and nearby docs for generic signals such as config files, environment variables, feature flags, migrations, deployment docs, and runbooks. Record one body-prose disposition under `## Merge` or `## Notes`: `none`, `pre-merge action required`, or `post-merge activation required`. `pre-merge action required` means `manual required`; `post-merge activation required` can remain ready only when the record explains why code merge is safe, what action activates the change, how to smoke-check or validate it, and how to roll back or disable it.
+Before creating an auto-mergeable or ready candidate receipt, explicitly consider rollout/config/operator-action signals. Use already-known project context when it is sufficient; otherwise scan the changed files and nearby docs for generic signals such as config files, environment variables, feature flags, migrations, deployment docs, and runbooks. Record one body-prose disposition under `## Merge` or `## Notes`: `none`, `pre-merge action required`, or `post-merge activation required`. `pre-merge action required` means `manual required`; `post-merge activation required` can remain ready only when the record explains why code merge is safe, what action activates the change, how to smoke-check or validate it, and how to roll back or disable it.
 
-Adoption mode still creates solve records for finished candidates. When an adopted branch is the candidate branch, `head` is that branch and `base` is the landing branch; the record must not imply a merge back into the same branch. If development-environment deployment or human acceptance is pending, mark linked issues `completed` when acceptance criteria are verified, but set the solve record merge gate to `manual required` and record the pending evidence in `## Checks` or `## Merge`. A later `$solve-records` acceptance review may update `## Merge` from `manual required` to `ready` after live verification, while keeping `state: open`; landing remains reserved for explicit merge, ship, or land intent.
+Adoption mode still creates receipts for meaningful handoffs. For a candidate on an adopted branch, `head` is that branch and `base` is the landing branch; the record never describes a merge back into the same branch. If development-environment deployment or human acceptance is pending, keep the Ticket completed, set the candidate receipt merge gate to `manual required`, and record the pending evidence in `## Verification` or `## Merge`. A later `$solve-records` acceptance review may update `## Merge` from `manual required` to `ready` after live verification, while keeping `state: open`; landing remains reserved for explicit merge, ship, or land intent.
 
-Do not clean up successful solve worktrees during ordinary finalization. The candidate branch and worktree remain review context until auto-merge, merge/apply/ship/land, or an explicit cleanup request advances the solve record. Adopted worktrees and adopted candidate branches are user-owned resources; record them as not cleanup-owned and do not schedule them for automatic cleanup.
+Ordinary candidate finalization retains its branch and worktree as review context until auto-merge, merge/apply/ship/land, or an explicit cleanup request advances the receipt. Recovery resources follow their recorded ownership and recovery action. Adopted worktrees and adopted branches remain user-owned and outside automatic cleanup.
 
-During the same finalize step:
-
-- create the solve record in `.scratch/<feature>/solve-records/` or `.scratch/solve-records/`
-- mark linked issues `completed`
-- append only a solve-record backlink to each issue; record state stays in the solve record
-- link implementation and validation evidence where the tracker convention needs it
-- remove `solve-in-progress`
-- distill each durable Digest decision or deviation into candidate `## Review` or `## Notes`; retain the Digest only when it still has resume value or repo policy requires it, otherwise delete it
-
-The issue `completed` state means acceptance criteria are implemented and verified. The solve record `merged` state means the candidate entered the base branch. Cleanup status remains on the solve record.
+The Ticket `completed` state means acceptance criteria are implemented and verified. The Solve Record `merged` state means a candidate entered the base branch. Receipt lifecycle and cleanup status remain on the receipt.
 
 ### 9. Auto-Merge Solve Records If Requested
 
@@ -447,9 +462,11 @@ In adoption mode, `--auto-merge` means try to land the candidate branch into the
 
 Route requested auto-merge/merge/apply/ship/land wording through the same solve-record landing gate used by `$solve-records`. Merge eligible records one by one, in dependency order. Explicit set wording such as `all ready records` may process the bounded set one record at a time, but ineligible records must be skipped with reasons. Do not silently merge dependencies unless the user explicitly approves the wider operation.
 
+Apply this section only after the Outcome gate re-reads `outcome: candidate`. Recovery receipts remain on their recovery actions even when they retain branches, worktrees, commits, or PRs.
+
 All record merge gates must pass:
 
-1. No selected issue remains `needs-info` or `ready-for-human`.
+1. The selected receipt parses as `outcome: candidate`, and no selected Ticket remains `needs-info` or `ready-for-human`.
 2. Every group passed its local validation.
 3. Every eligible group branch is committed and its worktree is clean.
 4. The integration worktree started from the latest target branch and is clean after committed integration changes.
