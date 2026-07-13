@@ -1,0 +1,3 @@
+# Treat Agent Briefs as Preferred Input
+
+`Agent Brief` belongs to ticket shaping, especially the local `$ultra-to-tickets` wrapper contract around the external `to-tickets` skill, but `/ultra solve` must not require it as a schema gate. The stable minimum is `Context`, `Constraints`, and `Validation`; `Hints` are optional and should be added only when they materially help orientation. Solve should consume an Agent Brief when present, re-check any hints during the Pre-Implementation Checkpoint, infer missing execution context when possible, and move the ticket to `needs-info` or `ready-for-human` only when the core requirement or a human-owned decision cannot be recovered from the ticket, code, or repository context.

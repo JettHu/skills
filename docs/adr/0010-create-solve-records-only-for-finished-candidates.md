@@ -1,0 +1,3 @@
+# Create Solve Records Only for Finished Candidates
+
+`/ultra solve` should create a solve record whenever a finished, reviewable candidate exists, even if human acceptance, merge review, rollout approval, or another manual gate is still required. It should not create a solve record for an attempt with no finished candidate, such as unresolved core ambiguity, an unapproved API/data/security/architecture decision, an impossible semantic conflict, or failed validation that prevents the candidate from being reviewable; those blockers remain on the ticket with enough evidence to resume or reshape the work.

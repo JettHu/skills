@@ -1,0 +1,3 @@
+# Use Adaptive Subagent Fan-Out
+
+`/ultra solve` should make read-only subagents available during the Pre-Implementation Checkpoint, but spawn them based on ticket complexity, risk, and main-agent context pressure instead of making them mandatory for every solve. This preserves the original ultra-plan goal of reducing blind spots with parallel exploration and keeps read-heavy investigation out of the main agent context, while avoiding unnecessary token cost, latency, and coordination overhead for simple ready-for-agent tickets. Subagents should return compressed findings rather than raw exploration logs, and the main agent remains responsible for synthesis, implementation, validation, and solve-record finalization.

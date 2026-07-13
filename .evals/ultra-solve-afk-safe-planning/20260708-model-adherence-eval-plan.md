@@ -20,6 +20,18 @@ Durable model adherence eval plan plus deterministic repository validation.
 
 No model adherence run was executed in this pass. A real eval should run in a fresh temporary Git repository and grade final repo state, not response prose.
 
+## Harness
+
+Fixture preparation and grading scripts are now available:
+
+- `README.md`
+- `scripts/prepare-fixture.py`
+- `scripts/grade-run.py`
+
+The harness creates independent Git repositories per scenario and per variant, so multiple models can run concurrently without sharing branches, worktrees, issues, or solve records.
+
+It supports treatment-versus-ablation fixtures. By default, treatment skill docs come from `HEAD`, while ablation skill docs come from `8753d5c^`. Use `--treatment-ref working-tree` when validating uncommitted skill-doc changes.
+
 ## Fixture Shape
 
 Create a temporary Git repo with:
@@ -74,6 +86,16 @@ The grader should inspect files, issue state, flags, solve records, Git refs, wo
 - Failed required checks and unfinished candidates create no solve record.
 - Finished candidates create solve records with `## Checks`, `## Review`, `## Merge`, rollout/config disposition, manual gates, and caveats as applicable.
 - Auto-merge and cleanup semantics remain governed by the existing solve-record landing and cleanup gates.
+
+## Ablation
+
+Compare treatment versus ablation on the most load-bearing scenarios first:
+
+- Digest-worthy issue
+- Stale Agent Brief hint
+- Post-Execution Review finding
+
+The expected signal is that treatment produces stronger pre-edit planning, stale-hint correction, and final review behavior than the ablated skill docs.
 
 ## Deterministic Validation
 
