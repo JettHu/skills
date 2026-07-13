@@ -142,8 +142,9 @@ for scenario in (
     "No unnecessary Digest residue",
 ):
     assert scenario in eval_plan, f"model-adherence scenario missing: {scenario}"
-assert "No model adherence run was executed" in eval_plan
+assert "A real model-adherence run was started" in eval_plan
 assert "Ticket, Digest, and Solve Record state" in eval_plan
+assert (repo / ".evals/ultra-solve-afk-safe-planning/20260713-model-adherence-eval.md").is_file()
 
 print("ultra solve boundary fixture passed")
 PY

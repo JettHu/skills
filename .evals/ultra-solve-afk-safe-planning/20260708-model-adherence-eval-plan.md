@@ -13,13 +13,13 @@ Changed surfaces:
 - `skills/engineering/solve-records/references/record-format.md`
 - `skills/in-progress/maintainer-board/scripts/maintainer-board.py`
 
-This change affects multi-agent planning/review behavior, optional Agent Brief boundaries, conditional Execution Digest lifecycle, and outcome-hand-off semantics. It needs a model-adherence run before claiming behavioral confidence across models.
+This change affects multi-agent planning/review behavior, optional Agent Brief boundaries, conditional Execution Digest lifecycle, and outcome-hand-off semantics. It needs a model-adherence run before claiming behavioral confidence. A single-runtime run is not evidence of cross-model behavior.
 
 ## Evidence Type
 
-Durable model-adherence eval plan plus deterministic repository validation.
+Durable model-adherence eval plan, run record, and deterministic repository validation.
 
-No model adherence run was executed in this pass. A real eval must run in fresh temporary Git repositories and grade final Ticket, Digest, and Solve Record state—not response prose.
+A real model-adherence run was started in fresh temporary Git repositories on 2026-07-13. Its exact refs, prompts, final-state grading, passed scenarios, and incomplete scenarios are recorded in [20260713-model-adherence-eval.md](20260713-model-adherence-eval.md). Grade final Ticket, Digest, and Solve Record state—not response prose—and do not treat its single-runtime coverage as a cross-model claim.
 
 ## Fixture Shape
 
