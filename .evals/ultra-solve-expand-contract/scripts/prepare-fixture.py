@@ -135,7 +135,7 @@ if args.action == "claim":
 
 path = repo / ".scratch/feature/issues" / f"{args.ticket}.md"
 text = path.read_text(encoding="utf-8")
-if "Flags: solve-in-progress" not in text:
+if args.action != "candidate" and "Flags: solve-in-progress" not in text:
     raise SystemExit(f"Ticket is not claimed: {args.ticket}")
 
 if args.action == "complete":
@@ -155,6 +155,8 @@ if args.action == "complete":
 
 if args.ticket != "INTEGRATE-VERIFY":
     raise SystemExit("only INTEGRATE-VERIFY may create the candidate receipt")
+if "Status: completed" not in text or "Flags: solve-in-progress" in text:
+    raise SystemExit("candidate receipt requires completed final Ticket with Claim released")
 if subprocess.run([sys.executable, "scripts/check.py", "final"], cwd=repo).returncode:
     raise SystemExit("final integration check failed")
 head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
