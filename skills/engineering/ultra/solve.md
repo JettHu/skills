@@ -290,6 +290,16 @@ Group executable issues by module, dependency, and likely file overlap.
 - Independent modules: separate groups that may be executed in parallel when the runtime supports it.
 - Shared migrations, config, generated types, routing, fixtures, dependency versions, or public contracts are coupling signals; group or order them conservatively.
 
+#### Expand-contract exception for wide mechanical refactors
+
+Ordinary work remains tracer-bullet execution: every Ticket is independently demoable, verifiable, and green. Use expand-contract only for one mechanical representation change whose blast radius prevents an ordinary vertical slice from landing green. It is not an exception for broad product, API, data-model, or architecture work; route such a proposal to human review instead.
+
+The approved Ticket graph, not Solver inference from prose or numbering, declares the exception. First, an **expand** Ticket adds the new form beside the old one and verifies that existing callers still work. Every **migration batch** is sized by blast radius, declares expand as a blocker, and migrates only after the expanded compatibility form is present. In the normal form, each batch remains green while the old form is available, and the **contract** Ticket declares every migration batch as a blocker before it removes the old form.
+
+When a migration batch cannot remain green on its own, the graph must additionally declare `Execution mode: shared-integration`, one named shared integration branch/worktree, and one named **final integrate-and-verify** Ticket. Batches still declare expand as a blocker; contract still declares every batch as a blocker; and final integrate-and-verify declares contract as its blocker, so its validation covers the contracted result. The shared branch has one integration owner and serializes writers; frontier siblings never concurrently edit the same worktree. Each non-green batch records scoped mechanical evidence only and may complete its declared migration acceptance, but it must not claim a green result, candidate receipt, landing eligibility, or final validation. The final integrate-and-verify Ticket alone owns the full green guarantee, final validation, Post-Execution Review, candidate receipt, and the ordinary landing and cleanup gates.
+
+A completed blocker is a Claim predicate, not proof that its code exists in a later Ticket's execution base. Before a migration, contract, or final integration Ticket writes, verify that the declared predecessor commits are present on its assigned branch or shared integration branch. Never land an intermediate Ticket merely to satisfy a blocker, silently merge an unresolved dependency, or weaken ordinary review, validation, landing, or cleanup gates. An unexpected scoped-check or integration failure follows the normal blocked/recovery path.
+
 ### 4.5 Pre-Execute Gate (mandatory)
 
 The gate confirms no branch/worktree, tracker-claim, or dirty-state drift has occurred since adoption routing.
@@ -342,7 +352,7 @@ For each issue in a group:
    - speculative architecture change: mark `ready-for-human`
    - docs/config-only issue: edit directly
 3. Implement.
-4. Verify each acceptance criterion.
+4. Verify each acceptance criterion. In a declared shared-integration sequence, a migration batch verifies its scoped mechanical acceptance; only the named final integrate-and-verify Ticket verifies the full integrated green result.
 5. Record validation evidence as a PR, commit, CI/check, tracker pointer, or final solve summary entry.
 6. Commit verified work to the group branch before leaving the group worktree.
 
@@ -380,7 +390,7 @@ Suggested names:
 - integration branch: `solve/<timestamp>-integration`
 - integration worktree: `worktree-solve-<timestamp>-integration`
 
-Merge or cherry-pick committed, locally validated group branches into integration in dependency order. Each group worktree must be clean before integration starts.
+Merge or cherry-pick committed, locally validated group branches into integration in dependency order. Each group worktree must be clean before integration starts. For a declared shared-integration sequence, continue from its named shared branch in declared graph order; the final integrate-and-verify Ticket reopens that branch only after contract is completed and runs the full integration validation there.
 
 - Mechanical conflicts: the coordinator may resolve them.
 - Semantic conflicts: stop integration for the affected issues and route each meaningful stopped Attempt through Outcome Finalization as `ready-for-human`; the remaining batch may continue without those issues.
@@ -407,7 +417,7 @@ If final validation fails:
 
 If no meaningful automated check exists or the environment cannot run it, do not call that a pass. When the candidate is otherwise complete, finalization may create a solve record with checks marked `unavailable`; auto-merge remains blocked unless the change is explicitly trivial and low-risk, and the record says why no meaningful check exists, why no manual-review trigger applies, and what evidence still supports the change.
 
-Failed required checks never produce a candidate receipt. A transient failure that is fully cleaned and leaves no useful evidence releases its Claim without a receipt. A required validation or integration failure with retained evidence, a branch, worktree, or another recovery value produces a `blocked` recovery receipt instead.
+Failed required checks never produce a candidate receipt. A transient failure that is fully cleaned and leaves no useful evidence releases its Claim without a receipt. A required validation or integration failure with retained evidence, a branch, worktree, or another recovery value produces a `blocked` recovery receipt instead. In a declared shared-integration sequence, only the final integrate-and-verify Ticket can create the candidate receipt; batch and contract handoffs remain non-candidate evidence until that Ticket passes the full green guarantee.
 
 When a blocked, needs-info, ready-for-human, abandoned, superseded, or retained-failure Attempt reaches the outcome-finalization flow, distill durable Digest decisions and deviations into its recovery record's `## Attempt Summary` or `## Confirmed Findings`. Retain the Digest only while its linked resources have resume value or repository policy requires it; otherwise delete it after the transfer.
 
