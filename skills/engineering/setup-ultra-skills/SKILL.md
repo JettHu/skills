@@ -34,9 +34,15 @@ Use the base contract as evidence for one preset:
   after complete-set review and promotion, and use one executable cancellation
   policy: `retain-until-explicit-cleanup` or `delete-on-cancel`. The adapter
   reads that policy plus the exact representation and safely normalized path
-  pattern from the managed contract. Every read or mutation resolves the CLI
+  pattern from the managed contract. Path grammar is shared with the runtime:
+  only a complete single-segment `<feature>` placeholder is optional, while
+  `file-per-ticket` requires exactly one final `<ticket-file>.md` component;
+  unknown, embedded, repeated, or missing placeholders fail closed. Every read or mutation resolves the CLI
   surface inside the repository and verifies it against those configured
-  fields before creating a lock, journal, or Ticket change. Unknown or
+  fields before creating a lock, journal, or Ticket change. A mutation locks
+  one resolved surface, confirms the same resolution while holding that lock,
+  and retries from a new lock if a symlink target changed; all Ticket and
+  journal access then stays pinned to the confirmed surface. Unknown or
   mismatched values fail closed even for explicit cleanup. Either policy may
   delete only a journal and complete member set still exactly in
   `review-pending`; a `promoting` or `promoted` run must be resumed, not cleaned.

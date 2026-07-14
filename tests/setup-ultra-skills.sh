@@ -89,6 +89,17 @@ if configure "$local_invalid_path_repo" local-markdown local-review-pending \
   echo "tickets-file fixture accepted a variable ticket filename" >&2
   exit 1
 fi
+for invalid_path in \
+  '.scratch/<feature>/issues/<ticket-file><ticket-file>' \
+  '.scratch/<feature>/issues/prefix-<ticket-file>.md' \
+  '.scratch/<unknown>/issues/<ticket-file>.md' \
+  '.scratch/<feature>/issues'; do
+  if configure "$local_invalid_path_repo" local-markdown local-review-pending \
+    --local-ticket-path "$invalid_path" >"$TMPDIR_ROOT/local-invalid-strict-path.out" 2>&1; then
+    echo "local fixture accepted non-canonical file-per-ticket path: $invalid_path" >&2
+    exit 1
+  fi
+done
 test ! -e "$local_invalid_path_repo/docs/agents/ultra-tracker.md"
 configure "$github_remote_repo" github remote-review-pending
 configure "$github_staging_repo" github local-staging

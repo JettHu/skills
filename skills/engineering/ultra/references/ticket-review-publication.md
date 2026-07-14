@@ -40,9 +40,18 @@ The adapter parses `Local Ticket representation` and `Local Ticket path` from
 the managed contract before every operation. It resolves the requested CLI
 location inside the repository and requires it to match the configured exact
 path or single-segment placeholder pattern. For `file-per-ticket`, the final
-`<ticket-file>` component names files within the authorized directory; for
+`<ticket-file>.md` component names files within the authorized directory; it
+must occur exactly once and the only other supported placeholder is one
+complete `<feature>` segment. Unknown, embedded, repeated, or missing forms
+fail closed in both setup and runtime. For
 `tickets-file`, the contract identifies one durable file. A representation or
 surface mismatch fails before a lock, journal, read result, or Ticket mutation.
+
+For mutation, the adapter resolves the requested surface, locks that resolved
+surface, and confirms the same resolution while holding the lock. A symlink
+target change causes a bounded retry with the newly resolved lock; continuous
+changes fail without a Ticket or run-journal mutation. After confirmation,
+Ticket reads, writes, and journal paths use only the pinned resolved surface.
 
 Titles or heading positions are never stable identity. Duplicate/missing IDs,
 ambiguous or nested section markers, missing state or run metadata, unresolved

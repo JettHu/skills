@@ -73,6 +73,8 @@ def load_local_publication_helper():
     helper_path = find_local_publication_helper()
     if not helper_path:
         return None
+    if str(helper_path.parent) not in sys.path:
+        sys.path.insert(0, str(helper_path.parent))
     spec = importlib.util.spec_from_file_location("local_ticket_publication_helper", helper_path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

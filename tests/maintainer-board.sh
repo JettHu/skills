@@ -339,6 +339,7 @@ mkdir -p "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/solve-records/scrip
 cp "$SOLVE_RECORDS_SCRIPT" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/solve-records/scripts/solve-records.py"
 mkdir -p "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts"
 cp "$LOCAL_PUBLICATION_SCRIPT" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts/local_ticket_publication.py"
+cp "$(dirname "$LOCAL_PUBLICATION_SCRIPT")/local_ticket_surface.py" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts/local_ticket_surface.py"
 python3 "$STANDALONE_SCRIPT" --repo "$REPO" --json >"$FALLBACK_JSON_OUT"
 
 if [[ "$DEFAULT_STDOUT" != "$DEFAULT_HTML_OUT" ]]; then

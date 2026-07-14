@@ -15,6 +15,12 @@ import re
 import sys
 import tempfile
 
+from local_ticket_surface import (
+    REPRESENTATIONS,
+    SurfacePatternError,
+    configured_location_regex as compile_location_regex,
+)
+
 
 SCHEMA = "ultra-local-ticket-publication/v1"
 CONTRACT = Path("docs/agents/ultra-tracker.md")
@@ -22,8 +28,6 @@ CANCELLATION_POLICIES = {
     "retain-until-explicit-cleanup",
     "delete-on-cancel",
 }
-REPRESENTATIONS = {"file-per-ticket", "tickets-file"}
-PLACEHOLDER = re.compile(r"<[A-Za-z][A-Za-z0-9_-]*>")
 SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 BEGIN = re.compile(
     r"(?m)^<!-- ultra-ticket:begin id=([A-Za-z0-9][A-Za-z0-9._-]*) -->[ \t]*\n"
@@ -254,40 +258,12 @@ def configured_local_contract(repo: Path) -> LocalContract:
 
 
 def configured_location_regex(contract: LocalContract) -> re.Pattern[str]:
-    raw = contract.location_pattern
-    if raw.startswith("/") or "\\" in raw:
-        raise AdapterError("configured Local Ticket path must be a relative POSIX path")
-    parts = raw.split("/")
-    if not parts or any(part in {"", ".", ".."} for part in parts):
-        raise AdapterError("configured Local Ticket path is not safely normalized")
-    ticket_file_parts = [
-        index for index, part in enumerate(parts) if "<ticket-file>" in part
-    ]
-    if contract.representation == "file-per-ticket":
-        if ticket_file_parts and ticket_file_parts != [len(parts) - 1]:
-            raise AdapterError(
-                "configured file-per-ticket path must place <ticket-file> in its final component"
-            )
-        if ticket_file_parts:
-            parts = parts[:-1]
-    elif ticket_file_parts:
-        raise AdapterError(
-            "configured tickets-file path must identify one durable file"
+    try:
+        return compile_location_regex(
+            contract.representation, contract.location_pattern
         )
-    if not parts:
-        raise AdapterError("configured Local Ticket path has no durable surface")
-    pattern = "/".join(parts)
-    pieces = []
-    cursor = 0
-    for match in PLACEHOLDER.finditer(pattern):
-        pieces.append(re.escape(pattern[cursor : match.start()]))
-        pieces.append("[^/]+")
-        cursor = match.end()
-    pieces.append(re.escape(pattern[cursor:]))
-    unmatched = PLACEHOLDER.sub("", pattern)
-    if "<" in unmatched or ">" in unmatched:
-        raise AdapterError("configured Local Ticket path has an invalid placeholder")
-    return re.compile(r"\A" + "".join(pieces) + r"\Z")
+    except SurfacePatternError as error:
+        raise AdapterError(str(error)) from error
 
 
 def validate_configured_surface(
@@ -360,15 +336,19 @@ def load_tickets_file(location: Path) -> list[Ticket]:
     return tickets
 
 
-def load_tickets(repo: Path, representation: str, raw_location: str) -> tuple[Path, list[Ticket]]:
-    location = safe_location(repo, raw_location)
+def load_tickets_at(location: Path, representation: str) -> list[Ticket]:
     tickets = load_file_per(location) if representation == "file-per-ticket" else load_tickets_file(location)
     seen: dict[str, Path] = {}
     for ticket in tickets:
         if ticket.ticket_id in seen:
             raise AdapterError(f"duplicate Ticket ID: {ticket.ticket_id}")
         seen[ticket.ticket_id] = ticket.path
-    return location, tickets
+    return tickets
+
+
+def load_tickets(repo: Path, representation: str, raw_location: str) -> tuple[Path, list[Ticket]]:
+    location = safe_location(repo, raw_location)
+    return location, load_tickets_at(location, representation)
 
 
 def journal_dir(location: Path, representation: str) -> Path:
@@ -422,6 +402,28 @@ def mutation_lock(location: Path, representation: str):
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+@contextmanager
+def stable_mutation_surface(
+    repo: Path, representation: str, raw_location: str, attempts: int = 3
+):
+    """Lock only a surface that resolves identically before and after locking."""
+    for _attempt in range(attempts):
+        expected, _contract = validate_configured_surface(
+            repo, representation, raw_location
+        )
+        with mutation_lock(expected, representation):
+            confirmed, contract = validate_configured_surface(
+                repo, representation, raw_location
+            )
+            if confirmed != expected:
+                continue
+            yield confirmed, contract
+            return
+    raise AdapterError(
+        "configured Ticket surface changed while acquiring its mutation lock"
+    )
+
+
 def run_tickets(tickets: list[Ticket], run_id: str) -> list[Ticket]:
     selected = [ticket for ticket in tickets if ticket.run_id == run_id]
     if not selected:
@@ -442,13 +444,11 @@ def snapshot(selected: list[Ticket]) -> dict[str, str]:
 
 
 def register(repo: Path, representation: str, raw_location: str, run_id: str, allow_membership_change: bool) -> dict:
-    location, _contract = validate_configured_surface(
+    with stable_mutation_surface(
         repo, representation, raw_location
-    )
-    path = journal_path(location, representation, run_id)
-    with mutation_lock(location, representation):
-        validate_configured_surface(repo, representation, raw_location)
-        location, tickets = load_tickets(repo, representation, raw_location)
+    ) as (location, _contract):
+        path = journal_path(location, representation, run_id)
+        tickets = load_tickets_at(location, representation)
         selected = run_tickets(tickets, run_id)
         validate_blocker_targets(tickets)
         if any(ticket.status != "review-pending" for ticket in selected):
@@ -472,9 +472,10 @@ def register(repo: Path, representation: str, raw_location: str, run_id: str, al
     return data
 
 
-def validate_against_journal(repo: Path, representation: str, raw_location: str, run_id: str) -> tuple[Path, list[Ticket], dict]:
-    validate_configured_surface(repo, representation, raw_location)
-    location, tickets = load_tickets(repo, representation, raw_location)
+def validate_against_journal_at(
+    repo: Path, representation: str, location: Path, run_id: str
+) -> tuple[Path, list[Ticket], dict]:
+    tickets = load_tickets_at(location, representation)
     selected = run_tickets(tickets, run_id)
     validate_blocker_targets(tickets)
     data = read_journal(journal_path(location, representation, run_id))
@@ -487,18 +488,26 @@ def validate_against_journal(repo: Path, representation: str, raw_location: str,
     return location, tickets, data
 
 
+def validate_against_journal(repo: Path, representation: str, raw_location: str, run_id: str) -> tuple[Path, list[Ticket], dict]:
+    location, _contract = validate_configured_surface(
+        repo, representation, raw_location
+    )
+    return validate_against_journal_at(repo, representation, location, run_id)
+
+
 def replace_status(ticket: Ticket, status: str) -> str:
     inner = replace_metadata_field(ticket.inner, ticket.state_field, status)
     return ticket.text[: ticket.inner_start] + inner + ticket.text[ticket.inner_end :]
 
 
 def promote(repo: Path, representation: str, raw_location: str, run_id: str) -> dict:
-    location, _contract = validate_configured_surface(
+    with stable_mutation_surface(
         repo, representation, raw_location
-    )
-    path = journal_path(location, representation, run_id)
-    with mutation_lock(location, representation):
-        location, tickets, data = validate_against_journal(repo, representation, raw_location, run_id)
+    ) as (location, _contract):
+        path = journal_path(location, representation, run_id)
+        location, tickets, data = validate_against_journal_at(
+            repo, representation, location, run_id
+        )
         if data.get("phase") == "promoted":
             if all(ticket.status == "ready-for-agent" for ticket in run_tickets(tickets, run_id)):
                 return data
@@ -542,7 +551,9 @@ def promote(repo: Path, representation: str, raw_location: str, run_id: str) -> 
                     updated = updated[: ticket.inner_start] + inner + updated[ticket.inner_end :]
             atomic_write(location, updated)
 
-        _location, refreshed, final = validate_against_journal(repo, representation, raw_location, run_id)
+        _location, refreshed, final = validate_against_journal_at(
+            repo, representation, location, run_id
+        )
         if any(ticket.status != "ready-for-agent" for ticket in run_tickets(refreshed, run_id)):
             raise AdapterError("complete-set post-promotion verification failed")
         final["phase"] = "promoted"
@@ -550,8 +561,12 @@ def promote(repo: Path, representation: str, raw_location: str, run_id: str) -> 
         return final
 
 
-def claimable_ids(repo: Path, representation: str, raw_location: str, run_id: str) -> list[str]:
-    _location, tickets, data = validate_against_journal(repo, representation, raw_location, run_id)
+def claimable_ids_at(
+    repo: Path, representation: str, location: Path, run_id: str
+) -> list[str]:
+    _location, tickets, data = validate_against_journal_at(
+        repo, representation, location, run_id
+    )
     selected = run_tickets(tickets, run_id)
     post_publication_states = {
         "ready-for-agent",
@@ -575,17 +590,25 @@ def claimable_ids(repo: Path, representation: str, raw_location: str, run_id: st
     return sorted(result)
 
 
-def claim(repo: Path, representation: str, raw_location: str, run_id: str, ticket_id: str) -> dict:
-    if not ticket_id:
-        raise AdapterError("claim requires --ticket-id")
+def claimable_ids(repo: Path, representation: str, raw_location: str, run_id: str) -> list[str]:
     location, _contract = validate_configured_surface(
         repo, representation, raw_location
     )
-    with mutation_lock(location, representation):
-        location, tickets, _data = validate_against_journal(
-            repo, representation, raw_location, run_id
+    return claimable_ids_at(repo, representation, location, run_id)
+
+
+def claim(repo: Path, representation: str, raw_location: str, run_id: str, ticket_id: str) -> dict:
+    if not ticket_id:
+        raise AdapterError("claim requires --ticket-id")
+    with stable_mutation_surface(
+        repo, representation, raw_location
+    ) as (location, _contract):
+        location, tickets, _data = validate_against_journal_at(
+            repo, representation, location, run_id
         )
-        if ticket_id not in claimable_ids(repo, representation, raw_location, run_id):
+        if ticket_id not in claimable_ids_at(
+            repo, representation, location, run_id
+        ):
             raise AdapterError(f"Ticket is not claimable: {ticket_id}")
         target = next(ticket for ticket in tickets if ticket.ticket_id == ticket_id)
         if not target.flags_field:
@@ -607,8 +630,8 @@ def claim(repo: Path, representation: str, raw_location: str, run_id: str, ticke
                 raise AdapterError("concurrent tickets-file change detected before Claim")
             updated = current[: target.inner_start] + replacement + current[target.inner_end :]
             atomic_write(location, updated)
-        _location, refreshed, _journal = validate_against_journal(
-            repo, representation, raw_location, run_id
+        _location, refreshed, _journal = validate_against_journal_at(
+            repo, representation, location, run_id
         )
         claimed = next(ticket for ticket in refreshed if ticket.ticket_id == ticket_id)
         if "solve-in-progress" not in claimed.flags:
@@ -617,15 +640,17 @@ def claim(repo: Path, representation: str, raw_location: str, run_id: str, ticke
 
 
 def inspect(repo: Path, representation: str, raw_location: str, run_id: str) -> dict:
-    validate_configured_surface(repo, representation, raw_location)
-    location, tickets = load_tickets(repo, representation, raw_location)
+    location, _contract = validate_configured_surface(
+        repo, representation, raw_location
+    )
+    tickets = load_tickets_at(location, representation)
     selected = run_tickets(tickets, run_id)
     path = journal_path(location, representation, run_id)
     data = read_journal(path) if path.exists() else None
     claimable = []
     if data:
         try:
-            claimable = claimable_ids(repo, representation, raw_location, run_id)
+            claimable = claimable_ids_at(repo, representation, location, run_id)
         except AdapterError:
             claimable = []
     return {
@@ -638,21 +663,17 @@ def inspect(repo: Path, representation: str, raw_location: str, run_id: str) -> 
 
 
 def cleanup(repo: Path, representation: str, raw_location: str, run_id: str, explicit: bool) -> dict:
-    location, _contract = validate_configured_surface(
+    with stable_mutation_surface(
         repo, representation, raw_location
-    )
-    path = journal_path(location, representation, run_id)
-    with mutation_lock(location, representation):
-        _location, contract = validate_configured_surface(
-            repo, representation, raw_location
-        )
+    ) as (location, contract):
+        path = journal_path(location, representation, run_id)
         if (
             not explicit
             and contract.cancellation_policy == "retain-until-explicit-cleanup"
         ):
             raise AdapterError("cancellation retains review-pending artifacts; cleanup requires --explicit")
-        location, tickets, data = validate_against_journal(
-            repo, representation, raw_location, run_id
+        location, tickets, data = validate_against_journal_at(
+            repo, representation, location, run_id
         )
         phase = data.get("phase")
         if phase != "review-pending":

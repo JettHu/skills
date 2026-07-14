@@ -9,6 +9,13 @@ import sys
 from pathlib import Path
 
 
+ULTRA_SCRIPTS = Path(__file__).resolve().parents[1].parent / "ultra" / "scripts"
+if str(ULTRA_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(ULTRA_SCRIPTS))
+
+from local_ticket_surface import SurfacePatternError, configured_location_regex
+
+
 BASE_CONTRACT = Path("docs/agents/issue-tracker.md")
 EXTENSION_CONTRACT = Path("docs/agents/ultra-tracker.md")
 STAGING_ROOT = ".scratch/.ultra-staging/"
@@ -16,7 +23,6 @@ CANCELLATION_POLICIES = {
     "retain-until-explicit-cleanup": "retain the named review-pending run until explicit cleanup.",
     "delete-on-cancel": "delete only the named review-pending run after exact membership and preimage validation.",
 }
-PATH_PLACEHOLDER = re.compile(r"<[A-Za-z][A-Za-z0-9_-]*>")
 BLOCK_START = "<!-- setup-ultra-skills:begin -->"
 BLOCK_END = "<!-- setup-ultra-skills:end -->"
 PUBLICATION_FIELDS = (
@@ -142,35 +148,12 @@ def validate_policy(args: argparse.Namespace) -> None:
         args.local_ticket_path = require_single_line(
             args.local_ticket_path or default_path, "local Ticket path"
         )
-        if "\\" in args.local_ticket_path:
-            raise ConfigurationError(
-                "local Ticket path must use repository-relative POSIX separators"
+        try:
+            configured_location_regex(
+                args.local_ticket_representation, args.local_ticket_path
             )
-        path_without_templates = re.sub(r"<[^>]+>", "placeholder", args.local_ticket_path)
-        raw_parts = args.local_ticket_path.split("/")
-        if (
-            Path(path_without_templates).is_absolute()
-            or not raw_parts
-            or any(part in {"", ".", ".."} for part in raw_parts)
-        ):
-            raise ConfigurationError("local Ticket path must stay inside the repository")
-        unmatched = PATH_PLACEHOLDER.sub("", args.local_ticket_path)
-        if "<" in unmatched or ">" in unmatched:
-            raise ConfigurationError("local Ticket path has an invalid placeholder")
-        ticket_file_parts = [
-            index
-            for index, part in enumerate(args.local_ticket_path.split("/"))
-            if "<ticket-file>" in part
-        ]
-        if args.local_ticket_representation == "file-per-ticket":
-            if ticket_file_parts and ticket_file_parts != [len(raw_parts) - 1]:
-                raise ConfigurationError(
-                    "file-per-ticket path must place <ticket-file> in its final component"
-                )
-        elif ticket_file_parts:
-            raise ConfigurationError(
-                "tickets-file path must identify one durable file"
-            )
+        except SurfacePatternError as error:
+            raise ConfigurationError(str(error)) from error
     elif args.cancellation_policy != "retain-until-explicit-cleanup":
         raise ConfigurationError(
             "--cancellation-policy applies only to the local-markdown preset"

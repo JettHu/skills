@@ -43,6 +43,7 @@ def main() -> None:
         failures.append("scenario set is incomplete or unexpected")
 
     adapter_path = output / "skill-input/skills/engineering/ultra/scripts/local_ticket_publication.py"
+    sys.path.insert(0, str(adapter_path.parent))
     spec = importlib.util.spec_from_file_location("eval_local_ticket_adapter", adapter_path)
     adapter = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = adapter

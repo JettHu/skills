@@ -130,6 +130,172 @@ fi
 grep -Fq 'configured Local Ticket representation does not match the requested adapter' "$TMPDIR_ROOT/surface-representation.out" || surface_failures=1
 test "$surface_failures" -eq 0
 
+# Setup and runtime enforce the same canonical placeholder grammar. A
+# file-per-ticket contract has exactly one complete final <ticket-file>
+# component; unknown, embedded, repeated, or missing forms fail closed before
+# coordination metadata is created.
+for invalid_pattern in \
+  '.scratch/<feature>/issues/<ticket-file><ticket-file>' \
+  '.scratch/<feature>/issues/prefix-<ticket-file>.md' \
+  '.scratch/<unknown>/issues/<ticket-file>.md' \
+  '.scratch/<feature>/issues'; do
+  STRICT_REPO="$TMPDIR_ROOT/strict-$(printf '%s' "$invalid_pattern" | shasum | cut -c1-12)"
+  mkdir -p "$STRICT_REPO/.scratch/feature/issues"
+  write_contract "$STRICT_REPO" delete-on-cancel file-per-ticket "$invalid_pattern"
+  write_file_ticket "$STRICT_REPO/.scratch/feature/issues/STRICT.md" STRICT strict-run review-pending "" "Strict placeholder grammar"
+  if adapter "$STRICT_REPO" file-per-ticket .scratch/feature/issues strict-run register >"$TMPDIR_ROOT/strict-placeholder.out" 2>&1; then
+    echo "adapter accepted non-canonical file-per-ticket path: $invalid_pattern" >&2
+    exit 1
+  fi
+  test ! -e "$STRICT_REPO/.scratch/feature/issues/.ultra-publications"
+done
+
+# Deterministically inject a symlink target change after the pre-lock surface
+# resolution. Each operation must retry against one stable resolved surface;
+# it must never read or mutate B while using A's journal identity.
+python3 - "$ADAPTER" "$TMPDIR_ROOT/surface-swap" <<'PY'
+from contextlib import contextmanager
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+adapter_path, root_arg = sys.argv[1:]
+sys.path.insert(0, str(Path(adapter_path).resolve().parent))
+spec = importlib.util.spec_from_file_location("local_ticket_publication", adapter_path)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+root = Path(root_arg)
+real_lock = module.mutation_lock
+
+
+def write_contract(repo: Path) -> None:
+    path = repo / "docs/agents/ultra-tracker.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "Publication strategy: local-review-pending\n"
+        "Local Ticket representation: file-per-ticket\n"
+        "Local Ticket path: .scratch/<feature>/issues/<ticket-file>.md\n"
+        "Cancellation policy: delete-on-cancel\n",
+        encoding="utf-8",
+    )
+
+
+def write_ticket(path: Path, ticket_id: str, run_id: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "Status: review-pending\n"
+        f"Ticket ID: {ticket_id}\n"
+        f"Publication Run: {run_id}\n"
+        "Source Spec: docs/spec.md\n"
+        "Blocked By:\n"
+        "Flags:\n\n"
+        f"# {ticket_id}\n",
+        encoding="utf-8",
+    )
+
+
+def target(repo: Path, name: str) -> Path:
+    return repo / ".scratch" / name / "issues"
+
+
+def journal(repo: Path, name: str, run_id: str) -> Path:
+    return target(repo, name) / ".ultra-publications" / f"{run_id}.json"
+
+
+def point(link: Path, name: str) -> None:
+    link.unlink(missing_ok=True)
+    link.symlink_to(name, target_is_directory=True)
+
+
+def install_one_shot_swap(repo: Path) -> None:
+    link = repo / ".scratch" / "current"
+    calls = {"count": 0}
+
+    @contextmanager
+    def swapping_lock(location, representation):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            point(link, "B")
+        with real_lock(location, representation):
+            yield
+
+    module.mutation_lock = swapping_lock
+
+
+def prepare(name: str, run_id: str, ticket_id: str, register_both: bool) -> Path:
+    repo = (root / name).resolve()
+    module.mutation_lock = real_lock
+    write_contract(repo)
+    for surface in ("A", "B"):
+        write_ticket(target(repo, surface) / f"{ticket_id}.md", ticket_id, run_id)
+    link = repo / ".scratch" / "current"
+    point(link, "A")
+    if register_both:
+        module.register(repo, "file-per-ticket", ".scratch/A/issues", run_id, False)
+        module.register(repo, "file-per-ticket", ".scratch/B/issues", run_id, False)
+    install_one_shot_swap(repo)
+    return repo
+
+
+register_repo = prepare("register", "swap-register", "SWAP-REGISTER", False)
+module.register(
+    register_repo, "file-per-ticket", ".scratch/current/issues", "swap-register", False
+)
+assert not journal(register_repo, "A", "swap-register").exists()
+assert journal(register_repo, "B", "swap-register").exists()
+registered = json.loads(journal(register_repo, "B", "swap-register").read_text())
+assert registered["location"] == ".scratch/B/issues"
+
+
+flapping_repo = prepare("flapping", "swap-flapping", "SWAP-FLAPPING", False)
+flapping_link = flapping_repo / ".scratch" / "current"
+
+@contextmanager
+def flapping_lock(location, representation):
+    point(flapping_link, "B" if location == target(flapping_repo, "A") else "A")
+    with real_lock(location, representation):
+        yield
+
+module.mutation_lock = flapping_lock
+try:
+    module.register(
+        flapping_repo,
+        "file-per-ticket",
+        ".scratch/current/issues",
+        "swap-flapping",
+        False,
+    )
+except module.AdapterError as error:
+    assert "changed while acquiring" in str(error)
+else:
+    raise AssertionError("continuously changing surface unexpectedly registered")
+assert not journal(flapping_repo, "A", "swap-flapping").exists()
+assert not journal(flapping_repo, "B", "swap-flapping").exists()
+assert "Status: review-pending" in (target(flapping_repo, "A") / "SWAP-FLAPPING.md").read_text()
+assert "Status: review-pending" in (target(flapping_repo, "B") / "SWAP-FLAPPING.md").read_text()
+
+
+promote_repo = prepare("promote", "swap-promote", "SWAP-PROMOTE", True)
+module.promote(
+    promote_repo, "file-per-ticket", ".scratch/current/issues", "swap-promote"
+)
+assert json.loads(journal(promote_repo, "A", "swap-promote").read_text())["phase"] == "review-pending"
+assert "Status: review-pending" in (target(promote_repo, "A") / "SWAP-PROMOTE.md").read_text()
+assert json.loads(journal(promote_repo, "B", "swap-promote").read_text())["phase"] == "promoted"
+assert "Status: ready-for-agent" in (target(promote_repo, "B") / "SWAP-PROMOTE.md").read_text()
+
+cleanup_repo = prepare("cleanup", "swap-cleanup", "SWAP-CLEANUP", True)
+module.cleanup(
+    cleanup_repo, "file-per-ticket", ".scratch/current/issues", "swap-cleanup", True
+)
+assert journal(cleanup_repo, "A", "swap-cleanup").exists()
+assert (target(cleanup_repo, "A") / "SWAP-CLEANUP.md").exists()
+assert not journal(cleanup_repo, "B", "swap-cleanup").exists()
+assert not (target(cleanup_repo, "B") / "SWAP-CLEANUP.md").exists()
+PY
+
 write_file_ticket "$FILE_REPO/.scratch/feature/issues/T-1.md" T-1 review-fix-run review-pending "" "Oversized draft"
 write_file_ticket "$FILE_REPO/.scratch/feature/issues/T-2.md" T-2 review-fix-run review-pending T-1 "Dependent draft"
 adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run register >/dev/null

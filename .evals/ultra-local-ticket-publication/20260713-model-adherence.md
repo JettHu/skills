@@ -59,7 +59,9 @@ refusal (including explicit cleanup), missing and duplicate contract refusal,
 partially promoting-set cleanup refusal, stable identity, blockers,
 configured-surface enforcement across register, inspect, promote, Claim, and
 cleanup, representation mismatch refusal, conflict-detecting Claim, unsafe
-tickets-file layouts, and unrelated-content preservation. The
+single/embedded/unknown path placeholders, symlink surface-swap retry without
+cross-surface journal or Ticket mutation, unsafe tickets-file layouts, and
+unrelated-content preservation. The
 cancellation-policy additions are deterministic regression coverage added
 after the retained model run; they do not change that run's provenance claim.
 

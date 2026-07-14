@@ -16,6 +16,7 @@ INPUTS = (
     "skills/engineering/ultra/SKILL.md",
     "skills/engineering/ultra/references/ticket-review-publication.md",
     "skills/engineering/ultra/scripts/local_ticket_publication.py",
+    "skills/engineering/ultra/scripts/local_ticket_surface.py",
 )
 
 
