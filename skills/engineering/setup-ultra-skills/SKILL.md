@@ -48,6 +48,12 @@ Use the base contract as evidence for one preset:
   `review-pending`; a `promoting` or `promoted` run must be resumed, not cleaned.
   A tickets-file without exact section markers, stable IDs, safe state mutation,
   blocker lookup, and conflict-detecting Claim semantics is unsupported.
+  The generated Solve Coordination section also declares
+  `Frontier adapter: bundled-local-markdown-v1` and the exact state, completed,
+  human-blocked, blocker, Claim, branch, and worktree fields consumed by the
+  bundled frontier helper. These labeled values are executable configuration,
+  not descriptive hints. Missing, duplicated, or unknown values fail before
+  discovery or Claim mutation.
 - `github` or `gitlab` choose `remote-review-pending` when provisional remote
   Tickets are acceptable, or `local-staging` when the remote must contain only
   reviewed Tickets.

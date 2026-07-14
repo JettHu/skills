@@ -19,6 +19,8 @@ Use tracker verbs, not hard-coded frontmatter fields, so local markdown trackers
 
 Current mutation support is configured Local Markdown trackers, such as `.scratch/<feature>/issues/*.md`, `.scratch/<feature>/issue.md`, or safely delimited Ticket sections in a configured `tickets.md`. Read `docs/agents/ultra-tracker.md` before discovery when present. A tickets-file adapter requires exact machine-readable section boundaries, stable Ticket IDs, safe state mutation, blocker lookup, and conflict-detecting Claim semantics; otherwise fail closed without mutation. If the tracker is remote and no adapter is available, you may read issue context, but stop before claim/update/close operations and report that a remote tracker adapter is needed.
 
+For a contract declaring `Frontier adapter: bundled-local-markdown-v1`, use the bundled `scripts/local_ticket_frontier.py` for both explicit and `--all` discovery and Claim. Its structured snapshot is the configured tracker contract: it resolves the declared state, completed state, blocker fields/body heading, Claim field/value, and assignment fields; adds the promoted-journal gate only for run-tagged Tickets; and reports claimable versus non-frontier work. Do not reproduce its graph by grepping Markdown. A missing, prose-only, unknown, or malformed adapter contract is unsupported and stops mutation.
+
 Tracker updates should record state-relevant facts. Use the tracker state, labels, assignment, or project status for claim/progress when available. Use PRs, commits, branches, and CI/check runs for implementation and validation evidence, linking them from the issue when useful. Use issue comments or local issue notes for requirement clarification, concise blockers, human decisions, or completion notes only when that is the tracker's normal review surface. Keep batch logs and large command output in the final solve summary or validation artifacts.
 
 ## Invocation
@@ -28,7 +30,7 @@ Tracker updates should record state-relevant facts. Use the tracker state, label
 ```
 
 - Explicit issue ids: solve only those issues.
-- `--all`: solve every issue currently ready for agent work.
+- `--all`: repeatedly solve the configured current claimable frontier, re-reading after each completed frontier generation. It never preselects the transitive dependency graph.
 - `--auto-merge`: after finished solve records are created, merge eligible records into the local base branch one by one through the merge gate. It does not fetch, push, deploy, or broaden the selected issue set.
 - Free-form message: infer the relevant issues from the conversation and tracker, then state the selection before claiming.
 - Merge/apply/ship/land wording: treat as auto-merge intent after the solve pipeline succeeds and the merge gates pass.
@@ -167,7 +169,9 @@ Discovery must skip issues carrying an active `solve-in-progress` claim and repo
 
 ### 1. Discover
 
-Select candidate issues from explicit ids, `--all`, or the message. Keep only issues in `ready-for-agent`.
+Read the configured Ticket universe and blocker graph through the tracker adapter. A Ticket is claimable only when its exact configured state is the configured ready state, every declared blocker currently has the configured completed state, its publication gate (when any) is complete, and its Claim metadata is free. Missing blocker metadata means no blockers unless the configured contract explicitly requires the metadata; never invent edges from numbering, prose, or likely implementation order.
+
+Explicit ids bound the selection universe: intersect exactly those ids with the current frontier and report every requested non-frontier Ticket. Never add an unrequested blocker or dependent. `--all` bounds the universe to the configured adapter surface and begins with only its current frontier.
 
 For configured Local Markdown publication runs, route both explicit and batch discovery through the adapter's complete-set Claim check. Do not infer readiness from a heading, filename, section title, or `Status: ready-for-agent` alone when `Publication Run` metadata is present.
 
@@ -177,19 +181,38 @@ Report skipped issues with a short reason:
 - has active `solve-in-progress`
 - stale claim needing manual/resume handling
 - `review-pending`, incomplete promotion, malformed publication metadata, or an unsafe tickets-file adapter
+- human-blocked state
+- unresolved blocker or stale blocker state
+- dependency cycle or missing blocker target
+- unsafe or unsupported blocker/Claim contract
+
+Cycles, self-cycles, missing targets, non-completed blocker states, and Claim conflicts are non-frontier diagnostics. They never justify a speculative Claim. A safe adapter may still return an independent frontier beside graph-invalid Tickets; an unsafe parser or unsupported Claim capability stops the entire batch before mutation. Distinguish a valid empty frontier from an adapter failure.
 
 ### 2. Claim
 
 For every selected issue:
 
 - determine the adoption route and intended branch/worktree reference
-- re-read the issue and confirm it is still `ready-for-agent` with no active `solve-in-progress`
-- claim it by adding `solve-in-progress` and recording the intended branch/worktree through the tracker's existing machine-readable claim surface
+- pass the discovery snapshot back to the adapter and atomically re-read state, blockers, publication gates, and Claim metadata
+- confirm the Ticket is still in the current frontier; snapshot drift, a newly unsatisfied blocker, or a concurrent Claim is non-claimable stale work
+- claim it in one conflict-detecting mutation by adding the configured Claim value and recording the intended branch/worktree through the declared assignment fields
 - create or adopt the assigned branch/worktree after the claim succeeds
 
 Do this before code changes. For Local Markdown, preserve existing structured conventions such as `state`/`status`, `flags`/`labels`, `branch`/`worktree`/`solve_branch`/`solve_worktree`, stable Ticket IDs, and publication-run identities. A configured tickets-file must use its exact safe section markers; title- or heading-based section inference is never sufficient for mutation. Batch or parallel solve requires a machine-readable conflict-detecting Claim surface. Run-tagged Tickets additionally require the complete-set promoted journal gate before either single or batch Claim. If no reliable Claim surface exists, do not run unsafe mutation even for an explicit Ticket; report the adapter limitation.
 
 If branch/worktree creation or adoption fails after claiming, clean any partial resources and release the Claim when the failure leaves no useful finding or recovery value. When partial resources, evidence, or a durable blocker make the failed Attempt worth handing off, route it through Outcome Finalization as `blocked`; keep `solve-in-progress` only when the same assignment remains actively resumable.
+
+#### `--all` Frontier Loop
+
+Treat one discovery result as one frontier generation:
+
+1. discover and report the configured frontier plus non-frontier diagnostics;
+2. Claim only Tickets returned in that generation, re-reading the snapshot before each Claim;
+3. execute, review, validate, and finalize those Attempts through the ordinary gates;
+4. after their Ticket and Claim states are durable, re-read the same configured universe;
+5. continue only with newly claimable Tickets, and stop when the frontier is empty or the adapter becomes unsafe.
+
+Completion can unlock a dependent in the next generation. A failed, recovery, human-blocked, or still-claimed Ticket does not satisfy its dependents. Do not retain the initial transitive graph as a future Claim list, and do not broaden an explicit run into this loop.
 
 ### 3. Assess: Pre-Implementation Checkpoint
 

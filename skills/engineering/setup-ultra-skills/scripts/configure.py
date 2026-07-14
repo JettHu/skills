@@ -265,7 +265,7 @@ def coordination(preset: str) -> list[str]:
         resource_links = "use only the custom policy's named durable link surface; every unnamed link operation is unsupported."
         claim = "use the custom policy's conflict-detecting Claim and release operation; batch execution is unsupported until that operation is named."
 
-    return [
+    lines = [
         "## Solve Coordination",
         "",
         f"Claim and release: {claim}",
@@ -276,6 +276,25 @@ def coordination(preset: str) -> list[str]:
         "Unsupported operations: record any backend capability absent from this extension as unsupported. Batch mutation requires conflict-detecting Claim and safe blocker lookup; otherwise use an explicit single-Ticket path.",
         "",
     ]
+    if preset == "local-markdown":
+        lines[2:2] = [
+            "Frontier adapter: bundled-local-markdown-v1",
+            "Ticket state fields: Status, State",
+            "Ready state: ready-for-agent",
+            "Completed state: completed",
+            "Human-blocked states: ready-for-human, needs-info",
+            "Blocker metadata fields: Blocked By, Blockers",
+            "Blocker body heading: Blocked by",
+            "Claim field: Flags",
+            "Claim field aliases: Flags, Labels",
+            "Claim value: solve-in-progress",
+            "Solve branch field: Solve Branch",
+            "Solve branch field aliases: Solve Branch, Branch",
+            "Solve worktree field: Solve Worktree",
+            "Solve worktree field aliases: Solve Worktree, Worktree",
+            "",
+        ]
+    return lines
 
 
 def render_contract(args: argparse.Namespace) -> str:
