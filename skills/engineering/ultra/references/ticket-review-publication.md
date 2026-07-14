@@ -24,6 +24,48 @@ The approved Spec or approved conversation already authorizes ordinary Ticket
 splitting, merging, sizing, validation detail, and blocker repair. Do not repeat
 a default granularity quiz.
 
+## GitHub and GitLab remote adapter contract
+
+For a configured GitHub or GitLab backend, select exactly the publication
+strategy named by `docs/agents/ultra-tracker.md`; do not silently substitute the
+other remote strategy. The provider-native API or CLI is the mutation surface.
+Before any mutation, read the configured provisional marker, ready-state
+operation, stable publication-set marker, relationship operation, supersession
+policy, and Claim/frontier lookup. An adapter is safe only when it can re-read
+those fields and detect a concurrent or partial run.
+
+`remote-review-pending` creates or rediscovers every remote Ticket carrying the
+same stable body marker and a configured non-claimable marker. It must not infer
+provisional state from the absence of `ready-for-agent`. The main Agent reviews
+the exact remote bodies, fixes them in place, records created IDs before the
+next operation, wires configured native parent/blocking relationships when
+available, and otherwise writes a configured textual fallback that it can
+re-read exactly. It verifies complete-set membership, bodies, relationships,
+and provisional markers before promoting the whole set. A review-driven split
+or merge supersedes obsolete members according to the configured project policy
+without making them ready. Any interrupted phase resumes from the run marker
+and recorded IDs; it never creates duplicate Tickets or promotes a subset.
+
+`local-staging` uses the configured ignored root (normally
+`.scratch/.ultra-staging/<run-id>/`). `tickets.md` is the review surface and
+`manifest.json` is the recovery surface. The manifest records stable local
+keys, provider IDs, created status, relationship and body verification,
+promotion status, supersession, and remaining recovery work. Review and
+main-Agent fixes finish there before any formal remote Ticket is created. The
+publisher then creates unready remote Tickets, persists each ID before
+continuing, wires and re-reads relationships, verifies the complete remote set,
+and only then promotes it. Delete staging only after a final complete-set ready
+state re-read. Create, map, wire, verify, and promote failure each retain the
+manifest and resume idempotently. Conversation-only staging is a reduced
+recovery fallback only when the configured staging surface is unreachable or
+unwritable; report that degradation and never silently switch to
+`remote-review-pending`.
+
+Both remote strategies exclude provisional, partially promoted, superseded, and
+staged Tickets from explicit and batch `/ultra solve` discovery. A remote
+adapter without conflict-detecting Claim plus exact ready-state verification is
+read-only and must fail closed before mutation.
+
 ## Local Markdown adapter contract
 
 Local Markdown supports only a setup-configured representation:

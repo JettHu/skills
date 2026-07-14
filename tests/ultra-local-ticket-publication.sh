@@ -702,7 +702,8 @@ for text in (
 assert "never claimable through explicit selection or `--all`" in solve
 assert "title- or heading-based section inference is never sufficient" in solve
 assert "safely delimited `tickets-file`" in setup
-assert "remote Tickets" not in reference, "Local Markdown reference drifted into remote publication mechanics"
+assert "## GitHub and GitLab remote adapter contract" in reference
+assert "## Local Markdown adapter contract" in reference
 PY
 
 python3 -m py_compile "$ADAPTER"
