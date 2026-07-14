@@ -343,6 +343,22 @@ text = text.replace("Status: ready", "- Status: ready", 1)
 path.write_text(text, encoding="utf-8")
 PY
 
+write_record "$REPO/.scratch/feature-a/solve-records/20260703-bulleted-cleanup.md" \
+  "20260703-bulleted-cleanup" open solve/ready "$READY_HEAD" "../wt-ready" false "Bulleted cleanup candidate" passed "manual required" \
+  "done; adopted worktree and candidate branch are user-owned"
+python3 - "$REPO/.scratch/feature-a/solve-records/20260703-bulleted-cleanup.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8").replace(
+    "Cleanup: done; adopted worktree and candidate branch are user-owned",
+    "- Cleanup: done; adopted worktree and candidate branch are user-owned",
+    1,
+)
+path.write_text(text, encoding="utf-8")
+PY
+
 cat >"$REPO/.scratch/feature-a/solve-records/20260703-legacy.md" <<EOF
 ---
 id: 20260703-legacy
@@ -542,9 +558,9 @@ ready_issue = next(issue for issue in ready if issue["title"] == "Ready issue")
 assert ready_issue["checklist"] == {"total": 2, "done": 1, "open": 1}
 
 records = data["solve_records"]
-assert records["count"] == 18
+assert records["count"] == 19
 assert records["counts"]["ready"] == 4
-assert records["counts"]["manual"] == 4
+assert records["counts"]["manual"] == 5
 assert records["counts"]["cleanup"] == 1
 assert records["counts"]["recent"] == 1
 assert records["counts"]["recovery"] == 5
@@ -561,6 +577,12 @@ assert "20260703-remote-primary" in {
 assert "20260703-bulleted-status" in {
     record["id"] for record in records["buckets"]["manual"]
 }
+bulleted_cleanup = next(
+    record
+    for record in records["buckets"]["manual"]
+    if record["id"] == "20260703-bulleted-cleanup"
+)
+assert bulleted_cleanup["resource_cleanup"] == ""
 recovery = {record["outcome"]: record for record in records["buckets"]["recovery"]}
 assert set(recovery) == {"blocked", "needs-info", "ready-for-human", "abandoned", "superseded"}
 assert recovery["needs-info"]["recovery_action"].startswith("maintainers provide")

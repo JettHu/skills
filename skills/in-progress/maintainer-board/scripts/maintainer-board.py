@@ -713,10 +713,15 @@ def fallback_ref_check(repo, record):
 
 
 def record_resource_field(record, label):
-    value = record_labeled_value(record_section(record.get("text", ""), "Resources"), label)
-    if len(value) >= 2 and value[0] == value[-1] == "`":
-        return value[1:-1]
-    return value
+    prefix = f"{label}:"
+    for line in record_section(record.get("text", ""), "Resources").splitlines():
+        if not line.startswith(prefix):
+            continue
+        value = line.split(":", 1)[1].strip()
+        if len(value) >= 2 and value[0] == value[-1] == "`":
+            return value[1:-1]
+        return value
+    return ""
 
 
 def fallback_rollout_disposition(record):
