@@ -54,6 +54,7 @@ cat >"$REPO/docs/agents/ultra-tracker.md" <<'EOF'
 Publication strategy: local-review-pending
 Local Ticket representation: tickets-file
 Local Ticket path: .scratch/feature-a/tickets.md
+Cancellation policy: retain-until-explicit-cleanup
 EOF
 
 cat >"$REPO/.scratch/feature-a/issues/01-ready.md" <<'EOF'
@@ -442,6 +443,7 @@ cat >"$CONFIGURED_FILE_REPO/docs/agents/ultra-tracker.md" <<'EOF'
 Publication strategy: local-review-pending
 Local Ticket representation: file-per-ticket
 Local Ticket path: .tracker/tickets/<ticket-file>.md
+Cancellation policy: retain-until-explicit-cleanup
 EOF
 cat >"$CONFIGURED_FILE_REPO/.tracker/tickets/CONFIG-1.md" <<'EOF'
 State: review-pending

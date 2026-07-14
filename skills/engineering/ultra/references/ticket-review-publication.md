@@ -36,6 +36,14 @@ Local Markdown supports only a setup-configured representation:
   `<!-- ultra-ticket:end -->` boundaries. Each section repeats the matching
   structured `Ticket ID`, plus `Status` and `Publication Run`.
 
+The adapter parses `Local Ticket representation` and `Local Ticket path` from
+the managed contract before every operation. It resolves the requested CLI
+location inside the repository and requires it to match the configured exact
+path or single-segment placeholder pattern. For `file-per-ticket`, the final
+`<ticket-file>` component names files within the authorized directory; for
+`tickets-file`, the contract identifies one durable file. A representation or
+surface mismatch fails before a lock, journal, read result, or Ticket mutation.
+
 Titles or heading positions are never stable identity. Duplicate/missing IDs,
 ambiguous or nested section markers, missing state or run metadata, unresolved
 blocker identities, a path outside the repository, or a representation that

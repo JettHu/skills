@@ -32,6 +32,7 @@ local_repo="$TMPDIR_ROOT/local"
 local_sections_repo="$TMPDIR_ROOT/local-sections"
 local_delete_repo="$TMPDIR_ROOT/local-delete-on-cancel"
 local_invalid_policy_repo="$TMPDIR_ROOT/local-invalid-policy"
+local_invalid_path_repo="$TMPDIR_ROOT/local-invalid-path"
 github_remote_repo="$TMPDIR_ROOT/github-remote"
 github_staging_repo="$TMPDIR_ROOT/github-staging"
 gitlab_remote_repo="$TMPDIR_ROOT/gitlab-remote"
@@ -42,7 +43,7 @@ reconfigured_repo="$TMPDIR_ROOT/reconfigured"
 unmanaged_repo="$TMPDIR_ROOT/unmanaged"
 missing_base_repo="$TMPDIR_ROOT/missing-base"
 
-for repo in "$local_repo" "$local_sections_repo" "$local_delete_repo" "$local_invalid_policy_repo" "$github_remote_repo" "$github_staging_repo" "$gitlab_remote_repo" "$gitlab_staging_repo" "$other_repo" "$other_invalid_repo" "$reconfigured_repo" "$unmanaged_repo"; do
+for repo in "$local_repo" "$local_sections_repo" "$local_delete_repo" "$local_invalid_policy_repo" "$local_invalid_path_repo" "$github_remote_repo" "$github_staging_repo" "$gitlab_remote_repo" "$gitlab_staging_repo" "$other_repo" "$other_invalid_repo" "$reconfigured_repo" "$unmanaged_repo"; do
   init_repo "$repo"
 done
 
@@ -77,6 +78,18 @@ if configure "$local_invalid_policy_repo" local-markdown local-review-pending \
   exit 1
 fi
 test ! -e "$local_invalid_policy_repo/docs/agents/ultra-tracker.md"
+if configure "$local_invalid_path_repo" local-markdown local-review-pending \
+  --local-ticket-path '.scratch/<ticket-file>/issues' >"$TMPDIR_ROOT/local-invalid-path.out" 2>&1; then
+  echo "local fixture accepted <ticket-file> outside the final component" >&2
+  exit 1
+fi
+if configure "$local_invalid_path_repo" local-markdown local-review-pending \
+  --local-ticket-representation tickets-file \
+  --local-ticket-path '.scratch/<feature>/<ticket-file>.md' >"$TMPDIR_ROOT/local-invalid-tickets-file.out" 2>&1; then
+  echo "tickets-file fixture accepted a variable ticket filename" >&2
+  exit 1
+fi
+test ! -e "$local_invalid_path_repo/docs/agents/ultra-tracker.md"
 configure "$github_remote_repo" github remote-review-pending
 configure "$github_staging_repo" github local-staging
 configure "$gitlab_remote_repo" gitlab remote-review-pending

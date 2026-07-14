@@ -33,12 +33,15 @@ Use the base contract as evidence for one preset:
   stable Ticket ID and publication-run identity, become `ready-for-agent` only
   after complete-set review and promotion, and use one executable cancellation
   policy: `retain-until-explicit-cleanup` or `delete-on-cancel`. The adapter
-  reads that exact machine-readable policy from the managed contract; unknown
-  values fail closed even for explicit cleanup. Either policy may delete only
-  a journal and complete member set still exactly in `review-pending`; a
-  `promoting` or `promoted` run must be resumed, not cleaned. A tickets-file
-  without exact section markers, stable IDs, safe state mutation, blocker
-  lookup, and conflict-detecting Claim semantics is unsupported.
+  reads that policy plus the exact representation and safely normalized path
+  pattern from the managed contract. Every read or mutation resolves the CLI
+  surface inside the repository and verifies it against those configured
+  fields before creating a lock, journal, or Ticket change. Unknown or
+  mismatched values fail closed even for explicit cleanup. Either policy may
+  delete only a journal and complete member set still exactly in
+  `review-pending`; a `promoting` or `promoted` run must be resumed, not cleaned.
+  A tickets-file without exact section markers, stable IDs, safe state mutation,
+  blocker lookup, and conflict-detecting Claim semantics is unsupported.
 - `github` or `gitlab` choose `remote-review-pending` when provisional remote
   Tickets are acceptable, or `local-staging` when the remote must contain only
   reviewed Tickets.

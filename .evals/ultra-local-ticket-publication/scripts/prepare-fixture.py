@@ -48,6 +48,17 @@ def register(adapter: Path, repo: Path, run_id: str) -> None:
     )
 
 
+def write_local_contract(repo: Path) -> None:
+    write(
+        repo / "docs/agents/ultra-tracker.md",
+        """Publication strategy: local-review-pending
+Local Ticket representation: tickets-file
+Local Ticket path: .scratch/feature/tickets.md
+Cancellation policy: retain-until-explicit-cleanup
+""",
+    )
+
+
 def ticket(ticket_id: str, run_id: str, body: str, blockers: str = "") -> str:
     blocker_line = f"Blocked By: {blockers}" if blockers else "Blocked By:"
     return f"""<!-- ultra-ticket:begin id={ticket_id} -->
@@ -111,6 +122,7 @@ contract excerpt). Do not ask the parent user ordinary split/blocker questions.
     adapter = output / "skill-input/skills/engineering/ultra/scripts/local_ticket_publication.py"
 
     first = output / "scenarios/01-derivable-review-fix"
+    write_local_contract(first / "repo")
     write(
         first / "APPROVED_SPEC.md",
         """# Approved account recovery Spec
@@ -170,6 +182,7 @@ and promote the complete corrected set without creating a confirmation file.
     )
 
     second = output / "scenarios/02-human-owned-choice"
+    write_local_contract(second / "repo")
     write(
         second / "APPROVED_SPEC.md",
         """# Approved release Ticket Spec

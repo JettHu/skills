@@ -12,12 +12,14 @@ mkdir -p "$FILE_REPO/.scratch/feature/issues" "$SECTION_REPO/.scratch/feature"
 
 write_contract() {
   local repo="$1" policy="$2"
+  local representation="${3:-file-per-ticket}"
+  local location="${4:-.scratch/<feature>/issues/<ticket-file>.md}"
   mkdir -p "$repo/docs/agents"
-  printf 'Publication strategy: local-review-pending\nCancellation policy: %s\n' "$policy" >"$repo/docs/agents/ultra-tracker.md"
+  printf 'Publication strategy: local-review-pending\nLocal Ticket representation: %s\nLocal Ticket path: %s\nCancellation policy: %s\n' "$representation" "$location" "$policy" >"$repo/docs/agents/ultra-tracker.md"
 }
 
 write_contract "$FILE_REPO" retain-until-explicit-cleanup
-write_contract "$SECTION_REPO" retain-until-explicit-cleanup
+write_contract "$SECTION_REPO" retain-until-explicit-cleanup tickets-file .scratch/feature/tickets.md
 
 write_file_ticket() {
   local path="$1" id="$2" run="$3" status="$4" blockers="$5" title="$6"
@@ -47,6 +49,86 @@ adapter() {
     --repo "$repo" --representation "$representation" \
     --location "$location" --run-id "$run" "$@"
 }
+
+# Every adapter operation is authorized by the one configured Local Markdown
+# representation and durable surface, never by CLI coordinates alone.
+surface_failures=0
+SURFACE_REGISTER_REPO="$TMPDIR_ROOT/surface-register"
+mkdir -p "$SURFACE_REGISTER_REPO/.scratch/outside/issues"
+write_contract "$SURFACE_REGISTER_REPO" delete-on-cancel file-per-ticket '.scratch/configured/issues/<ticket-file>.md'
+write_file_ticket "$SURFACE_REGISTER_REPO/.scratch/outside/issues/SURFACE-REGISTER.md" SURFACE-REGISTER surface-register-run review-pending "" "Outside configured surface"
+if adapter "$SURFACE_REGISTER_REPO" file-per-ticket .scratch/outside/issues surface-register-run register >"$TMPDIR_ROOT/surface-register.out" 2>&1; then
+  echo "register accepted a path outside the configured surface" >&2
+  surface_failures=1
+fi
+grep -Fq 'configured Local Ticket path does not authorize requested surface' "$TMPDIR_ROOT/surface-register.out" || surface_failures=1
+if test -e "$SURFACE_REGISTER_REPO/.scratch/outside/issues/.ultra-publications"; then
+  echo "surface-mismatched register created coordination metadata" >&2
+  surface_failures=1
+fi
+
+prepare_surface_run() {
+  local repo="$1" run="$2" id="$3"
+  mkdir -p "$repo/.scratch/outside/issues"
+  write_contract "$repo" retain-until-explicit-cleanup file-per-ticket '.scratch/outside/issues/<ticket-file>.md'
+  write_file_ticket "$repo/.scratch/outside/issues/$id.md" "$id" "$run" review-pending "" "Surface drift fixture"
+  adapter "$repo" file-per-ticket .scratch/outside/issues "$run" register >/dev/null
+  write_contract "$repo" delete-on-cancel file-per-ticket '.scratch/configured/issues/<ticket-file>.md'
+}
+
+SURFACE_PROMOTE_REPO="$TMPDIR_ROOT/surface-promote"
+prepare_surface_run "$SURFACE_PROMOTE_REPO" surface-promote-run SURFACE-PROMOTE
+if adapter "$SURFACE_PROMOTE_REPO" file-per-ticket .scratch/outside/issues surface-promote-run promote >"$TMPDIR_ROOT/surface-promote.out" 2>&1; then
+  echo "promote accepted a path outside the configured surface" >&2
+  surface_failures=1
+fi
+grep -Fq 'configured Local Ticket path does not authorize requested surface' "$TMPDIR_ROOT/surface-promote.out" || surface_failures=1
+grep -Fq 'Status: review-pending' "$SURFACE_PROMOTE_REPO/.scratch/outside/issues/SURFACE-PROMOTE.md" || surface_failures=1
+
+SURFACE_CLEANUP_REPO="$TMPDIR_ROOT/surface-cleanup"
+prepare_surface_run "$SURFACE_CLEANUP_REPO" surface-cleanup-run SURFACE-CLEANUP
+if adapter "$SURFACE_CLEANUP_REPO" file-per-ticket .scratch/outside/issues surface-cleanup-run cleanup >"$TMPDIR_ROOT/surface-cleanup.out" 2>&1; then
+  echo "cleanup accepted a path outside the configured surface" >&2
+  surface_failures=1
+fi
+grep -Fq 'configured Local Ticket path does not authorize requested surface' "$TMPDIR_ROOT/surface-cleanup.out" || surface_failures=1
+test -e "$SURFACE_CLEANUP_REPO/.scratch/outside/issues/SURFACE-CLEANUP.md" || surface_failures=1
+
+SURFACE_INSPECT_REPO="$TMPDIR_ROOT/surface-inspect"
+prepare_surface_run "$SURFACE_INSPECT_REPO" surface-inspect-run SURFACE-INSPECT
+if adapter "$SURFACE_INSPECT_REPO" file-per-ticket .scratch/outside/issues surface-inspect-run inspect >"$TMPDIR_ROOT/surface-inspect.out" 2>&1; then
+  echo "inspect accepted a path outside the configured surface" >&2
+  surface_failures=1
+fi
+grep -Fq 'configured Local Ticket path does not authorize requested surface' "$TMPDIR_ROOT/surface-inspect.out" || surface_failures=1
+
+SURFACE_CLAIM_REPO="$TMPDIR_ROOT/surface-claim"
+mkdir -p "$SURFACE_CLAIM_REPO/.scratch/outside/issues"
+write_contract "$SURFACE_CLAIM_REPO" retain-until-explicit-cleanup file-per-ticket '.scratch/outside/issues/<ticket-file>.md'
+write_file_ticket "$SURFACE_CLAIM_REPO/.scratch/outside/issues/SURFACE-CLAIM.md" SURFACE-CLAIM surface-claim-run review-pending "" "Surface claim fixture"
+adapter "$SURFACE_CLAIM_REPO" file-per-ticket .scratch/outside/issues surface-claim-run register >/dev/null
+adapter "$SURFACE_CLAIM_REPO" file-per-ticket .scratch/outside/issues surface-claim-run promote >/dev/null
+write_contract "$SURFACE_CLAIM_REPO" delete-on-cancel file-per-ticket '.scratch/configured/issues/<ticket-file>.md'
+if adapter "$SURFACE_CLAIM_REPO" file-per-ticket .scratch/outside/issues surface-claim-run claim --ticket-id SURFACE-CLAIM >"$TMPDIR_ROOT/surface-claim.out" 2>&1; then
+  echo "claim accepted a path outside the configured surface" >&2
+  surface_failures=1
+fi
+grep -Fq 'configured Local Ticket path does not authorize requested surface' "$TMPDIR_ROOT/surface-claim.out" || surface_failures=1
+if grep -Fq 'solve-in-progress' "$SURFACE_CLAIM_REPO/.scratch/outside/issues/SURFACE-CLAIM.md"; then
+  echo "surface-mismatched claim mutated Claim metadata" >&2
+  surface_failures=1
+fi
+
+REPRESENTATION_REPO="$TMPDIR_ROOT/surface-representation"
+mkdir -p "$REPRESENTATION_REPO/.scratch/feature/issues"
+write_contract "$REPRESENTATION_REPO" retain-until-explicit-cleanup tickets-file .scratch/feature/tickets.md
+write_file_ticket "$REPRESENTATION_REPO/.scratch/feature/issues/REPRESENTATION-1.md" REPRESENTATION-1 representation-run review-pending "" "Representation mismatch"
+if adapter "$REPRESENTATION_REPO" file-per-ticket .scratch/feature/issues representation-run register >"$TMPDIR_ROOT/surface-representation.out" 2>&1; then
+  echo "register accepted a representation mismatch" >&2
+  surface_failures=1
+fi
+grep -Fq 'configured Local Ticket representation does not match the requested adapter' "$TMPDIR_ROOT/surface-representation.out" || surface_failures=1
+test "$surface_failures" -eq 0
 
 write_file_ticket "$FILE_REPO/.scratch/feature/issues/T-1.md" T-1 review-fix-run review-pending "" "Oversized draft"
 write_file_ticket "$FILE_REPO/.scratch/feature/issues/T-2.md" T-2 review-fix-run review-pending T-1 "Dependent draft"
@@ -151,6 +233,7 @@ fi
 # promotion and conflict-detecting Claim.
 ALIAS_REPO="$TMPDIR_ROOT/alias-file-per"
 mkdir -p "$ALIAS_REPO/.scratch/feature/issues"
+write_contract "$ALIAS_REPO" retain-until-explicit-cleanup
 python3 - "$ALIAS_REPO/.scratch/feature/issues/A-1.md" <<'PY'
 from pathlib import Path
 import sys
@@ -207,7 +290,7 @@ if ! test -e "$MISSING_CONTRACT_REPO/.scratch/feature/issues/MISSING-1.md"; then
   echo "missing-contract cleanup deleted its Ticket" >&2
   cancellation_safety_failures=1
 fi
-grep -Fq 'missing cancellation contract' "$TMPDIR_ROOT/missing-contract.out"
+grep -Fq 'missing Local tracker contract' "$TMPDIR_ROOT/missing-contract.out"
 
 PROMOTING_REPO="$TMPDIR_ROOT/promoting-cleanup"
 mkdir -p "$PROMOTING_REPO/.scratch/feature/issues"
@@ -272,9 +355,10 @@ test ! -e "$AUTO_CLEAN_REPO/.scratch/feature/issues/AUTO-1.md"
 # Unknown policy text fails closed and cannot authorize deletion.
 UNKNOWN_POLICY_REPO="$TMPDIR_ROOT/unknown-policy"
 mkdir -p "$UNKNOWN_POLICY_REPO/.scratch/feature/issues"
-write_contract "$UNKNOWN_POLICY_REPO" delete-whatever-the-contract-says
+write_contract "$UNKNOWN_POLICY_REPO" retain-until-explicit-cleanup
 write_file_ticket "$UNKNOWN_POLICY_REPO/.scratch/feature/issues/UNKNOWN-1.md" UNKNOWN-1 unknown-run review-pending "" "Unknown-policy draft"
 adapter "$UNKNOWN_POLICY_REPO" file-per-ticket .scratch/feature/issues unknown-run register >/dev/null
+write_contract "$UNKNOWN_POLICY_REPO" delete-whatever-the-contract-says
 if adapter "$UNKNOWN_POLICY_REPO" file-per-ticket .scratch/feature/issues unknown-run cleanup >"$TMPDIR_ROOT/unknown-policy.out" 2>&1; then
   echo "unknown cancellation policy unexpectedly authorized deletion" >&2
   exit 1
@@ -287,7 +371,7 @@ if adapter "$UNKNOWN_POLICY_REPO" file-per-ticket .scratch/feature/issues unknow
 fi
 grep -Fq 'unsupported cancellation policy' "$TMPDIR_ROOT/unknown-policy-explicit.out"
 test -e "$UNKNOWN_POLICY_REPO/.scratch/feature/issues/UNKNOWN-1.md"
-printf 'Publication strategy: remote-review-pending\nCancellation policy: delete-on-cancel\n' >"$UNKNOWN_POLICY_REPO/docs/agents/ultra-tracker.md"
+printf 'Publication strategy: remote-review-pending\nLocal Ticket representation: file-per-ticket\nLocal Ticket path: .scratch/<feature>/issues/<ticket-file>.md\nCancellation policy: delete-on-cancel\n' >"$UNKNOWN_POLICY_REPO/docs/agents/ultra-tracker.md"
 if adapter "$UNKNOWN_POLICY_REPO" file-per-ticket .scratch/feature/issues unknown-run cleanup >"$TMPDIR_ROOT/wrong-strategy.out" 2>&1; then
   echo "non-local publication strategy unexpectedly authorized deletion" >&2
   exit 1
@@ -300,12 +384,12 @@ if adapter "$UNKNOWN_POLICY_REPO" file-per-ticket .scratch/feature/issues unknow
 fi
 grep -Fq 'must select local-review-pending exactly once' "$TMPDIR_ROOT/wrong-strategy-explicit.out"
 test -e "$UNKNOWN_POLICY_REPO/.scratch/feature/issues/UNKNOWN-1.md"
-printf 'Publication strategy: local-review-pending\nCancellation policy: delete-on-cancel\nCancellation policy: retain-until-explicit-cleanup\n' >"$UNKNOWN_POLICY_REPO/docs/agents/ultra-tracker.md"
+printf 'Publication strategy: local-review-pending\nLocal Ticket representation: file-per-ticket\nLocal Ticket path: .scratch/<feature>/issues/<ticket-file>.md\nCancellation policy: delete-on-cancel\nCancellation policy: retain-until-explicit-cleanup\n' >"$UNKNOWN_POLICY_REPO/docs/agents/ultra-tracker.md"
 if adapter "$UNKNOWN_POLICY_REPO" file-per-ticket .scratch/feature/issues unknown-run cleanup --explicit >"$TMPDIR_ROOT/duplicate-policy-explicit.out" 2>&1; then
   echo "explicit cleanup bypassed duplicate cancellation policies" >&2
   exit 1
 fi
-grep -Fq 'must define exactly one machine-readable policy' "$TMPDIR_ROOT/duplicate-policy-explicit.out"
+grep -Fq 'must define exactly one Cancellation policy' "$TMPDIR_ROOT/duplicate-policy-explicit.out"
 test -e "$UNKNOWN_POLICY_REPO/.scratch/feature/issues/UNKNOWN-1.md"
 
 # One safely delimited tickets-file is mutated by exact section identity while
@@ -381,6 +465,7 @@ grep -Fq 'Labels: solve-in-progress' "$SECTION_REPO/.scratch/feature/tickets.md"
 for kind in duplicate missing-status nested unresolved heading-only mixed-identity; do
   repo="$TMPDIR_ROOT/unsafe-$kind"
   mkdir -p "$repo/.scratch/feature"
+  write_contract "$repo" retain-until-explicit-cleanup tickets-file .scratch/feature/tickets.md
   python3 - "$repo/.scratch/feature/tickets.md" "$kind" <<'PY'
 from pathlib import Path
 import sys

@@ -57,8 +57,9 @@ covers partial promotion, concurrent edits, idempotent resume, default
 retention, explicit cleanup, configured `delete-on-cancel`, unknown-policy
 refusal (including explicit cleanup), missing and duplicate contract refusal,
 partially promoting-set cleanup refusal, stable identity, blockers,
-conflict-detecting Claim, unsafe tickets-file layouts, and unrelated-content
-preservation. The
+configured-surface enforcement across register, inspect, promote, Claim, and
+cleanup, representation mismatch refusal, conflict-detecting Claim, unsafe
+tickets-file layouts, and unrelated-content preservation. The
 cancellation-policy additions are deterministic regression coverage added
 after the retained model run; they do not change that run's provenance claim.
 

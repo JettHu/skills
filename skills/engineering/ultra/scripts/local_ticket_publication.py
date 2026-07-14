@@ -22,6 +22,8 @@ CANCELLATION_POLICIES = {
     "retain-until-explicit-cleanup",
     "delete-on-cancel",
 }
+REPRESENTATIONS = {"file-per-ticket", "tickets-file"}
+PLACEHOLDER = re.compile(r"<[A-Za-z][A-Za-z0-9_-]*>")
 SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 BEGIN = re.compile(
     r"(?m)^<!-- ultra-ticket:begin id=([A-Za-z0-9][A-Za-z0-9._-]*) -->[ \t]*\n"
@@ -58,6 +60,13 @@ class Ticket:
     def body_digest(self) -> str:
         normalized = normalize_operational_fields(self.inner)
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class LocalContract:
+    representation: str
+    location_pattern: str
+    cancellation_policy: str
 
 
 def normalize_key(key: str) -> str:
@@ -212,24 +221,90 @@ def safe_location(repo: Path, raw: str) -> Path:
     return location
 
 
-def configured_cancellation_policy(repo: Path) -> str:
+def contract_value(text: str, field: str) -> str:
+    matches = re.findall(
+        rf"(?m)^{re.escape(field)}:[ \t]*(\S(?:.*\S)?)[ \t]*$", text
+    )
+    if len(matches) != 1:
+        raise AdapterError(f"Local tracker contract must define exactly one {field}")
+    return matches[0]
+
+
+def configured_local_contract(repo: Path) -> LocalContract:
     path = repo / CONTRACT
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as error:
-        raise AdapterError(f"missing cancellation contract: {path}") from error
-    strategies = re.findall(r"(?m)^Publication strategy:[ \t]*(\S+)[ \t]*$", text)
-    if strategies != ["local-review-pending"]:
+        raise AdapterError(f"missing Local tracker contract: {path}") from error
+    strategy = contract_value(text, "Publication strategy")
+    if strategy != "local-review-pending":
         raise AdapterError(
-            "cancellation contract must select local-review-pending exactly once"
+            "Local tracker contract must select local-review-pending exactly once"
         )
-    matches = re.findall(r"(?m)^Cancellation policy:[ \t]*(\S+)[ \t]*$", text)
-    if len(matches) != 1:
-        raise AdapterError("cancellation contract must define exactly one machine-readable policy")
-    policy = matches[0]
+    representation = contract_value(text, "Local Ticket representation")
+    if representation not in REPRESENTATIONS:
+        raise AdapterError(
+            f"unsupported Local Ticket representation: {representation}"
+        )
+    location_pattern = contract_value(text, "Local Ticket path")
+    policy = contract_value(text, "Cancellation policy")
     if policy not in CANCELLATION_POLICIES:
         raise AdapterError(f"unsupported cancellation policy: {policy}")
-    return policy
+    return LocalContract(representation, location_pattern, policy)
+
+
+def configured_location_regex(contract: LocalContract) -> re.Pattern[str]:
+    raw = contract.location_pattern
+    if raw.startswith("/") or "\\" in raw:
+        raise AdapterError("configured Local Ticket path must be a relative POSIX path")
+    parts = raw.split("/")
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise AdapterError("configured Local Ticket path is not safely normalized")
+    ticket_file_parts = [
+        index for index, part in enumerate(parts) if "<ticket-file>" in part
+    ]
+    if contract.representation == "file-per-ticket":
+        if ticket_file_parts and ticket_file_parts != [len(parts) - 1]:
+            raise AdapterError(
+                "configured file-per-ticket path must place <ticket-file> in its final component"
+            )
+        if ticket_file_parts:
+            parts = parts[:-1]
+    elif ticket_file_parts:
+        raise AdapterError(
+            "configured tickets-file path must identify one durable file"
+        )
+    if not parts:
+        raise AdapterError("configured Local Ticket path has no durable surface")
+    pattern = "/".join(parts)
+    pieces = []
+    cursor = 0
+    for match in PLACEHOLDER.finditer(pattern):
+        pieces.append(re.escape(pattern[cursor : match.start()]))
+        pieces.append("[^/]+")
+        cursor = match.end()
+    pieces.append(re.escape(pattern[cursor:]))
+    unmatched = PLACEHOLDER.sub("", pattern)
+    if "<" in unmatched or ">" in unmatched:
+        raise AdapterError("configured Local Ticket path has an invalid placeholder")
+    return re.compile(r"\A" + "".join(pieces) + r"\Z")
+
+
+def validate_configured_surface(
+    repo: Path, representation: str, raw_location: str
+) -> tuple[Path, LocalContract]:
+    contract = configured_local_contract(repo)
+    if representation != contract.representation:
+        raise AdapterError(
+            "configured Local Ticket representation does not match the requested adapter"
+        )
+    location = safe_location(repo, raw_location)
+    relative = location.relative_to(repo).as_posix()
+    if not configured_location_regex(contract).fullmatch(relative):
+        raise AdapterError(
+            f"configured Local Ticket path does not authorize requested surface: {relative}"
+        )
+    return location, contract
 
 
 def load_file_per(location: Path) -> list[Ticket]:
@@ -367,9 +442,12 @@ def snapshot(selected: list[Ticket]) -> dict[str, str]:
 
 
 def register(repo: Path, representation: str, raw_location: str, run_id: str, allow_membership_change: bool) -> dict:
-    location = safe_location(repo, raw_location)
+    location, _contract = validate_configured_surface(
+        repo, representation, raw_location
+    )
     path = journal_path(location, representation, run_id)
     with mutation_lock(location, representation):
+        validate_configured_surface(repo, representation, raw_location)
         location, tickets = load_tickets(repo, representation, raw_location)
         selected = run_tickets(tickets, run_id)
         validate_blocker_targets(tickets)
@@ -395,6 +473,7 @@ def register(repo: Path, representation: str, raw_location: str, run_id: str, al
 
 
 def validate_against_journal(repo: Path, representation: str, raw_location: str, run_id: str) -> tuple[Path, list[Ticket], dict]:
+    validate_configured_surface(repo, representation, raw_location)
     location, tickets = load_tickets(repo, representation, raw_location)
     selected = run_tickets(tickets, run_id)
     validate_blocker_targets(tickets)
@@ -414,7 +493,9 @@ def replace_status(ticket: Ticket, status: str) -> str:
 
 
 def promote(repo: Path, representation: str, raw_location: str, run_id: str) -> dict:
-    location = safe_location(repo, raw_location)
+    location, _contract = validate_configured_surface(
+        repo, representation, raw_location
+    )
     path = journal_path(location, representation, run_id)
     with mutation_lock(location, representation):
         location, tickets, data = validate_against_journal(repo, representation, raw_location, run_id)
@@ -497,7 +578,9 @@ def claimable_ids(repo: Path, representation: str, raw_location: str, run_id: st
 def claim(repo: Path, representation: str, raw_location: str, run_id: str, ticket_id: str) -> dict:
     if not ticket_id:
         raise AdapterError("claim requires --ticket-id")
-    location = safe_location(repo, raw_location)
+    location, _contract = validate_configured_surface(
+        repo, representation, raw_location
+    )
     with mutation_lock(location, representation):
         location, tickets, _data = validate_against_journal(
             repo, representation, raw_location, run_id
@@ -534,6 +617,7 @@ def claim(repo: Path, representation: str, raw_location: str, run_id: str, ticke
 
 
 def inspect(repo: Path, representation: str, raw_location: str, run_id: str) -> dict:
+    validate_configured_surface(repo, representation, raw_location)
     location, tickets = load_tickets(repo, representation, raw_location)
     selected = run_tickets(tickets, run_id)
     path = journal_path(location, representation, run_id)
@@ -554,11 +638,18 @@ def inspect(repo: Path, representation: str, raw_location: str, run_id: str) -> 
 
 
 def cleanup(repo: Path, representation: str, raw_location: str, run_id: str, explicit: bool) -> dict:
-    location = safe_location(repo, raw_location)
+    location, _contract = validate_configured_surface(
+        repo, representation, raw_location
+    )
     path = journal_path(location, representation, run_id)
     with mutation_lock(location, representation):
-        policy = configured_cancellation_policy(repo)
-        if not explicit and policy == "retain-until-explicit-cleanup":
+        _location, contract = validate_configured_surface(
+            repo, representation, raw_location
+        )
+        if (
+            not explicit
+            and contract.cancellation_policy == "retain-until-explicit-cleanup"
+        ):
             raise AdapterError("cancellation retains review-pending artifacts; cleanup requires --explicit")
         location, tickets, data = validate_against_journal(
             repo, representation, raw_location, run_id
