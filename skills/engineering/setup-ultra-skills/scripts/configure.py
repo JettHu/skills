@@ -8,11 +8,6 @@ import re
 import sys
 from pathlib import Path
 
-
-ULTRA_SCRIPTS = Path(__file__).resolve().parents[1].parent / "ultra" / "scripts"
-if str(ULTRA_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(ULTRA_SCRIPTS))
-
 from local_ticket_surface import SurfacePatternError, configured_location_regex
 
 

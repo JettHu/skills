@@ -64,6 +64,9 @@ cross-surface journal or Ticket mutation, unsafe tickets-file layouts, and
 unrelated-content preservation. The
 cancellation-policy additions are deterministic regression coverage added
 after the retained model run; they do not change that run's provenance claim.
+`tests/setup-ultra-skills.sh` also copies only the installable setup skill into
+an isolated directory and runs its documented configure command, proving the
+shared path validator is bundled rather than imported from a sibling source tree.
 
 ## Provenance boundary
 

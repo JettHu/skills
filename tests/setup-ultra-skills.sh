@@ -47,6 +47,25 @@ for repo in "$local_repo" "$local_sections_repo" "$local_delete_repo" "$local_in
   init_repo "$repo"
 done
 
+# The installable setup skill is self-contained: copying only its own
+# directory preserves the documented configure command and surface grammar.
+isolated_skill="$TMPDIR_ROOT/isolated-skill/setup-ultra-skills"
+isolated_repo="$TMPDIR_ROOT/isolated-repo"
+mkdir -p "$(dirname "$isolated_skill")"
+cp -R "$REPO_ROOT/skills/engineering/setup-ultra-skills" "$isolated_skill"
+init_repo "$isolated_repo"
+python3 "$isolated_skill/scripts/configure.py" \
+  --repo "$isolated_repo" \
+  --preset local-markdown \
+  --publication-strategy local-review-pending \
+  --instructions AGENTS.md \
+  --apply >/dev/null
+grep -Fq 'Local Ticket path: .scratch/<feature>/issues/<ticket-file>.md' \
+  "$isolated_repo/docs/agents/ultra-tracker.md"
+cmp -s \
+  "$REPO_ROOT/skills/engineering/setup-ultra-skills/scripts/local_ticket_surface.py" \
+  "$REPO_ROOT/skills/engineering/ultra/scripts/local_ticket_surface.py"
+
 preview_output="$TMPDIR_ROOT/preview.txt"
 python3 "$CONFIGURE" \
   --repo "$local_repo" \
