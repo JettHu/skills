@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-PHASE="${1:---expand}"
+PHASE="${1:---contract}"
 
 if [[ "$PHASE" != "--expand" && "$PHASE" != "--contract" ]]; then
   echo "usage: $0 [--expand|--contract]" >&2
@@ -83,6 +83,14 @@ assert "final-state grader" in eval_record, "eval record must name final-state g
 
 print(f"ultra canonical routing fixture passed ({phase[2:]} phase)")
 PY
+
+if [[ "$PHASE" == "--contract" ]]; then
+  python3 "$REPO_ROOT/.evals/ultra-canonical-routing/scripts/grade-run.py" \
+    --output "$REPO_ROOT/.evals/ultra-canonical-routing/runs/20260713-trace-fresh" \
+    --json >/dev/null
+  echo "retained expand-phase canonical routing eval passed"
+  exit 0
+fi
 
 fixture_root="$(mktemp -d)"
 trap 'rm -rf "$fixture_root"' EXIT

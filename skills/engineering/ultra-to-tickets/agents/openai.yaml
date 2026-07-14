@@ -1,0 +1,6 @@
+interface:
+  display_name: "Ultra To Tickets"
+  short_description: "Run to-tickets through ultra"
+  default_prompt: "Use $ultra-to-tickets to turn an approved Spec into Tickets through ultra's durable review-fix publication workflow."
+policy:
+  allow_implicit_invocation: false

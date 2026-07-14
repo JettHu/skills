@@ -540,7 +540,7 @@ Architecture proposal skills such as `/ultra improve-codebase-architecture` are 
 
 `technical_context` is optional in v1. If an issue lacks technical detail, solve should infer what it can from the codebase. If missing context blocks completion, set `needs-info` with a blocker reason. If recurring issue-quality gaps appear, mention them in the final solve summary or an existing project issue-generation surface; issue-generation improvements can stay within the existing tracker schema.
 
-This is a feedback loop, not a schema gate: `to-issues -> solve notices missing context -> solve reports the gap -> future issue generation improves`.
+This is a feedback loop, not a schema gate: `to-tickets -> solve notices missing context -> solve reports the gap -> future Ticket generation improves`.
 
 ## Tracker Adapter Compatibility
 

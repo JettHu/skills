@@ -2,7 +2,7 @@
 
 Agent repo-maintainer skills for Codex, Claude Code, and other Agent-Skills-compatible harnesses.
 
-This repository is an installable skill catalog and a small maintainer workflow layer: PRD -> issues -> claim -> worktree -> solve -> review -> validation -> records -> land -> cleanup. Each installable skill lives under `skills/<category>/<skill-name>/`. Skill directories stay lean and contain only `SKILL.md` plus resources that the agent actually uses. Repository-level docs, tests, and install scripts live at the repo root.
+This repository is an installable skill catalog and a small maintainer workflow layer: Spec -> Tickets -> Claim -> Attempt -> Solve Record -> land -> cleanup. Each installable skill lives under `skills/<category>/<skill-name>/`. Skill directories stay lean and contain only `SKILL.md` plus resources that the agent actually uses. Repository-level docs, tests, and install scripts live at the repo root.
 
 ## Quick Start
 
@@ -46,8 +46,8 @@ The installer creates symlinks, so `git pull` in this repository updates install
 | [`ultra`](skills/engineering/ultra/SKILL.md) | Coordinate enhanced skill runs and the `/ultra solve` Ticket-to-outcome-receipt workflow. |
 | [`ultra-diagnose`](skills/engineering/ultra-diagnose/SKILL.md) | Completion-friendly entry for `/ultra diagnose`. |
 | [`ultra-solve`](skills/engineering/ultra-solve/SKILL.md) | Completion-friendly entry for outcome-aware `/ultra solve`. |
-| [`ultra-to-issues`](skills/engineering/ultra-to-issues/SKILL.md) | Completion-friendly entry for `/ultra to-issues`. |
-| [`ultra-to-prd`](skills/engineering/ultra-to-prd/SKILL.md) | Completion-friendly entry for `/ultra to-prd`. |
+| [`ultra-to-spec`](skills/engineering/ultra-to-spec/SKILL.md) | Completion-friendly entry for `/ultra to-spec`. |
+| [`ultra-to-tickets`](skills/engineering/ultra-to-tickets/SKILL.md) | Completion-friendly entry for `/ultra to-tickets`. |
 
 ### Personal
 
@@ -95,8 +95,8 @@ skills/
 │   ├── ultra/
 │   ├── ultra-diagnose/
 │   ├── ultra-solve/
-│   ├── ultra-to-issues/
-│   └── ultra-to-prd/
+│   ├── ultra-to-spec/
+│   └── ultra-to-tickets/
 ├── personal/
 │   └── agent-worktree/
 └── in-progress/

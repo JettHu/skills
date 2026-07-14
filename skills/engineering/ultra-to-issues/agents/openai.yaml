@@ -1,6 +1,0 @@
-interface:
-  display_name: "Ultra To Issues"
-  short_description: "Run to-issues through ultra"
-  default_prompt: "Use $ultra-to-issues to break a PRD, plan, or spec into issues with ultra's exploration and review."
-policy:
-  allow_implicit_invocation: false

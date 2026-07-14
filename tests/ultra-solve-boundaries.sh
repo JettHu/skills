@@ -16,10 +16,10 @@ solve = (repo / "skills/engineering/ultra/solve.md").read_text(encoding="utf-8")
 frontier = (repo / "skills/engineering/ultra/scripts/local_ticket_frontier.py").read_text(
     encoding="utf-8"
 )
-brief = (repo / "skills/engineering/ultra-to-issues/references/agent-brief.md").read_text(
+brief = (repo / "skills/engineering/ultra-to-tickets/references/agent-brief.md").read_text(
     encoding="utf-8"
 )
-wrapper = (repo / "skills/engineering/ultra-to-issues/SKILL.md").read_text(encoding="utf-8")
+wrapper = (repo / "skills/engineering/ultra-to-tickets/SKILL.md").read_text(encoding="utf-8")
 record_format = (repo / "skills/engineering/solve-records/references/record-format.md").read_text(
     encoding="utf-8"
 )
@@ -36,7 +36,7 @@ assert "non-duplicative execution delta" in brief
 
 link = re.search(r"\[Agent Brief contract\]\(([^)]+)\)", wrapper)
 assert link, "wrapper must disclose the Agent Brief reference"
-assert (repo / "skills/engineering/ultra-to-issues" / link.group(1)).is_file(), (
+assert (repo / "skills/engineering/ultra-to-tickets" / link.group(1)).is_file(), (
     "Agent Brief reference must resolve"
 )
 

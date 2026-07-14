@@ -6,7 +6,7 @@
     "./skills/engineering/ultra",
     "./skills/engineering/ultra-diagnose",
     "./skills/engineering/ultra-solve",
-    "./skills/engineering/ultra-to-issues",
-    "./skills/engineering/ultra-to-prd"
+    "./skills/engineering/ultra-to-spec",
+    "./skills/engineering/ultra-to-tickets"
   ]
 }

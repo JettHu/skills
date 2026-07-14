@@ -23,8 +23,6 @@ Resolve these aliases before profile lookup. Use the canonical profile for ultra
 
 | Requested name | Canonical profile | Notes |
 |----------------|-------------------|-------|
-| to-prd | to-spec | Temporary internal bridge for the still-promoted `ultra-to-prd` wrapper. It is not advertised or a compatibility promise; Ticket 15 removes it during catalog contraction. |
-| to-issues | to-tickets | Temporary internal bridge for the still-promoted `ultra-to-issues` wrapper. It is not advertised or a compatibility promise; Ticket 15 removes it during catalog contraction. |
 | diagnose | diagnosing-bugs | Legacy/local name for Matt Pocock's debugging skill |
 | write-a-skill | writing-great-skills | Legacy/local name for skill-writing guidance; pass through unless a profile is later added |
 

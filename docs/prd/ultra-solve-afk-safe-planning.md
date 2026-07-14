@@ -9,7 +9,7 @@ Superseded by the approved [ticket-boundary reference](../../.scratch/matt-v1.1-
 Use these sources when implementing or reviewing `/ultra solve`:
 
 - `skills/engineering/ultra/solve.md` for the coordinator runbook.
-- `skills/engineering/ultra-to-issues/references/agent-brief.md` for the optional Agent Brief delta.
+- `skills/engineering/ultra-to-tickets/references/agent-brief.md` for the optional Agent Brief delta.
 - `skills/engineering/solve-records/references/record-format.md` for outcome receipts.
 - `.scratch/matt-v1.1-skill-upgrade/reference.md` for the approved boundary model and ticket acceptance.
 
