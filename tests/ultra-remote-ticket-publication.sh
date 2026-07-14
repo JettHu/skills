@@ -62,6 +62,31 @@ PY
 done
 
 for provider in github gitlab; do
+  dir="$TMPROOT/$provider-remote-review-fix"; mkdir -p "$dir"; spec "$dir/spec.json"
+  if run --provider "$provider" --strategy remote-review-pending --run-id review-fix --spec "$dir/spec.json" --remote-state "$dir/remote.json" --reviewed --fail-at verify; then
+    echo "review-fix setup failure unexpectedly succeeded" >&2; exit 1
+  fi
+  python3 - "$dir/remote.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+state = json.load(open(path))
+assert all(not ticket["ready"] for ticket in state["tickets"])
+state["tickets"][0]["body"] = state["tickets"][0]["body"].replace("Parent body", "Reviewer-fixed parent body")
+json.dump(state, open(path, "w"))
+PY
+  run --provider "$provider" --strategy remote-review-pending --run-id review-fix --spec "$dir/spec.json" --remote-state "$dir/remote.json" --reviewed >"$dir/result.json"
+  python3 - "$dir" <<'PY'
+import json, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+state = json.loads((root / "remote.json").read_text())
+assert "Reviewer-fixed parent body" in state["tickets"][0]["body"]
+assert all(ticket["ready"] and "ready-for-agent" in ticket["labels"] for ticket in state["tickets"])
+assert json.loads((root / "result.json").read_text())["claimable"] == ["A", "B"]
+PY
+done
+
+for provider in github gitlab; do
   for phase in create wire verify promote; do
     dir="$TMPROOT/$provider-staging-$phase"; mkdir -p "$dir"; spec "$dir/spec.json"
     if run --provider "$provider" --strategy local-staging --run-id staging-run --spec "$dir/spec.json" --remote-state "$dir/remote.json" --staging-root "$dir/.scratch/.ultra-staging" --reviewed --fail-at "$phase"; then

@@ -13,7 +13,8 @@ def main(root: Path) -> int:
     for scenario in sorted(path for path in root.iterdir() if path.is_dir()):
         expected = json.loads((scenario / "EXPECTATIONS.json").read_text(encoding="utf-8"))
         remote = scenario / "REMOTE.json"
-        if not expected["promote"]:
+        mode = expected["mode"]
+        if mode == "human-escalation":
             escalation = scenario / "ESCALATION.md"
             if remote.exists() or not escalation.exists() or not escalation.read_text(encoding="utf-8").strip():
                 failures.append(f"{scenario.name}: human-owned choice was not retained as an escalation")
@@ -37,6 +38,20 @@ def main(root: Path) -> int:
             or by_key["B"].get("relationships") != {"blocks": [], "parent": ["A"]}
         ):
             failures.append(f"{scenario.name}: publication identity or relationship verification failed")
+        if mode == "remote-review-fix":
+            partial = scenario / "PARTIAL_STATE.json"
+            if not partial.exists():
+                failures.append(f"{scenario.name}: missing provisional recovery state")
+            else:
+                partial_tickets = json.loads(partial.read_text(encoding="utf-8")).get("tickets", [])
+                if not partial_tickets or any(ticket.get("ready") for ticket in partial_tickets):
+                    failures.append(f"{scenario.name}: review fix did not begin from provisional remote state")
+            if "Reviewer-fixed Parent" not in by_key["A"].get("body", ""):
+                failures.append(f"{scenario.name}: reviewer body fix was not retained through promotion")
+        if mode == "staging-partial-resume":
+            partial = scenario / "PARTIAL_MANIFEST.json"
+            if not partial.exists() or json.loads(partial.read_text(encoding="utf-8")).get("phase") != "wired":
+                failures.append(f"{scenario.name}: missing durable partial staging recovery state")
         if expected["strategy"] == "local-staging" and (scenario / ".scratch/.ultra-staging" / expected["run_id"]).exists():
             failures.append(f"{scenario.name}: staging was not cleaned after promotion")
     print(json.dumps({"passed": not failures, "failures": failures}))

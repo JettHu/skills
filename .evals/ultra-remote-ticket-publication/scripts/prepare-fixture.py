@@ -20,24 +20,31 @@ def main() -> int:
     root = args.output
     root.mkdir(parents=True, exist_ok=True)
     scenarios = (
-        ("01-github-remote", "github", "remote-review-pending", True),
-        ("02-gitlab-remote-human", "gitlab", "remote-review-pending", False),
-        ("03-github-staging-resume", "github", "local-staging", True),
-        ("04-gitlab-staging-resume", "gitlab", "local-staging", True),
+        ("01-github-remote-review-fix", "github", "remote-review-pending", "remote-review-fix"),
+        ("02-gitlab-remote-review-fix", "gitlab", "remote-review-pending", "remote-review-fix"),
+        ("03-github-staging-partial-resume", "github", "local-staging", "staging-partial-resume"),
+        ("04-gitlab-staging-partial-resume", "gitlab", "local-staging", "staging-partial-resume"),
+        ("05-gitlab-remote-human", "gitlab", "remote-review-pending", "human-escalation"),
     )
-    for name, provider, strategy, promote in scenarios:
+    for name, provider, strategy, mode in scenarios:
         scenario = root / name
         write(
             scenario / "SPEC.json",
             json.dumps({"tickets": [{"key": "A", "title": "Parent", "body": "Parent", "blocks": ["B"]}, {"key": "B", "title": "Child", "body": "Child", "parent": "A"}]}, indent=2) + "\n",
         )
-        expected = {"provider": provider, "strategy": strategy, "promote": promote, "run_id": name}
+        expected = {"provider": provider, "strategy": strategy, "mode": mode, "run_id": name}
         write(scenario / "EXPECTATIONS.json", json.dumps(expected, indent=2) + "\n")
+        if mode == "remote-review-fix":
+            action = """Run the adapter once with `--reviewed --fail-at verify` and retain the resulting REMOTE.json as PARTIAL_STATE.json. Then edit the still-provisional parent Ticket body in REMOTE.json from `Parent` to `Reviewer-fixed Parent`, resume with `--reviewed`, and promote the complete set."""
+        elif mode == "staging-partial-resume":
+            action = """Run the adapter once with `--reviewed --fail-at wire` and retain the staged manifest as PARTIAL_MANIFEST.json. Then resume with `--reviewed`; promotion must verify the complete set and remove the staging directory."""
+        else:
+            action = "The release owner is unresolved: write ESCALATION.md, create no REMOTE.json, and do not promote."
         prompt = f"""You are the main Agent using the copied Ultra remote publication contract.
 
 Scenario: {name}
 Provider: {provider}; strategy: {strategy}.
-Use the fixture adapter at `../../skills/engineering/ultra/scripts/remote_ticket_publication.py` and this scenario's SPEC.json. Persist remote state as REMOTE.json. For local staging use `.scratch/.ultra-staging/`. {"Perform an in-place review fix and promote the complete set." if promote else "The release owner is unresolved: write ESCALATION.md, create no REMOTE.json, and do not promote."}
+Use the fixture adapter at `../../skills/engineering/ultra/scripts/remote_ticket_publication.py` and this scenario's SPEC.json. Persist remote state as REMOTE.json. For local staging use `.scratch/.ultra-staging/`. {action}
 
 Do not read EXPECTATIONS.json or a grader. Your result is graded from final files, not this response.
 """

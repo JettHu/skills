@@ -76,6 +76,47 @@ def expected_remote_body(remote: dict[str, Any], ticket: dict[str, Any], run_id:
     return fallback_body(ticket, run_id) if remote.get("relationship_mode") == "textual-fallback" else rendered_body(ticket, run_id)
 
 
+def reviewed_remote_body(remote: dict[str, Any], run_id: str) -> str:
+    """Extract the reviewer-owned body while retaining only adapter-owned markers."""
+    body = str(remote.get("body", ""))
+    run_marker = marker(run_id)
+    if body.count(run_marker) != 1:
+        raise PublicationError("provisional remote Ticket has an unsafe publication marker")
+    reviewed, suffix = body.split(run_marker, 1)
+    suffix = suffix.strip()
+    if suffix:
+        relationship_start = "<!-- ultra-relationships:begin -->"
+        relationship_end = "<!-- ultra-relationships:end -->"
+        if not (suffix.startswith(relationship_start) and suffix.endswith(relationship_end)):
+            raise PublicationError("provisional remote Ticket changed adapter-owned marker content")
+    return reviewed.rstrip()
+
+
+def adopt_provisional_review(existing: dict[str, Any], desired: dict[str, Any], run_id: str, provisional_marker: str) -> None:
+    """Use an exact provisional remote artifact as the review/fix source of truth."""
+    if existing.get("ready") or provisional_marker not in existing.get("labels", []):
+        raise PublicationError(f"provisional state is unsafe for {desired['key']}")
+    title = existing.get("title")
+    if not isinstance(title, str) or not title:
+        raise PublicationError(f"provisional remote Ticket has an unsafe title for {desired['key']}")
+    desired["title"] = title
+    desired["body"] = reviewed_remote_body(existing, run_id)
+    existing["reviewed_title"] = desired["title"]
+    existing["reviewed_body"] = desired["body"]
+
+
+def canonical_published_ticket(remote: dict[str, Any], desired: dict[str, Any]) -> dict[str, Any]:
+    """Recover accepted reviewer body fixes when checking a later completed run."""
+    title = remote.get("reviewed_title")
+    body = remote.get("reviewed_body")
+    if not isinstance(title, str) or not title or not isinstance(body, str):
+        return desired
+    canonical = dict(desired)
+    canonical["title"] = title
+    canonical["body"] = body
+    return canonical
+
+
 def validate_spec(spec: dict[str, Any]) -> list[dict[str, Any]]:
     tickets = spec.get("tickets")
     if not isinstance(tickets, list) or not tickets:
@@ -262,12 +303,13 @@ def sync(
     if all(existing_members) and all(member.get("ready") for member in existing_members):
         for desired, remote in zip(tickets, existing_members):
             assert remote is not None
+            canonical = canonical_published_ticket(remote, desired)
             if (
                 marker(run_id) not in remote["body"]
-                or remote.get("relationships") != desired_edges(desired)
+                or remote.get("relationships") != desired_edges(canonical)
                 or READY not in remote.get("labels", [])
                 or provisional_marker in remote.get("labels", [])
-                or remote.get("body") != expected_remote_body(remote, desired, run_id)
+                or remote.get("body") != expected_remote_body(remote, canonical, run_id)
             ):
                 raise PublicationError(f"ready remote Ticket drifted for {desired['key']}")
         return {
@@ -289,8 +331,11 @@ def sync(
             state["next_id"] += 1
             state["tickets"].append(existing)
         else:
-            if existing.get("title") != desired["title"] or existing.get("body") != expected_remote_body(existing, desired, run_id):
-                raise PublicationError(f"concurrent remote body change for {desired['key']}")
+            if existing.get("ready"):
+                if existing.get("title") != desired["title"] or existing.get("body") != expected_remote_body(existing, desired, run_id):
+                    raise PublicationError(f"concurrent remote body change for {desired['key']}")
+            else:
+                adopt_provisional_review(existing, desired, run_id, provisional_marker)
             existing.setdefault("labels", [])
             existing.setdefault("relationships", {})
             if not existing.get("ready") and provisional_marker not in existing["labels"]:
