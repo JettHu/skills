@@ -244,6 +244,7 @@ def main() -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(git_file(args.treatment_ref, relative))
     write(repo / "docs/agents/ultra-tracker.md", TRACKER_CONTRACT)
+    write(repo / ".gitignore", ".scratch/\n.evals/\nscripts/__pycache__/\n")
     write(repo / "AGENTS.md", "Use the embedded Ultra runbook and fixture tracker. Do not mutate Tickets directly.\n")
     write(repo / "scripts/tracker.py", TRACKER)
     write(repo / "scripts/check.py", CHECK)
