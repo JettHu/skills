@@ -44,7 +44,7 @@ def main() -> int:
 
 Scenario: {name}
 Provider: {provider}; strategy: {strategy}.
-Use the fixture adapter at `../../skills/engineering/ultra/scripts/remote_ticket_publication.py` and this scenario's SPEC.json. Persist remote state as REMOTE.json. For local staging use `.scratch/.ultra-staging/`. {action}
+Use the fixture adapter at `../../skills/engineering/ultra/scripts/remote_ticket_publication.py` and this scenario's SPEC.json. Use the exact publication run ID `{name}`. Persist remote state as REMOTE.json. For local staging use `.scratch/.ultra-staging/`. {action}
 
 Do not read EXPECTATIONS.json or a grader. Your result is graded from final files, not this response.
 """
