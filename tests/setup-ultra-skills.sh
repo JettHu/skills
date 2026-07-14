@@ -214,6 +214,14 @@ for field in (
     "Stable identity:",
     "Publication journal:",
     "Claim safety:",
+    "Frontier adapter: bundled-local-markdown-v1",
+    "Ticket state fields: Status, State",
+    "Ready state: ready-for-agent",
+    "Completed state: completed",
+    "Blocker metadata fields: Blocked By, Blockers",
+    "Claim value: solve-in-progress",
+    "Solve branch field: Solve Branch",
+    "Solve worktree field: Solve Worktree",
 ):
     assert field in local_contract
 

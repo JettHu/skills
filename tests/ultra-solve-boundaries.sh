@@ -13,6 +13,9 @@ from pathlib import Path
 
 repo = Path(sys.argv[1])
 solve = (repo / "skills/engineering/ultra/solve.md").read_text(encoding="utf-8")
+frontier = (repo / "skills/engineering/ultra/scripts/local_ticket_frontier.py").read_text(
+    encoding="utf-8"
+)
 brief = (repo / "skills/engineering/ultra-to-issues/references/agent-brief.md").read_text(
     encoding="utf-8"
 )
@@ -62,6 +65,23 @@ for predicate in (
     "Complex, delegated, resumable, or digest-worthy Attempts receive a Pre-Edit Plan Review",
 ):
     assert predicate in solve, f"Pre-Implementation Checkpoint contract missing: {predicate}"
+
+for predicate in (
+    "For a contract declaring `Frontier adapter: bundled-local-markdown-v1`",
+    "Explicit ids bound the selection universe",
+    "#### `--all` Frontier Loop",
+    "Treat one discovery result as one frontier generation",
+    "Distinguish a valid empty frontier from an adapter failure",
+):
+    assert predicate in solve, f"claimable-frontier contract missing: {predicate}"
+for predicate in (
+    "stale dependency state: frontier snapshot changed before Claim",
+    "missing-blocker-target:",
+    "dependency-cycle",
+    "publication-invalid:",
+    "Claim post-write verification failed",
+):
+    assert predicate in frontier, f"claimable-frontier adapter missing: {predicate}"
 
 assert "distill each durable Digest decision or deviation" in solve
 assert "distill each durable decision or deviation" in record_format
