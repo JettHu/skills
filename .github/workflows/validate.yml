@@ -16,7 +16,9 @@ jobs:
       - name: Test Ultra lens ownership
         run: bash tests/ultra-lenses.sh
       - name: Test Ultra canonical routing
-        run: bash tests/ultra-canonical-routing.sh --expand
+        run: bash tests/ultra-canonical-routing.sh --contract
+      - name: Test Ultra v1.1 catalog
+        run: bash tests/ultra-v1-1-catalog.sh
       - name: Test Ultra solve boundaries
         run: bash tests/ultra-solve-boundaries.sh
       - name: Test Ultra solve eval harness
