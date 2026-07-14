@@ -72,6 +72,7 @@ path = sys.argv[1]
 state = json.load(open(path))
 assert all(not ticket["ready"] for ticket in state["tickets"])
 state["tickets"][0]["body"] = state["tickets"][0]["body"].replace("Parent body", "Reviewer-fixed parent body")
+state["tickets"][0]["relationships"] = {"blocks": []}
 json.dump(state, open(path, "w"))
 PY
   run --provider "$provider" --strategy remote-review-pending --run-id review-fix --spec "$dir/spec.json" --remote-state "$dir/remote.json" --reviewed >"$dir/result.json"
@@ -81,6 +82,7 @@ from pathlib import Path
 root = Path(sys.argv[1])
 state = json.loads((root / "remote.json").read_text())
 assert "Reviewer-fixed parent body" in state["tickets"][0]["body"]
+assert state["tickets"][0]["relationships"] == {"blocks": []}
 assert all(ticket["ready"] and "ready-for-agent" in ticket["labels"] for ticket in state["tickets"])
 assert json.loads((root / "result.json").read_text())["claimable"] == ["A", "B"]
 PY

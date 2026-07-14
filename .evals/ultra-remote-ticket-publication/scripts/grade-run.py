@@ -50,8 +50,19 @@ def main(root: Path) -> int:
                 failures.append(f"{scenario.name}: reviewer body fix was not retained through promotion")
         if mode == "staging-partial-resume":
             partial = scenario / "PARTIAL_MANIFEST.json"
-            if not partial.exists() or json.loads(partial.read_text(encoding="utf-8")).get("phase") != "wired":
+            partial_state = json.loads(partial.read_text(encoding="utf-8")) if partial.exists() else {}
+            partial_tickets = partial_state.get("tickets", {})
+            partial_ids = {key: value.get("remote_id") for key, value in partial_tickets.items()}
+            if (
+                partial_state.get("phase") != "wired"
+                or partial_state.get("remaining_recovery_work") != ["verification", "promotion"]
+                or set(partial_ids) != {"A", "B"}
+                or not all(isinstance(remote_id, int) for remote_id in partial_ids.values())
+                or not all(value.get("created") and value.get("relationships_wired") for value in partial_tickets.values())
+            ):
                 failures.append(f"{scenario.name}: missing durable partial staging recovery state")
+            elif {item.get("key"): item.get("id") for item in tickets} != partial_ids:
+                failures.append(f"{scenario.name}: resume did not retain the recorded remote IDs")
         if expected["strategy"] == "local-staging" and (scenario / ".scratch/.ultra-staging" / expected["run_id"]).exists():
             failures.append(f"{scenario.name}: staging was not cleaned after promotion")
     print(json.dumps({"passed": not failures, "failures": failures}))

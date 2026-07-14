@@ -101,8 +101,28 @@ def adopt_provisional_review(existing: dict[str, Any], desired: dict[str, Any], 
         raise PublicationError(f"provisional remote Ticket has an unsafe title for {desired['key']}")
     desired["title"] = title
     desired["body"] = reviewed_remote_body(existing, run_id)
+    if "relationship_mode" in existing:
+        relationships = existing.get("relationships")
+        if not isinstance(relationships, dict):
+            raise PublicationError(f"provisional remote Ticket has unsafe relationships for {desired['key']}")
+        blocks = relationships.get("blocks", [])
+        parents = relationships.get("parent", [])
+        if (
+            not isinstance(blocks, list)
+            or not all(isinstance(key, str) and key for key in blocks)
+            or not isinstance(parents, list)
+            or len(parents) > 1
+            or not all(isinstance(key, str) and key for key in parents)
+        ):
+            raise PublicationError(f"provisional remote Ticket has unsafe relationships for {desired['key']}")
+        desired["blocks"] = list(blocks)
+        if parents:
+            desired["parent"] = parents[0]
+        else:
+            desired.pop("parent", None)
     existing["reviewed_title"] = desired["title"]
     existing["reviewed_body"] = desired["body"]
+    existing["reviewed_relationships"] = desired_edges(desired)
 
 
 def canonical_published_ticket(remote: dict[str, Any], desired: dict[str, Any]) -> dict[str, Any]:
@@ -114,6 +134,14 @@ def canonical_published_ticket(remote: dict[str, Any], desired: dict[str, Any]) 
     canonical = dict(desired)
     canonical["title"] = title
     canonical["body"] = body
+    relationships = remote.get("reviewed_relationships")
+    if isinstance(relationships, dict):
+        canonical["blocks"] = list(relationships.get("blocks", []))
+        parents = relationships.get("parent", [])
+        if isinstance(parents, list) and len(parents) == 1:
+            canonical["parent"] = parents[0]
+        elif not parents:
+            canonical.pop("parent", None)
     return canonical
 
 
@@ -346,6 +374,7 @@ def sync(
             manifest["tickets"][desired["key"]]["created"] = True
             write_json(staging_manifest, manifest)
         write_json(state_path, state)
+    validate_spec({"tickets": tickets})
     if manifest is not None:
         manifest["phase"] = "created"
         manifest["remaining_recovery_work"] = ["relationship wiring", "verification", "promotion"]
