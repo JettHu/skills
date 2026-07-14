@@ -555,11 +555,18 @@ def record_labeled_value(block, label):
 
 
 def record_status(block):
-    return record_labeled_value(block, "Status")
+    for line in block.splitlines():
+        if line.startswith("Status:"):
+            return line.split(":", 1)[1].strip()
+    return ""
 
 
 def record_review_status(block):
-    return record_labeled_value(block, "Post-Execution Review").lower()
+    for line in block.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("post-execution review:"):
+            return stripped.split(":", 1)[1].strip().lower()
+    return ""
 
 
 def record_missing(record, fields):

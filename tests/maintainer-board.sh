@@ -331,6 +331,18 @@ text = path.read_text(encoding="utf-8").replace(
 path.write_text(text, encoding="utf-8")
 PY
 
+write_record "$REPO/.scratch/feature-a/solve-records/20260703-bulleted-status.md" \
+  "20260703-bulleted-status" open solve/ready "$READY_HEAD" "../wt-ready" false "Bulleted status candidate" passed ready
+python3 - "$REPO/.scratch/feature-a/solve-records/20260703-bulleted-status.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8").replace("Status: passed", "- Status: passed", 1)
+text = text.replace("Status: ready", "- Status: ready", 1)
+path.write_text(text, encoding="utf-8")
+PY
+
 cat >"$REPO/.scratch/feature-a/solve-records/20260703-legacy.md" <<EOF
 ---
 id: 20260703-legacy
@@ -530,9 +542,9 @@ ready_issue = next(issue for issue in ready if issue["title"] == "Ready issue")
 assert ready_issue["checklist"] == {"total": 2, "done": 1, "open": 1}
 
 records = data["solve_records"]
-assert records["count"] == 17
+assert records["count"] == 18
 assert records["counts"]["ready"] == 4
-assert records["counts"]["manual"] == 3
+assert records["counts"]["manual"] == 4
 assert records["counts"]["cleanup"] == 1
 assert records["counts"]["recent"] == 1
 assert records["counts"]["recovery"] == 5
@@ -544,6 +556,9 @@ assert adopted["base"] == "master"
 assert adopted["head"] == "feature/adopted-current"
 assert "user-owned" in adopted["resource_cleanup"]
 assert "20260703-remote-primary" in {
+    record["id"] for record in records["buckets"]["manual"]
+}
+assert "20260703-bulleted-status" in {
     record["id"] for record in records["buckets"]["manual"]
 }
 recovery = {record["outcome"]: record for record in records["buckets"]["recovery"]}
