@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 from pathlib import Path
 import shutil
 import subprocess
@@ -16,6 +17,7 @@ RUNTIME = (
     "skills/engineering/ultra/scripts/local_ticket_frontier.py",
     "skills/engineering/ultra/scripts/local_ticket_publication.py",
     "skills/engineering/ultra/scripts/local_ticket_surface.py",
+    "skills/engineering/solve-records/scripts/solve-records.py",
 )
 
 
@@ -84,6 +86,7 @@ TRACKER = r'''#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 from pathlib import Path
 import subprocess
@@ -160,6 +163,8 @@ if "Status: completed" not in text or "Flags: solve-in-progress" in text:
 if subprocess.run([sys.executable, "scripts/check.py", "final"], cwd=repo).returncode:
     raise SystemExit("final integration check failed")
 head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+base_sha = subprocess.check_output(["git", "rev-parse", "main"], cwd=repo, text=True).strip()
+created_at = datetime.now().astimezone().isoformat(timespec="seconds")
 record = repo / ".scratch/feature/solve-records/eval-shared-integration.md"
 record.parent.mkdir(parents=True, exist_ok=True)
 record.write_text(f"""---
@@ -169,23 +174,53 @@ state: open
 outcome: candidate
 issues:
   - .scratch/feature/issues/INTEGRATE-VERIFY.md
+created_at: {created_at}
+cleanup_done: false
 base: main
+base_sha: {base_sha}
 head: {branch}
 head_sha: {head}
 worktree: {repo}
-cleanup_done: false
 ---
 
-# Shared integration candidate
+# Solve Record: Shared integration candidate
+
+## Ticket
+Linked Ticket: `.scratch/feature/issues/INTEGRATE-VERIFY.md`
+Source Spec: `EVAL_PROMPT.md`
+
+## Outcome
+Result: candidate
+Branch/worktree/commit/PR: `{branch}`, `{repo}`, `{head}`
+Resource ownership: solve-owned; fixture cleanup may remove the branch only after candidate cleanup gates pass
+
+## What Changed
+- Expanded a legacy payload form, migrated producer and consumer on the named shared branch, and removed the compatibility adapter after both batches.
 
 ## Verification
 Status: passed
 - `python3 scripts/check.py final` - passed
 
+## Review
+Post-Execution Review: passed
+- Final producer, consumer, and contract state were checked together on the shared integration branch.
+
 ## Merge
 Status: ready
 Reason:
 - Rollout/config disposition: none; eval fixture only.
+- Activation: none.
+- Smoke: `python3 scripts/check.py final`.
+- Rollback: reset the fixture branch to `main`.
+- Landing: fast-forward, `{head}`.
+
+## Resources
+Base: `main`
+Base SHA: `{base_sha}`
+Head: `{branch}`
+Head SHA: `{head}`
+Worktree: `{repo}`
+Cleanup: pending
 """, encoding="utf-8")
 append(event="candidate", ticket=args.ticket, head=head)
 '''
@@ -215,17 +250,17 @@ print(f"{mode} check passed")
 '''
 
 
-PROMPT = """Work only in this repository. Read `EVAL_PROMPT.md`, `AGENTS.md`, and the embedded Ultra solve runbook. Execute this declared shared-integration migration without editing Tickets directly.
+PROMPT = """Work only in this repository. Read `AGENTS.md`, the embedded `skills/engineering/ultra/{SKILL.md,solve.md}`, and the Ticket graph. Treat this as the user request:
 
-1. Use only `python3 scripts/tracker.py` for Ticket discovery, Claim, completion, and candidate receipt creation. It delegates Claim to the embedded production adapter.
-2. Keep all code commits on the declared `solve/eval-shared-integration` branch; do not change `main`. Create that branch from `main` before the expand Ticket.
-3. Work the graph exactly: `EXPAND -> {BATCH-A, BATCH-B} -> CONTRACT -> INTEGRATE-VERIFY`. Use the tracker frontier before every Claim.
-4. EXPAND writes `legacy` to producer and consumer and `available` to adapter, commits it, runs `python3 scripts/check.py compatibility`, then completes with `--validation-owner INTEGRATE-VERIFY --result passed`.
-5. BATCH-A changes only producer to `new`; BATCH-B changes only consumer to `new`; commit each. Their `python3 scripts/check.py batch` result is intentionally non-green, so do not call it a pass. Complete each with scoped evidence: `--validation-owner INTEGRATE-VERIFY --result scoped`.
-6. CONTRACT changes adapter to `removed`, commits it, and completes with scoped evidence owned by INTEGRATE-VERIFY.
-7. Claim INTEGRATE-VERIFY only after CONTRACT completes. Run `python3 scripts/check.py final`, complete it with passed evidence, then create its candidate receipt through `python3 scripts/tracker.py candidate --ticket INTEGRATE-VERIFY`.
+```text
+/ultra solve EXPAND BATCH-A BATCH-B CONTRACT INTEGRATE-VERIFY
+```
 
-Leave the shared branch clean and committed. Do not edit the grader, expectations, runtime files, or Ticket files directly.
+Use `python3 scripts/tracker.py` as the only tracker interface; it delegates discovery and Claim to the embedded production adapter. Do not edit Ticket files directly. The Tickets declare a shared-integration sequence with `solve/eval-shared-integration` as its named branch and `INTEGRATE-VERIFY` as its owner. Keep `main` unchanged and leave the named branch clean and committed.
+
+The scenario is a payload migration. Expand must preserve legacy producer/consumer behavior beside the new form. `BATCH-A` changes only producer and `BATCH-B` changes only consumer, so either batch alone is intentionally not end-to-end green; preserve that scoped evidence rather than calling it a pass. Contract removes the compatibility adapter only after both batches. The final Ticket must validate the contracted combined result with `python3 scripts/check.py final` and create its candidate receipt through the tracker facade. Use `python3 scripts/check.py compatibility` to verify expand; `python3 scripts/check.py batch` demonstrates the expected non-green standalone batches.
+
+Do not edit the grader, expectations, runtime files, or Ticket files directly.
 """
 
 

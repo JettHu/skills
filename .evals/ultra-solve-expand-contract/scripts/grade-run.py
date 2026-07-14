@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 from pathlib import Path
 import subprocess
 import sys
@@ -68,6 +69,16 @@ def main() -> int:
             errors.append("candidate receipt does not name the integration head")
         if "`python3 scripts/check.py final` - passed" not in record:
             errors.append("candidate receipt lacks final verification evidence")
+        helper_path = repo / "skills/engineering/solve-records/scripts/solve-records.py"
+        spec = importlib.util.spec_from_file_location("fixture_solve_records", helper_path)
+        assert spec and spec.loader
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        parsed = helper.parse_record(repo, repo / ".scratch/feature/solve-records/eval-shared-integration.md")
+        if parsed.get("malformed"):
+            errors.append(f"candidate receipt is malformed: {parsed.get('malformed')}")
+        if parsed.get("checks_status") != "passed" or parsed.get("review_status") != "passed":
+            errors.append("candidate receipt lacks passed checks or review")
     except (OSError, RuntimeError) as error:
         errors.append(str(error))
     audit_path = repo / ".evals/sequence-audit.jsonl"
