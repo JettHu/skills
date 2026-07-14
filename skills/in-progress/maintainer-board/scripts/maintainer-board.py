@@ -810,6 +810,92 @@ def fallback_merge_gate(repo, record):
     return {"id": record.get("id"), "path": record.get("path"), "eligible": not reasons, "reasons": reasons}
 
 
+def fallback_common_dir(cwd):
+    cwd = Path(cwd).resolve()
+    result = run_git(cwd, "rev-parse", "--git-common-dir", check=False)
+    if result.returncode != 0:
+        return None
+    path = Path(result.stdout.strip())
+    if not path.is_absolute():
+        path = cwd / path
+    return path.resolve()
+
+
+def fallback_cleanup_refusal(repo, record):
+    if record.get("outcome") in RECOVERY_OUTCOMES:
+        return f"outcome is {record.get('outcome')}; candidate-only operations are unavailable"
+    worktree = resolve_worktree(repo, record.get("worktree", ""))
+    if worktree == repo.resolve():
+        return "worktree is repo root"
+    worktrees = registered_worktrees(repo)
+    registered = worktrees.get(str(worktree))
+    if not registered:
+        return "unregistered worktree"
+    if fallback_common_dir(repo) != fallback_common_dir(worktree):
+        return "common dir mismatch"
+    branch = registered.get("branch")
+    if not branch:
+        return "worktree branch unavailable"
+    if branch != record.get("head"):
+        return "branch mismatch"
+    status = run_git(worktree, "status", "--short", check=False)
+    if status.returncode != 0:
+        return "worktree status unavailable"
+    if status.stdout.strip():
+        return "dirty worktree"
+    merged = run_git(
+        repo,
+        "merge-base",
+        "--is-ancestor",
+        record.get("head", ""),
+        record.get("base", ""),
+        check=False,
+    )
+    if merged.returncode != 0:
+        return "branch is not merged"
+    return ""
+
+
+def fallback_cleanup_plan(repo, record):
+    if record.get("malformed"):
+        return {
+            "id": record.get("id"),
+            "path": record.get("path"),
+            "status": "blocked",
+            "reason": record["malformed"],
+        }
+    if record.get("outcome") in RECOVERY_OUTCOMES:
+        return {
+            "id": record.get("id"),
+            "path": record.get("path"),
+            "status": "blocked",
+            "reason": f"outcome is {record.get('outcome')}; candidate-only operations are unavailable",
+        }
+    if record.get("state") not in {"merged", "closed"}:
+        return {
+            "id": record.get("id"),
+            "path": record.get("path"),
+            "status": "not_applicable",
+            "reason": f"state is {record.get('state')}",
+        }
+    if str(record.get("cleanup_done")).lower() == "true":
+        return {
+            "id": record.get("id"),
+            "path": record.get("path"),
+            "status": "done",
+            "reason": "",
+        }
+    refusal = fallback_cleanup_refusal(repo, record)
+    return {
+        "id": record.get("id"),
+        "path": record.get("path"),
+        "status": "blocked" if refusal else "safe",
+        "reason": refusal,
+        "worktree": record.get("worktree"),
+        "head": record.get("head"),
+    }
+
+
 def fallback_record_summary(repo, record):
     summary = {
         key: record.get(key)
@@ -864,6 +950,7 @@ def fallback_solve_records_dashboard(repo):
                 summary["stale_reason"] = ref_reason
                 buckets["stale_or_malformed"].append(summary)
             elif record.get("state") in {"merged", "closed"} and str(record.get("cleanup_done")).lower() != "true":
+                summary["cleanup_plan"] = fallback_cleanup_plan(repo, record)
                 buckets["cleanup"].append(summary)
             elif record.get("state") == "merged":
                 recent.append(summary)

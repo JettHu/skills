@@ -282,7 +282,20 @@ write_record "$REPO/.scratch/solve-records/20260702-recent.md" \
   "20260702-recent" merged solve/recent "$RECENT_HEAD" "." true "Recent record" passed "auto-merged"
 
 write_record "$REPO/.scratch/solve-records/20260702-cleanup.md" \
-  "20260702-cleanup" merged solve/recent "$RECENT_HEAD" "." false "Cleanup record" passed "auto-merged"
+  "20260702-cleanup" merged solve/ready "$READY_HEAD" "../wt-ready" false "Cleanup record" passed "auto-merged"
+python3 - "$REPO/.scratch/solve-records/20260702-cleanup.md" "$BASE_SHA" "$READY_HEAD" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+base_sha, ready_head = sys.argv[2:]
+text = path.read_text(encoding="utf-8")
+text = text.replace("base: master", "base: solve/ready", 1)
+text = text.replace(f"base_sha: {base_sha}", f"base_sha: {ready_head}", 1)
+text = text.replace("Base: `master`", "Base: `solve/ready`", 1)
+text = text.replace(f"Base SHA: `{base_sha}`", f"Base SHA: `{ready_head}`", 1)
+path.write_text(text, encoding="utf-8")
+PY
 
 write_record "$REPO/.scratch/feature-a/solve-records/20260703-adopted-current.md" \
   "20260703-adopted-current" open feature/adopted-current "$ADOPTED_HEAD" "../wt-adopted-current" true "Adopted current branch" passed "manual required" \
@@ -565,6 +578,16 @@ assert records["counts"]["cleanup"] == 1
 assert records["counts"]["recent"] == 1
 assert records["counts"]["recovery"] == 5
 assert records["counts"]["stale_or_malformed"] == 3
+cleanup = records["buckets"]["cleanup"][0]
+assert cleanup["id"] == "20260702-cleanup"
+assert cleanup["cleanup_plan"] == {
+    "id": "20260702-cleanup",
+    "path": ".scratch/solve-records/20260702-cleanup.md",
+    "status": "safe",
+    "reason": "",
+    "worktree": "../wt-ready",
+    "head": "solve/ready",
+}
 adopted = next(
     record for record in records["buckets"]["manual"] if record["id"] == "20260703-adopted-current"
 )
@@ -636,6 +659,7 @@ for bucket in records["buckets"]:
             "resource_ownership",
             "recovery_action",
             "resource_cleanup",
+            "cleanup_plan",
             "low_risk_exception",
             "rollout_config_disposition",
             "legacy_outcome",
