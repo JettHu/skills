@@ -77,7 +77,7 @@ def main() -> int:
         parsed = helper.parse_record(repo, repo / ".scratch/feature/solve-records/eval-shared-integration.md")
         if parsed.get("malformed"):
             errors.append(f"candidate receipt is malformed: {parsed.get('malformed')}")
-        if parsed.get("checks_status") != "passed" or parsed.get("review_status") != "passed":
+        if parsed.get("checks") != "passed" or parsed.get("review") != "passed":
             errors.append("candidate receipt lacks passed checks or review")
     except (OSError, RuntimeError) as error:
         errors.append(str(error))

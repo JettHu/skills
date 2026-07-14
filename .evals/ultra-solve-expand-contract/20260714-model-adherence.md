@@ -4,7 +4,7 @@ Date: 2026-07-14
 
 ## Scope And Settings
 
-- Treatment commit: `c5b96b7a65c86af98333d8a36c009a7214574c45`.
+- Treatment commit: `e6fe365`.
 - Runtime: one Codex subagent run in the isolated fixture. The evaluator did not expose a model identifier or reasoning setting, so this record does not infer either. The same subagent had performed read-only planning and two harness-repair attempts before this final run; treat this as single-runtime adherence evidence, not fresh-context or multi-model evidence.
 - Fixture root: `/tmp/ultra-expand-contract-eval-20260714-final/repo` during execution.
 - Constructor and final-state grader: committed beside this record under `scripts/`.
