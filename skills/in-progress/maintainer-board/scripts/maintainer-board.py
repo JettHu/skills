@@ -604,12 +604,29 @@ def fallback_body_error(record):
 
 def fallback_parse_record(repo, path):
     text = path.read_text(encoding="utf-8")
-    frontmatter, _body = split_frontmatter(text)
     record = {"path": str(path.relative_to(repo)), "text": text}
-    if frontmatter is None:
+    if not text.startswith("---\n"):
         record["malformed"] = "missing frontmatter"
         return record
-    record.update(frontmatter)
+    end = text.find("\n---", 4)
+    if end == -1:
+        record["malformed"] = "unclosed frontmatter"
+        return record
+    current = None
+    for line in text[4:end].splitlines():
+        if line.startswith("  - ") and current:
+            record.setdefault(current, []).append(line[4:].strip())
+            continue
+        if ":" not in line:
+            record["malformed"] = f"invalid frontmatter line: {line}"
+            return record
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        current = key
+        record[key] = [] if key == "issues" and not value else value
+    if "issues" in record and not isinstance(record["issues"], list):
+        record["issues"] = [record["issues"]] if record["issues"] else []
     missing = record_missing(record, COMMON_RECORD_FIELDS)
     if missing:
         record["malformed"] = "missing " + ",".join(missing)
@@ -709,6 +726,46 @@ def fallback_rollout_disposition(record):
     return ""
 
 
+def fallback_low_risk_exception(record):
+    notes = record.get("notes", "")
+    return all(
+        fragment in notes
+        for fragment in (
+            "low-risk",
+            "no meaningful automated check exists",
+            "no manual-review trigger",
+            "evidence:",
+        )
+    )
+
+
+def fallback_rollout_gate_reason(record):
+    disposition = fallback_rollout_disposition(record)
+    if not disposition:
+        return "missing rollout/config disposition"
+    if disposition == "unknown":
+        return "unknown rollout/config disposition"
+    if disposition == "pre-merge action required":
+        return "rollout/config pre-merge action required"
+    if disposition == "post-merge activation required":
+        block = (
+            record_section(record.get("text", ""), "Merge")
+            + "\n"
+            + record_section(record.get("text", ""), "Notes")
+        ).lower()
+        requirements = (
+            (("code merge is safe", "code merge safe"), "code-merge-safety rationale"),
+            (("activation:",), "activation action"),
+            (("rollback:", "disable:"), "rollback or disable note"),
+        )
+        for fragments, label in requirements:
+            if not any(fragment in block for fragment in fragments):
+                return f"post-merge activation missing {label}"
+        if "smoke:" not in block and "validation:" not in block:
+            return "post-merge activation missing smoke or validation check"
+    return ""
+
+
 def fallback_merge_gate(repo, record):
     reasons = []
     refs_ok, ref_reason = fallback_ref_check(repo, record)
@@ -718,13 +775,19 @@ def fallback_merge_gate(repo, record):
         reasons.append(f"state is {record.get('state')}")
     if record.get("merge") != "ready":
         reasons.append(f"merge status is {record.get('merge') or '<missing>'}")
-    if record.get("checks") != "passed":
+    if record.get("external_provider") or record.get("external_url"):
+        reasons.append("remote-primary record")
+    if record.get("checks") == "unavailable":
+        if not fallback_low_risk_exception(record):
+            reasons.append("unavailable checks without low-risk evidence")
+    elif record.get("checks") != "passed":
         reasons.append(f"checks status is {record.get('checks') or '<missing>'}")
     if record.get("merge") == "ready" and record.get("review") != "passed":
-        reasons.append(f"Post-Execution Review is {record.get('review') or '<missing>'}")
-    disposition = fallback_rollout_disposition(record)
-    if record.get("merge") == "ready" and disposition != "none":
-        reasons.append("missing or blocking rollout/config disposition")
+        review = record.get("review") or "<missing>"
+        reasons.append(f"Post-Execution Review is {review}")
+    rollout_reason = fallback_rollout_gate_reason(record)
+    if record.get("merge") == "ready" and rollout_reason:
+        reasons.append(rollout_reason)
     if not reasons:
         worktree = resolve_worktree(repo, record.get("worktree", ""))
         status = run_git(worktree, "status", "--short", "--untracked-files=all", check=False)
@@ -746,6 +809,7 @@ def fallback_record_summary(repo, record):
             "external_provider", "external_url",
         )
     }
+    summary["issues"] = record.get("issues", [])
     summary["legacy_outcome"] = bool(record.get("legacy_outcome"))
     summary["resource_cleanup"] = record_resource_field(record, "Cleanup")
     if record.get("malformed"):
@@ -755,6 +819,7 @@ def fallback_record_summary(repo, record):
         summary.update(
             refs_ok=refs_ok,
             ref_reason=ref_reason,
+            low_risk_exception=fallback_low_risk_exception(record),
             rollout_config_disposition=fallback_rollout_disposition(record),
         )
         if record.get("summary_status") and record.get("summary_status") != record.get("state"):

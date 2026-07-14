@@ -288,6 +288,87 @@ write_record "$REPO/.scratch/feature-a/solve-records/20260703-adopted-current.md
   "20260703-adopted-current" open feature/adopted-current "$ADOPTED_HEAD" "../wt-adopted-current" true "Adopted current branch" passed "manual required" \
   "done; adopted worktree and candidate branch are user-owned"
 
+write_record "$REPO/.scratch/feature-a/solve-records/20260703-low-risk.md" \
+  "20260703-low-risk" open solve/ready "$READY_HEAD" "../wt-ready" false "Low-risk unavailable candidate" unavailable ready
+python3 - "$REPO/.scratch/feature-a/solve-records/20260703-low-risk.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8").replace(
+    "## Notes\n- fixture",
+    "## Notes\n- low-risk; no meaningful automated check exists; no manual-review trigger; evidence: deterministic inspection",
+)
+path.write_text(text, encoding="utf-8")
+PY
+
+write_record "$REPO/.scratch/feature-a/solve-records/20260703-post-activation.md" \
+  "20260703-post-activation" open solve/ready "$READY_HEAD" "../wt-ready" false "Post-activation candidate" passed ready
+python3 - "$REPO/.scratch/feature-a/solve-records/20260703-post-activation.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8").replace(
+    "- Rollout/config disposition: none; fixture",
+    "- Rollout/config disposition: post-merge activation required; code merge is safe before activation.\n- Activation: enable the fixture flag.\n- Smoke: inspect the fixture board.\n- Rollback: disable the fixture flag.",
+)
+path.write_text(text, encoding="utf-8")
+PY
+
+write_record "$REPO/.scratch/feature-a/solve-records/20260703-remote-primary.md" \
+  "20260703-remote-primary" open solve/ready "$READY_HEAD" "../wt-ready" false "Remote-primary candidate" passed ready
+python3 - "$REPO/.scratch/feature-a/solve-records/20260703-remote-primary.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8").replace(
+    "cleanup_done: false\n",
+    "cleanup_done: false\nexternal_provider: github\nexternal_url: https://example.test/pull/1\n",
+    1,
+)
+path.write_text(text, encoding="utf-8")
+PY
+
+cat >"$REPO/.scratch/feature-a/solve-records/20260703-legacy.md" <<EOF
+---
+id: 20260703-legacy
+kind: solve_record
+state: open
+base: master
+base_sha: $BASE_SHA
+head: solve/ready
+head_sha: $READY_HEAD
+issues:
+  - .scratch/feature-a/issues/05-completed-linked.md
+worktree: ../wt-ready
+created_at: 2026-07-03T10:00:00+08:00
+cleanup_done: false
+---
+
+# Solve Record: Legacy candidate
+
+## Changes
+- Legacy candidate remains readable.
+
+## Checks
+Status: passed
+
+## Review
+Post-Execution Review: passed
+
+## Merge
+Status: ready
+- Rollout/config disposition: none; fixture
+
+## Resources
+Cleanup: pending
+
+## Notes
+- fixture
+EOF
+
 write_recovery_record() {
   local path="$1"
   local id="$2"
@@ -352,6 +433,22 @@ write_recovery_record "$REPO/.scratch/feature-a/solve-records/20260703-abandoned
 write_recovery_record "$REPO/.scratch/feature-a/solve-records/20260703-superseded.md" \
   "20260703-superseded" closed superseded "none retained" "no retained resources" \
   "a newer Attempt replaced this one" "no action; follow the newer receipt" true
+
+write_recovery_record "$REPO/.scratch/feature-a/solve-records/20260703-invalid-frontmatter.md" \
+  "20260703-invalid-frontmatter" open blocked "none retained" "no retained resources" \
+  "this record must stay malformed" "do not classify this corrupt receipt" true
+python3 - "$REPO/.scratch/feature-a/solve-records/20260703-invalid-frontmatter.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8").replace(
+    "kind: solve_record\n",
+    "kind: solve_record\nTHIS IS INVALID\n",
+    1,
+)
+path.write_text(text, encoding="utf-8")
+PY
 
 cat >"$REPO/.scratch/solve-records/20260703-malformed.md" <<'EOF'
 ---
@@ -433,19 +530,22 @@ ready_issue = next(issue for issue in ready if issue["title"] == "Ready issue")
 assert ready_issue["checklist"] == {"total": 2, "done": 1, "open": 1}
 
 records = data["solve_records"]
-assert records["count"] == 12
-assert records["counts"]["ready"] == 1
-assert records["counts"]["manual"] == 2
+assert records["count"] == 17
+assert records["counts"]["ready"] == 4
+assert records["counts"]["manual"] == 3
 assert records["counts"]["cleanup"] == 1
 assert records["counts"]["recent"] == 1
 assert records["counts"]["recovery"] == 5
-assert records["counts"]["stale_or_malformed"] == 2
+assert records["counts"]["stale_or_malformed"] == 3
 adopted = next(
     record for record in records["buckets"]["manual"] if record["id"] == "20260703-adopted-current"
 )
 assert adopted["base"] == "master"
 assert adopted["head"] == "feature/adopted-current"
 assert "user-owned" in adopted["resource_cleanup"]
+assert "20260703-remote-primary" in {
+    record["id"] for record in records["buckets"]["manual"]
+}
 recovery = {record["outcome"]: record for record in records["buckets"]["recovery"]}
 assert set(recovery) == {"blocked", "needs-info", "ready-for-human", "abandoned", "superseded"}
 assert recovery["needs-info"]["recovery_action"].startswith("maintainers provide")
@@ -453,6 +553,17 @@ assert "external API <contract>" in recovery["needs-info"]["blocker_or_requested
 assert recovery["blocked"]["retained_resources"] == "`solve/blocked`, `../wt-blocked`"
 assert recovery["ready-for-human"]["resource_ownership"] == "user-owned branch"
 assert all(not record.get("malformed") for record in recovery.values())
+ready_records = {record["id"]: record for record in records["buckets"]["ready"]}
+assert {"20260702-ready", "20260703-low-risk", "20260703-post-activation", "20260703-legacy"} == set(ready_records)
+assert ready_records["20260703-low-risk"]["low_risk_exception"] is True
+assert ready_records["20260703-post-activation"]["rollout_config_disposition"] == "post-merge activation required"
+assert ready_records["20260703-legacy"]["legacy_outcome"] is True
+malformed_records = {
+    record["id"]: record for record in records["buckets"]["stale_or_malformed"]
+}
+assert malformed_records["20260703-invalid-frontmatter"]["malformed"] == (
+    "invalid frontmatter line: THIS IS INVALID"
+)
 
 def flattened(snapshot):
     return [
@@ -488,6 +599,10 @@ for bucket in records["buckets"]:
             "resource_ownership",
             "recovery_action",
             "resource_cleanup",
+            "low_risk_exception",
+            "rollout_config_disposition",
+            "legacy_outcome",
+            "malformed",
         ):
             assert fallback_items[record_id].get(field) == helper_items[record_id].get(field), (
                 bucket,
