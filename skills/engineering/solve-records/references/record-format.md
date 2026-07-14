@@ -41,6 +41,10 @@ the Attempt result. Keep them separate. `issues` contains one or more linked
 Ticket paths or identifiers, even though the common header names the primary
 linked Ticket.
 
+Use `Linked Ticket:` in the body for one linked Ticket. A grouped receipt may
+use `Linked Tickets:`; its frontmatter `issues` list remains the authoritative
+machine-readable membership.
+
 The only supported outcomes are:
 
 ```text

@@ -272,6 +272,29 @@ EOF
 write_record "$REPO/.scratch/feature-a/solve-records/20260702-ready.md" \
   "20260702-ready" open solve/ready "$READY_HEAD" "../wt-ready" false "Ready record" passed ready
 
+write_record "$REPO/.scratch/feature-a/solve-records/20260702-grouped.md" \
+  "20260702-grouped" open solve/ready "$READY_HEAD" "../wt-ready" false "Grouped ready record" passed ready
+python3 - "$REPO/.scratch/feature-a/solve-records/20260702-grouped.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace(
+    "  - .scratch/feature-a/issues/05-completed-linked.md\n",
+    "  - .scratch/feature-a/issues/05-completed-linked.md\n"
+    "  - .scratch/feature-a/issues/06-completed-unlinked.md\n",
+    1,
+)
+text = text.replace(
+    "Linked Ticket: `.scratch/feature-a/issues/05-completed-linked.md`",
+    "Linked Tickets: `.scratch/feature-a/issues/05-completed-linked.md`, "
+    "`.scratch/feature-a/issues/06-completed-unlinked.md`",
+    1,
+)
+path.write_text(text, encoding="utf-8")
+PY
+
 write_record "$REPO/.scratch/solve-records/20260702-manual.md" \
   "20260702-manual" open solve/manual "$MANUAL_HEAD" "../wt-ready" false "Manual record" unavailable "manual required"
 
@@ -571,8 +594,8 @@ ready_issue = next(issue for issue in ready if issue["title"] == "Ready issue")
 assert ready_issue["checklist"] == {"total": 2, "done": 1, "open": 1}
 
 records = data["solve_records"]
-assert records["count"] == 19
-assert records["counts"]["ready"] == 4
+assert records["count"] == 20
+assert records["counts"]["ready"] == 5
 assert records["counts"]["manual"] == 5
 assert records["counts"]["cleanup"] == 1
 assert records["counts"]["recent"] == 1
@@ -614,7 +637,17 @@ assert recovery["blocked"]["retained_resources"] == "`solve/blocked`, `../wt-blo
 assert recovery["ready-for-human"]["resource_ownership"] == "user-owned branch"
 assert all(not record.get("malformed") for record in recovery.values())
 ready_records = {record["id"]: record for record in records["buckets"]["ready"]}
-assert {"20260702-ready", "20260703-low-risk", "20260703-post-activation", "20260703-legacy"} == set(ready_records)
+assert {
+    "20260702-ready",
+    "20260702-grouped",
+    "20260703-low-risk",
+    "20260703-post-activation",
+    "20260703-legacy",
+} == set(ready_records)
+assert ready_records["20260702-grouped"]["issues"] == [
+    ".scratch/feature-a/issues/05-completed-linked.md",
+    ".scratch/feature-a/issues/06-completed-unlinked.md",
+]
 assert ready_records["20260703-low-risk"]["low_risk_exception"] is True
 assert ready_records["20260703-post-activation"]["rollout_config_disposition"] == "post-merge activation required"
 assert ready_records["20260703-legacy"]["legacy_outcome"] is True

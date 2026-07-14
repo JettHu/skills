@@ -1831,6 +1831,8 @@ records_dir.mkdir(parents=True)
 issue = ".scratch/outcomes/issues/01.md"
 (repo / issue).parent.mkdir(parents=True)
 (repo / issue).write_text("Status: ready-for-agent\n", encoding="utf-8")
+second_issue = ".scratch/outcomes/issues/02.md"
+(repo / second_issue).write_text("Status: ready-for-agent\n", encoding="utf-8")
 
 spec = importlib.util.spec_from_file_location("solve_records_outcomes", tool_path)
 tool = importlib.util.module_from_spec(spec)
@@ -1981,6 +1983,15 @@ Cleanup: pending
 
 
 new_candidate("new-candidate")
+multiple_linked_tickets = new_candidate("multiple-linked-tickets")
+multiple_linked_tickets.write_text(
+    multiple_linked_tickets.read_text(encoding="utf-8").replace(
+        f"Linked Ticket: {issue}",
+        f"Linked Tickets: {issue}, {second_issue}",
+        1,
+    ).replace(f"issues:\n  - {issue}", f"issues:\n  - {issue}\n  - {second_issue}", 1),
+    encoding="utf-8",
+)
 recovery("blocked", "blocked", "open", "solve-owned; resume owns the branch", "solve/retained", "resume")
 recovery("needs-info", "needs-info", "open", "no retained resources; no cleanup needed", "none", "provide information")
 recovery(
@@ -2084,6 +2095,10 @@ for outcome in ("candidate", "blocked", "needs-info", "ready-for-human", "abando
     record_id = "new-candidate" if outcome == "candidate" else outcome
     assert by_id[record_id]["outcome"] == outcome, by_id[record_id]
     assert "malformed" not in by_id[record_id], by_id[record_id]
+
+assert "malformed" not in by_id["multiple-linked-tickets"], by_id["multiple-linked-tickets"]
+assert by_id["multiple-linked-tickets"]["issues"] == [issue, second_issue]
+assert tool.merge_gate(repo, by_id["multiple-linked-tickets"])["eligible"] is True
 
 assert by_id["needs-info"]["blocker_or_requested_information"] == (
     "- Continue only through the recorded recovery action."

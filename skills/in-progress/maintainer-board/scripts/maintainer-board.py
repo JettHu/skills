@@ -554,6 +554,12 @@ def record_labeled_value(block, label):
     return ""
 
 
+def record_linked_ticket_value(block):
+    return record_labeled_value(block, "Linked Ticket") or record_labeled_value(
+        block, "Linked Tickets"
+    )
+
+
 def record_status(block):
     for line in block.splitlines():
         if line.startswith("Status:"):
@@ -581,7 +587,7 @@ def fallback_body_error(record):
     text = record["text"]
     ticket = record_section(text, "Ticket")
     outcome = record_section(text, "Outcome")
-    if not record_has_section(text, "Ticket") or not record_labeled_value(ticket, "Linked Ticket"):
+    if not record_has_section(text, "Ticket") or not record_linked_ticket_value(ticket):
         return "missing linked Ticket"
     if not record_has_section(text, "Outcome"):
         return "missing Outcome section"
@@ -674,7 +680,7 @@ def fallback_parse_record(repo, path):
     outcome_block = record_section(text, "Outcome")
     record.update(
         {
-            "linked_ticket": record_labeled_value(ticket, "Linked Ticket"),
+            "linked_ticket": record_linked_ticket_value(ticket),
             "source_spec": record_labeled_value(ticket, "Source Spec") or record.get("source_spec", ""),
             "resource_ownership": record_labeled_value(outcome_block, "Resource ownership"),
             "retained_resources": record_labeled_value(outcome_block, "Branch/worktree/commit/PR"),

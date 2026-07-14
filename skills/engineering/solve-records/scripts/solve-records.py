@@ -231,6 +231,10 @@ def labeled_value(block, label):
     return ""
 
 
+def linked_ticket_value(block):
+    return labeled_value(block, "Linked Ticket") or labeled_value(block, "Linked Tickets")
+
+
 def missing_fields(data, fields):
     missing = []
     for field in fields:
@@ -249,7 +253,7 @@ def new_body_error(data):
     outcome_block = section(text, "Outcome")
     if not has_section(text, "Ticket"):
         return "missing Ticket section"
-    if not labeled_value(ticket_block, "Linked Ticket"):
+    if not linked_ticket_value(ticket_block):
         return "missing linked Ticket"
     if not has_section(text, "Outcome"):
         return "missing Outcome section"
@@ -355,7 +359,7 @@ def parse_record(repo, path):
 
     ticket_block = section(text, "Ticket")
     outcome_block = section(text, "Outcome")
-    data["linked_ticket"] = labeled_value(ticket_block, "Linked Ticket")
+    data["linked_ticket"] = linked_ticket_value(ticket_block)
     data["source_spec"] = labeled_value(ticket_block, "Source Spec") or data.get("source_spec", "")
     data["resource_ownership"] = labeled_value(outcome_block, "Resource ownership")
     data["retained_resources"] = labeled_value(outcome_block, "Branch/worktree/commit/PR")
