@@ -3,7 +3,6 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 BOARD_SCRIPT="$REPO_ROOT/skills/in-progress/maintainer-board/scripts/maintainer-board.py"
-SOLVE_RECORDS_SCRIPT="$REPO_ROOT/skills/engineering/solve-records/scripts/solve-records.py"
 LOCAL_PUBLICATION_SCRIPT="$REPO_ROOT/skills/engineering/ultra/scripts/local_ticket_publication.py"
 TMPDIR_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_ROOT"' EXIT
@@ -282,46 +281,90 @@ write_record "$REPO/.scratch/solve-records/20260702-stale.md" \
 write_record "$REPO/.scratch/solve-records/20260702-recent.md" \
   "20260702-recent" merged solve/recent "$RECENT_HEAD" "." true "Recent record" passed "auto-merged"
 
+write_record "$REPO/.scratch/solve-records/20260702-cleanup.md" \
+  "20260702-cleanup" merged solve/recent "$RECENT_HEAD" "." false "Cleanup record" passed "auto-merged"
+
 write_record "$REPO/.scratch/feature-a/solve-records/20260703-adopted-current.md" \
   "20260703-adopted-current" open feature/adopted-current "$ADOPTED_HEAD" "../wt-adopted-current" true "Adopted current branch" passed "manual required" \
   "done; adopted worktree and candidate branch are user-owned"
 
-cat >"$REPO/.scratch/feature-a/solve-records/20260703-needs-info.md" <<'EOF'
+write_recovery_record() {
+  local path="$1"
+  local id="$2"
+  local state="$3"
+  local outcome="$4"
+  local retained="$5"
+  local ownership="$6"
+  local blocker="$7"
+  local action="$8"
+  local cleanup="$9"
+  cat >"$path" <<EOF
 ---
-id: 20260703-needs-info
+id: $id
 kind: solve_record
-state: open
-outcome: needs-info
+state: $state
+outcome: $outcome
 issues:
   - .scratch/feature-a/issues/03-needs-human.md
 created_at: 2026-07-03T10:00:00+08:00
-cleanup_done: true
+cleanup_done: $cleanup
 ---
 
-# Solve Record: Needs information receipt
+# Solve Record: $outcome receipt
 
 ## Ticket
-Linked Ticket: `.scratch/feature-a/issues/03-needs-human.md`
+Linked Ticket: \`.scratch/feature-a/issues/03-needs-human.md\`
 
 ## Outcome
-Result: needs-info
-Branch/worktree/commit/PR: none retained
-Resource ownership: none
+Result: $outcome
+Branch/worktree/commit/PR: $retained
+Resource ownership: $ownership
 
 ## Attempt Summary
 - Investigated the available repository facts.
 
 ## Confirmed Findings
-- The required API contract is absent from the approved Ticket.
+- Confirmed finding for $outcome.
 
 ## Blocker Or Requested Information
-- Confirm the external API contract before implementation resumes.
+- $blocker
 
 ## Resume Or Cleanup
-Next action: maintainers provide the API contract, then resume from the Ticket.
+Next action: $action
 
 ## Resources
-Cleanup: complete; no resources retained
+Cleanup: $([[ "$cleanup" == true ]] && echo "complete; no resources retained" || echo "pending; follow recorded ownership")
+EOF
+}
+
+write_recovery_record "$REPO/.scratch/feature-a/solve-records/20260703-blocked.md" \
+  "20260703-blocked" open blocked '`solve/blocked`, `../wt-blocked`' "solve-owned by the resumable Attempt" \
+  "dependency is unavailable" "resume after the dependency is restored" false
+write_recovery_record "$REPO/.scratch/feature-a/solve-records/20260703-needs-info.md" \
+  "20260703-needs-info" open needs-info "none retained" "no retained resources" \
+  "confirm the external API <contract>" "maintainers provide the API contract, then resume from the Ticket" true
+write_recovery_record "$REPO/.scratch/feature-a/solve-records/20260703-ready-for-human.md" \
+  "20260703-ready-for-human" open ready-for-human '`feature/human-choice`' "user-owned branch" \
+  "choose the public API behavior" "record the human decision, then resume" false
+write_recovery_record "$REPO/.scratch/feature-a/solve-records/20260703-abandoned.md" \
+  "20260703-abandoned" closed abandoned '`solve/abandoned`' "solve-owned cleanup" \
+  "the Attempt was intentionally abandoned" "remove the retained branch after ownership verification" false
+write_recovery_record "$REPO/.scratch/feature-a/solve-records/20260703-superseded.md" \
+  "20260703-superseded" closed superseded "none retained" "no retained resources" \
+  "a newer Attempt replaced this one" "no action; follow the newer receipt" true
+
+cat >"$REPO/.scratch/solve-records/20260703-malformed.md" <<'EOF'
+---
+id: 20260703-malformed
+kind: wrong_kind
+state: open
+issues:
+  - .scratch/feature-a/issues/03-needs-human.md
+created_at: 2026-07-03T10:00:00+08:00
+cleanup_done: false
+---
+
+# Solve Record: malformed receipt
 EOF
 
 JSON_OUT="$TMPDIR_ROOT/board.json"
@@ -335,8 +378,6 @@ python3 "$BOARD_SCRIPT" --repo "$REPO" --html "$HTML_OUT" >"$TMPDIR_ROOT/html-pa
 DEFAULT_STDOUT="$(cd "$REPO" && python3 "$BOARD_SCRIPT")"
 mkdir -p "$(dirname "$STANDALONE_SCRIPT")"
 cp "$BOARD_SCRIPT" "$STANDALONE_SCRIPT"
-mkdir -p "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/solve-records/scripts"
-cp "$SOLVE_RECORDS_SCRIPT" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/solve-records/scripts/solve-records.py"
 mkdir -p "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts"
 cp "$LOCAL_PUBLICATION_SCRIPT" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts/local_ticket_publication.py"
 cp "$(dirname "$LOCAL_PUBLICATION_SCRIPT")/local_ticket_surface.py" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts/local_ticket_surface.py"
@@ -392,28 +433,79 @@ ready_issue = next(issue for issue in ready if issue["title"] == "Ready issue")
 assert ready_issue["checklist"] == {"total": 2, "done": 1, "open": 1}
 
 records = data["solve_records"]
-assert records["count"] == 6
+assert records["count"] == 12
 assert records["counts"]["ready"] == 1
 assert records["counts"]["manual"] == 2
+assert records["counts"]["cleanup"] == 1
 assert records["counts"]["recent"] == 1
-assert records["counts"]["recovery"] == 1
-assert records["counts"]["stale_or_malformed"] == 1
+assert records["counts"]["recovery"] == 5
+assert records["counts"]["stale_or_malformed"] == 2
 adopted = next(
     record for record in records["buckets"]["manual"] if record["id"] == "20260703-adopted-current"
 )
 assert adopted["base"] == "master"
 assert adopted["head"] == "feature/adopted-current"
 assert "user-owned" in adopted["resource_cleanup"]
-recovery = records["buckets"]["recovery"][0]
-assert recovery["id"] == "20260703-needs-info"
-assert recovery["outcome"] == "needs-info"
-assert recovery["recovery_action"].startswith("maintainers provide")
+recovery = {record["outcome"]: record for record in records["buckets"]["recovery"]}
+assert set(recovery) == {"blocked", "needs-info", "ready-for-human", "abandoned", "superseded"}
+assert recovery["needs-info"]["recovery_action"].startswith("maintainers provide")
+assert "external API <contract>" in recovery["needs-info"]["blocker_or_requested_information"]
+assert recovery["blocked"]["retained_resources"] == "`solve/blocked`, `../wt-blocked`"
+assert recovery["ready-for-human"]["resource_ownership"] == "user-owned branch"
+assert all(not record.get("malformed") for record in recovery.values())
+
+def flattened(snapshot):
+    return [
+        record
+        for bucket in snapshot["solve_records"]["buckets"].values()
+        for record in bucket
+    ]
+
+for snapshot in (data, fallback):
+    items = flattened(snapshot)
+    ids = [record["id"] for record in items]
+    assert len(ids) == len(set(ids)) == snapshot["solve_records"]["count"]
+    recovery_ids = {record["id"] for record in snapshot["solve_records"]["buckets"]["recovery"]}
+    candidate_lane_ids = {
+        record["id"]
+        for bucket in ("ready", "manual", "cleanup", "recent")
+        for record in snapshot["solve_records"]["buckets"][bucket]
+    }
+    assert recovery_ids.isdisjoint(candidate_lane_ids)
+
+assert fallback["solve_records"]["counts"] == records["counts"]
+for bucket in records["buckets"]:
+    helper_items = {record["id"]: record for record in records["buckets"][bucket]}
+    fallback_items = {record["id"]: record for record in fallback["solve_records"]["buckets"][bucket]}
+    assert helper_items.keys() == fallback_items.keys(), bucket
+    for record_id in helper_items:
+        for field in (
+            "outcome",
+            "linked_ticket",
+            "issues",
+            "blocker_or_requested_information",
+            "retained_resources",
+            "resource_ownership",
+            "recovery_action",
+            "resource_cleanup",
+        ):
+            assert fallback_items[record_id].get(field) == helper_items[record_id].get(field), (
+                bucket,
+                record_id,
+                field,
+            )
 
 assert "Maintainer Board" in html
 assert "Ready issue" in html
 assert "Ready record" in html
 assert "Adopted current branch" in html
-assert "Needs information receipt" in html
+assert "needs-info receipt" in html
+assert "Blocked receipt" in html or "blocked receipt" in html
+assert "external API &lt;contract&gt;" in html
+assert "Blocker or requested information" in html
+assert "Retained resources" in html
+assert "Resource owner" in html
+assert "Next resume or cleanup action" in html
 assert "Landing branch (base)" in html
 assert "Candidate branch (head)" in html
 assert "Cleanup ownership" in html
@@ -430,7 +522,6 @@ assert "label-manual-required" in html
 assert "status:" not in html.lower()
 assert default_html == html
 assert fallback["issues"]["counts"] == data["issues"]["counts"]
-assert fallback["solve_records"]["counts"] == data["solve_records"]["counts"]
 PY
 
 CONFIGURED_FILE_REPO="$TMPDIR_ROOT/configured-file-per"

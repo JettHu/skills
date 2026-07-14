@@ -2085,6 +2085,13 @@ for outcome in ("candidate", "blocked", "needs-info", "ready-for-human", "abando
     assert by_id[record_id]["outcome"] == outcome, by_id[record_id]
     assert "malformed" not in by_id[record_id], by_id[record_id]
 
+assert by_id["needs-info"]["blocker_or_requested_information"] == (
+    "- Continue only through the recorded recovery action."
+)
+assert tool.record_summary(repo, by_id["needs-info"])[
+    "blocker_or_requested_information"
+] == "- Continue only through the recorded recovery action."
+
 assert by_id["malformed-unknown"]["malformed"] == "invalid outcome: untracked"
 assert "missing outcome and legacy candidate fields" in by_id["malformed-missing-discriminator"]["malformed"]
 assert "missing candidate fields: head" == by_id["malformed-candidate-fields"]["malformed"]

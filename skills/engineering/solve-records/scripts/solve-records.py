@@ -365,6 +365,9 @@ def parse_record(repo, path):
     data["summary_status"] = status_line(section(text, "Summary"))
     data["notes"] = section(text, "Notes").lower()
     data["changes"] = section(text, "What Changed") or section(text, "Changes")
+    data["blocker_or_requested_information"] = section(
+        text, "Blocker Or Requested Information"
+    ).strip()
     data["recovery_action"] = labeled_value(section(text, "Resume Or Cleanup"), "Next action")
     data["title"] = first_heading(text)
     return data
@@ -905,6 +908,9 @@ def record_summary(repo, record, include_merge_gate=False):
         "resource_cleanup": resource_field(record, "Cleanup"),
         "resource_ownership": record.get("resource_ownership"),
         "retained_resources": record.get("retained_resources"),
+        "blocker_or_requested_information": record.get(
+            "blocker_or_requested_information"
+        ),
         "recovery_action": record.get("recovery_action"),
         "external_provider": record.get("external_provider"),
         "external_url": record.get("external_url"),

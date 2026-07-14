@@ -29,6 +29,36 @@ SOLVE_RECORD_BUCKETS = [
     "recovery",
     "stale_or_malformed",
 ]
+SOLVE_RECORD_OUTCOMES = {
+    "candidate",
+    "blocked",
+    "needs-info",
+    "ready-for-human",
+    "abandoned",
+    "superseded",
+}
+RECOVERY_OUTCOMES = SOLVE_RECORD_OUTCOMES - {"candidate"}
+COMMON_RECORD_FIELDS = {"id", "kind", "state", "issues", "created_at", "cleanup_done"}
+CANDIDATE_RECORD_FIELDS = {"base", "base_sha", "head", "head_sha", "worktree"}
+RECOVERY_SECTIONS = {
+    "Ticket",
+    "Outcome",
+    "Attempt Summary",
+    "Confirmed Findings",
+    "Blocker Or Requested Information",
+    "Resume Or Cleanup",
+    "Resources",
+}
+NEW_CANDIDATE_SECTIONS = {
+    "Ticket",
+    "Outcome",
+    "What Changed",
+    "Verification",
+    "Review",
+    "Merge",
+    "Resources",
+}
+NEW_RECEIPT_ONLY_SECTIONS = {"Ticket", "Outcome", "What Changed", "Verification"}
 DEFAULT_VISIBLE_ITEMS = 5
 DEFAULT_HTML_PATH = Path(".scratch/maintainer-board/index.html")
 
@@ -505,13 +535,277 @@ def bucket_items(items, buckets):
     return result
 
 
+def record_section(text, name):
+    marker = f"## {name}\n"
+    start = text.find(marker)
+    if start == -1:
+        return ""
+    start += len(marker)
+    end = text.find("\n## ", start)
+    return text[start:] if end == -1 else text[start:end]
+
+
+def record_labeled_value(block, label):
+    prefix = f"{label.lower()}:"
+    for line in block.splitlines():
+        normalized = line.strip().lstrip("-* ").strip()
+        if normalized.lower().startswith(prefix):
+            return normalized.split(":", 1)[1].strip()
+    return ""
+
+
+def record_status(block):
+    return record_labeled_value(block, "Status")
+
+
+def record_review_status(block):
+    return record_labeled_value(block, "Post-Execution Review").lower()
+
+
+def record_missing(record, fields):
+    return sorted(field for field in fields if not record.get(field))
+
+
+def record_has_section(text, name):
+    return any(line.strip() == f"## {name}" for line in text.splitlines())
+
+
+def fallback_body_error(record):
+    text = record["text"]
+    ticket = record_section(text, "Ticket")
+    outcome = record_section(text, "Outcome")
+    if not record_has_section(text, "Ticket") or not record_labeled_value(ticket, "Linked Ticket"):
+        return "missing linked Ticket"
+    if not record_has_section(text, "Outcome"):
+        return "missing Outcome section"
+    result = record_labeled_value(outcome, "Result").lower()
+    if not result:
+        return "missing outcome result"
+    if result != record["outcome"]:
+        return "body/frontmatter outcome conflict"
+    if not record_labeled_value(outcome, "Branch/worktree/commit/PR"):
+        return "missing retained resource disposition"
+    if not record_labeled_value(outcome, "Resource ownership"):
+        return "missing resource ownership"
+    sections = NEW_CANDIDATE_SECTIONS if result == "candidate" else RECOVERY_SECTIONS
+    missing = sorted(section for section in sections if not record_has_section(text, section))
+    if missing:
+        return "missing sections: " + ",".join(missing)
+    if not record_labeled_value(record_section(text, "Resources"), "Cleanup"):
+        return "missing resource cleanup disposition"
+    if result == "candidate" and record_review_status(record_section(text, "Review")) != "passed":
+        return "candidate requires passed Post-Execution Review"
+    if result != "candidate" and not record_labeled_value(
+        record_section(text, "Resume Or Cleanup"), "Next action"
+    ):
+        return "missing recovery next action"
+    return ""
+
+
+def fallback_parse_record(repo, path):
+    text = path.read_text(encoding="utf-8")
+    frontmatter, _body = split_frontmatter(text)
+    record = {"path": str(path.relative_to(repo)), "text": text}
+    if frontmatter is None:
+        record["malformed"] = "missing frontmatter"
+        return record
+    record.update(frontmatter)
+    missing = record_missing(record, COMMON_RECORD_FIELDS)
+    if missing:
+        record["malformed"] = "missing " + ",".join(missing)
+        return record
+    if record.get("kind") != "solve_record":
+        record["malformed"] = f"invalid kind: {record.get('kind')}"
+        return record
+    outcome = str(record.get("outcome", "")).lower()
+    if "outcome" not in record:
+        missing = record_missing(record, COMMON_RECORD_FIELDS | CANDIDATE_RECORD_FIELDS)
+        recovery_only = RECOVERY_SECTIONS - {"Ticket", "Outcome", "Resources"}
+        if missing:
+            record["malformed"] = "missing outcome and legacy candidate fields: " + ",".join(missing)
+            return record
+        if any(record_has_section(text, name) for name in NEW_RECEIPT_ONLY_SECTIONS | recovery_only):
+            record["malformed"] = "missing outcome for new or recovery-shaped receipt"
+            return record
+        record["outcome"] = "candidate"
+        record["legacy_outcome"] = True
+    elif not outcome:
+        record["malformed"] = "missing outcome"
+        return record
+    elif outcome not in SOLVE_RECORD_OUTCOMES:
+        record["malformed"] = f"invalid outcome: {outcome}"
+        return record
+    else:
+        record["outcome"] = outcome
+        if outcome == "candidate":
+            missing = record_missing(record, CANDIDATE_RECORD_FIELDS)
+            if missing:
+                record["malformed"] = "missing candidate fields: " + ",".join(missing)
+                return record
+        body_error = fallback_body_error(record)
+        if body_error:
+            record["malformed"] = body_error
+            return record
+    ticket = record_section(text, "Ticket")
+    outcome_block = record_section(text, "Outcome")
+    record.update(
+        {
+            "linked_ticket": record_labeled_value(ticket, "Linked Ticket"),
+            "source_spec": record_labeled_value(ticket, "Source Spec") or record.get("source_spec", ""),
+            "resource_ownership": record_labeled_value(outcome_block, "Resource ownership"),
+            "retained_resources": record_labeled_value(outcome_block, "Branch/worktree/commit/PR"),
+            "checks": record_status(record_section(text, "Verification"))
+            or record_status(record_section(text, "Checks")),
+            "review": record_review_status(record_section(text, "Review")),
+            "merge": record_status(record_section(text, "Merge")),
+            "summary_status": record_status(record_section(text, "Summary")),
+            "notes": record_section(text, "Notes").lower(),
+            "title": first_heading(text),
+            "blocker_or_requested_information": record_section(
+                text, "Blocker Or Requested Information"
+            ).strip(),
+            "recovery_action": record_labeled_value(
+                record_section(text, "Resume Or Cleanup"), "Next action"
+            ),
+        }
+    )
+    return record
+
+
+def fallback_ref_check(repo, record):
+    refs = ref_map(repo)
+    for ref_key, sha_key in (("base", "base_sha"), ("head", "head_sha")):
+        ref = record.get(ref_key, "")
+        expected = str(record.get(sha_key, ""))
+        actual = refs.get(ref)
+        if not actual:
+            result = run_git(repo, "rev-parse", "--verify", ref, check=False)
+            actual = result.stdout.strip() if result.returncode == 0 else ""
+        if not actual:
+            return False, f"{ref} missing"
+        if not expected or not (actual == expected or actual.startswith(expected)):
+            return False, f"{ref_key} sha mismatch"
+    return True, ""
+
+
+def record_resource_field(record, label):
+    value = record_labeled_value(record_section(record.get("text", ""), "Resources"), label)
+    if len(value) >= 2 and value[0] == value[-1] == "`":
+        return value[1:-1]
+    return value
+
+
+def fallback_rollout_disposition(record):
+    block = (record_section(record.get("text", ""), "Merge") + "\n" + record_section(record.get("text", ""), "Notes")).lower()
+    for line in block.splitlines():
+        normalized = line.strip().lstrip("-*").strip()
+        for prefix in ("rollout/config disposition:", "rollout config disposition:", "rollout disposition:", "config disposition:"):
+            if prefix in normalized:
+                value = normalized.split(prefix, 1)[1].strip()
+                for disposition in ("none", "pre-merge action required", "post-merge activation required"):
+                    if value == disposition or value.startswith((disposition + ";", disposition + ".", disposition + ",")):
+                        return disposition
+                return "unknown"
+    return ""
+
+
+def fallback_merge_gate(repo, record):
+    reasons = []
+    refs_ok, ref_reason = fallback_ref_check(repo, record)
+    if not refs_ok:
+        reasons.append(ref_reason)
+    if record.get("state") != "open":
+        reasons.append(f"state is {record.get('state')}")
+    if record.get("merge") != "ready":
+        reasons.append(f"merge status is {record.get('merge') or '<missing>'}")
+    if record.get("checks") != "passed":
+        reasons.append(f"checks status is {record.get('checks') or '<missing>'}")
+    if record.get("merge") == "ready" and record.get("review") != "passed":
+        reasons.append(f"Post-Execution Review is {record.get('review') or '<missing>'}")
+    disposition = fallback_rollout_disposition(record)
+    if record.get("merge") == "ready" and disposition != "none":
+        reasons.append("missing or blocking rollout/config disposition")
+    if not reasons:
+        worktree = resolve_worktree(repo, record.get("worktree", ""))
+        status = run_git(worktree, "status", "--short", "--untracked-files=all", check=False)
+        if status.returncode != 0:
+            reasons.append("worktree missing")
+        elif status.stdout.strip():
+            reasons.append("worktree dirty")
+    return {"id": record.get("id"), "path": record.get("path"), "eligible": not reasons, "reasons": reasons}
+
+
+def fallback_record_summary(repo, record):
+    summary = {
+        key: record.get(key)
+        for key in (
+            "path", "id", "title", "state", "outcome", "created_at", "merged_at",
+            "merged_sha", "base", "head", "issues", "linked_ticket", "source_spec",
+            "worktree", "checks", "review", "merge", "cleanup_done", "resource_ownership",
+            "retained_resources", "blocker_or_requested_information", "recovery_action",
+            "external_provider", "external_url",
+        )
+    }
+    summary["legacy_outcome"] = bool(record.get("legacy_outcome"))
+    summary["resource_cleanup"] = record_resource_field(record, "Cleanup")
+    if record.get("malformed"):
+        summary["malformed"] = record["malformed"]
+    elif record.get("outcome") == "candidate":
+        refs_ok, ref_reason = fallback_ref_check(repo, record)
+        summary.update(
+            refs_ok=refs_ok,
+            ref_reason=ref_reason,
+            rollout_config_disposition=fallback_rollout_disposition(record),
+        )
+        if record.get("summary_status") and record.get("summary_status") != record.get("state"):
+            summary["body_conflict"] = "body/frontmatter status conflict"
+    else:
+        summary["recovery_view"] = "resume" if record.get("outcome") in {
+            "blocked", "needs-info", "ready-for-human"
+        } else "closed"
+    return summary
+
+
+def fallback_solve_records_dashboard(repo):
+    paths = sorted(repo.glob(".scratch/solve-records/*.md"))
+    paths += sorted(repo.glob(".scratch/*/solve-records/*.md"))
+    records = [fallback_parse_record(repo, path) for path in paths]
+    buckets = {bucket: [] for bucket in SOLVE_RECORD_BUCKETS}
+    recent = []
+    for record in records:
+        summary = fallback_record_summary(repo, record)
+        if record.get("malformed"):
+            buckets["stale_or_malformed"].append(summary)
+        elif record.get("outcome") in RECOVERY_OUTCOMES:
+            buckets["recovery"].append(summary)
+        elif summary.get("body_conflict"):
+            summary["stale_reason"] = summary["body_conflict"]
+            buckets["stale_or_malformed"].append(summary)
+        else:
+            refs_ok, ref_reason = fallback_ref_check(repo, record)
+            if not refs_ok and record.get("state") == "open":
+                summary["stale_reason"] = ref_reason
+                buckets["stale_or_malformed"].append(summary)
+            elif record.get("state") in {"merged", "closed"} and str(record.get("cleanup_done")).lower() != "true":
+                buckets["cleanup"].append(summary)
+            elif record.get("state") == "merged":
+                recent.append(summary)
+            else:
+                gate = fallback_merge_gate(repo, record)
+                summary["merge_gate"] = gate
+                buckets["ready" if gate["eligible"] else "manual"].append(summary)
+    buckets["recent"] = sorted(
+        recent,
+        key=lambda item: (item.get("merged_at") or item.get("created_at") or "", item.get("id") or ""),
+        reverse=True,
+    )[:10]
+    return {"repo": str(repo), "record_count": len(records), "buckets": buckets}
+
+
 def load_solve_records_dashboard(repo):
     helper_path = find_solve_records_helper()
     if not helper_path:
-        raise RuntimeError(
-            "maintainer board requires the canonical solve-records helper; "
-            "install skills/engineering/solve-records/scripts/solve-records.py alongside the board"
-        )
+        return fallback_solve_records_dashboard(repo)
     spec = importlib.util.spec_from_file_location("solve_records_helper", helper_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -670,15 +964,22 @@ def render_record_card(record, hidden=False):
             record.get("id", ""),
             record.get("path", ""),
             record.get("state", ""),
+            record.get("outcome", ""),
             record.get("head", ""),
             record.get("base", ""),
             record.get("resource_cleanup", ""),
+            record.get("linked_ticket", ""),
+            record.get("blocker_or_requested_information", ""),
+            record.get("retained_resources", ""),
+            record.get("resource_ownership", ""),
+            record.get("recovery_action", ""),
         ]
     )
     cleanup = record_cleanup_label(record)
     cleanup_ownership = record_cleanup_ownership(record)
     top_pills = [
         record.get("state"),
+        record.get("outcome"),
         record.get("checks"),
         record.get("merge"),
         cleanup,
@@ -687,6 +988,12 @@ def render_record_card(record, hidden=False):
         ("Path", record.get("path")),
         ("ID", record.get("id")),
         ("State", record.get("state")),
+        ("Outcome", record.get("outcome")),
+        ("Linked Ticket", record.get("linked_ticket") or record.get("issues", [])),
+        ("Blocker or requested information", record.get("blocker_or_requested_information")),
+        ("Retained resources", record.get("retained_resources")),
+        ("Resource owner", record.get("resource_ownership")),
+        ("Next resume or cleanup action", record.get("recovery_action")),
         ("Checks", record.get("checks")),
         ("Merge", record.get("merge")),
         ("Cleanup", cleanup),
