@@ -378,7 +378,11 @@ def load_tickets(repo: Path, contract: FrontierContract) -> list[Ticket]:
     if not tickets:
         raise FrontierError("configured Local Ticket surface contains no Tickets")
     aliases: dict[str, str] = {}
+    identities: set[str] = set()
     for ticket in tickets:
+        if ticket.identity in identities:
+            raise FrontierError(f"duplicate Ticket identity: {ticket.identity}")
+        identities.add(ticket.identity)
         for alias in ticket.aliases:
             if alias in aliases and aliases[alias] != ticket.identity:
                 raise FrontierError(f"ambiguous Ticket identity: {alias}")
@@ -652,6 +656,7 @@ def claim(
             contract.claim_value not in claimed.flags
             or claimed.branch != branch
             or claimed.worktree != worktree
+            or (claimed.publication_run and not claimed.publication_ready)
         ):
             raise FrontierError("Claim post-write verification failed")
         return {

@@ -154,21 +154,26 @@ def replace_metadata_field(text: str, field: str, value: str) -> str:
 def normalize_operational_fields(text: str) -> str:
     start, end, _kind = metadata_region(text)
     region = text[start:end]
-    for field in (
-        "status",
-        "state",
-        "flags",
-        "labels",
-        "solve_branch",
-        "solve_worktree",
-    ):
-        pattern = re.compile(rf"(?mi)^({re.escape(field)}[ \t]*:)[ \t]*.*$")
+    fields = {
+        "status": (r"status", False),
+        "state": (r"state", False),
+        "flags": (r"flags", False),
+        "labels": (r"labels", False),
+        "solve_branch": (r"(?:solve[ _-]+branch|branch)", True),
+        "solve_worktree": (r"(?:solve[ _-]+worktree|worktree)", True),
+    }
+    for field, (spelling, remove) in fields.items():
+        pattern = re.compile(
+            rf"(?mi)^({spelling}[ \t]*:)[ \t]*.*(?:\n|\Z)" if remove
+            else rf"(?mi)^({spelling}[ \t]*:)[ \t]*.*$"
+        )
         matches = list(pattern.finditer(region))
         if len(matches) > 1:
             raise AdapterError(f"Ticket defines {field} more than once")
         if matches:
             match = matches[0]
-            region = region[: match.start()] + match.group(1) + f" <{field}>" + region[match.end() :]
+            replacement = "" if remove else match.group(1) + f" <{field}>"
+            region = region[: match.start()] + replacement + region[match.end() :]
     return text[:start] + region + text[end:]
 
 

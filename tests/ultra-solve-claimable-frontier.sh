@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 ADAPTER="$ROOT/skills/engineering/ultra/scripts/local_ticket_frontier.py"
+PUBLICATION="$ROOT/skills/engineering/ultra/scripts/local_ticket_publication.py"
 TMPDIR_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_ROOT"' EXIT
 
@@ -178,6 +179,75 @@ if frontier "$REPO" >"$TMPDIR_ROOT/unsafe.out" 2>&1; then
   exit 1
 fi
 grep -Fq 'must define exactly one Claim value' "$TMPDIR_ROOT/unsafe.out"
+
+# Duplicate stable identities fail before explicit path selection can redirect
+# a Claim to the other file.
+DUPLICATE="$TMPDIR_ROOT/duplicate"
+init_repo "$DUPLICATE"
+write_ticket "$DUPLICATE" ONE ready-for-agent '' ''
+write_ticket "$DUPLICATE" TWO ready-for-agent '' ''
+sed 's/Ticket ID: TWO/Ticket ID: ONE/' "$DUPLICATE/.scratch/feature/issues/TWO.md" >"$TMPDIR_ROOT/duplicate-ticket.md"
+cp "$TMPDIR_ROOT/duplicate-ticket.md" "$DUPLICATE/.scratch/feature/issues/TWO.md"
+if frontier "$DUPLICATE" --ticket-id .scratch/feature/issues/ONE.md >"$TMPDIR_ROOT/duplicate.out" 2>&1; then
+  echo 'duplicate Ticket identity unexpectedly produced a frontier' >&2
+  exit 1
+fi
+grep -Fq 'duplicate Ticket identity: ONE' "$TMPDIR_ROOT/duplicate.out"
+
+# Claim resource links are operational journal fields. A promoted run-tagged
+# A -> B graph remains valid after Claim and advances after A completes.
+PROMOTED="$TMPDIR_ROOT/promoted"
+init_repo "$PROMOTED"
+cat >"$PROMOTED/.scratch/feature/issues/A.md" <<'EOF'
+Status: review-pending
+Ticket ID: A
+Publication Run: promoted-run
+Source Spec: docs/spec.md
+Blocked By: []
+Flags:
+
+# Promoted A
+EOF
+cat >"$PROMOTED/.scratch/feature/issues/B.md" <<'EOF'
+Status: review-pending
+Ticket ID: B
+Publication Run: promoted-run
+Source Spec: docs/spec.md
+Blocked By: [A]
+Flags:
+
+# Promoted B
+EOF
+python3 "$PUBLICATION" register --repo "$PROMOTED" --representation file-per-ticket \
+  --location .scratch/feature/issues --run-id promoted-run >/dev/null
+python3 "$PUBLICATION" promote --repo "$PROMOTED" --representation file-per-ticket \
+  --location .scratch/feature/issues --run-id promoted-run >/dev/null
+frontier "$PROMOTED" >"$TMPDIR_ROOT/promoted-initial.json"
+promoted_snapshot="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["snapshot"])' "$TMPDIR_ROOT/promoted-initial.json")"
+claim "$PROMOTED" A "$promoted_snapshot" >/dev/null
+frontier "$PROMOTED" >"$TMPDIR_ROOT/promoted-claimed.json"
+python3 - "$TMPDIR_ROOT/promoted-claimed.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["non_frontier"]["A"] == ["claim-conflict"]
+assert data["non_frontier"]["B"] == ["blocked-by:A:ready-for-agent"]
+PY
+python3 - "$PROMOTED/.scratch/feature/issues/A.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace("Status: ready-for-agent", "Status: completed", 1)
+text = text.replace("Flags: solve-in-progress", "Flags:", 1)
+path.write_text(text, encoding="utf-8")
+PY
+frontier "$PROMOTED" >"$TMPDIR_ROOT/promoted-advanced.json"
+python3 - "$TMPDIR_ROOT/promoted-advanced.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["claimable"] == ["B"]
+assert not any("publication-invalid" in reason for reasons in data["non_frontier"].values() for reason in reasons)
+PY
 
 # The same graph and atomic Claim semantics work for safely delimited tickets-file.
 SECTIONS="$TMPDIR_ROOT/sections"
