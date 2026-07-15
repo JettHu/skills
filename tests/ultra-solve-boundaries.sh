@@ -27,6 +27,50 @@ eval_plan = (repo / ".evals/ultra-solve-afk-safe-planning/20260708-model-adheren
     encoding="utf-8"
 )
 
+approved_storage_literals = {
+    ".scratch/<feature>/issues/",
+    ".scratch/<feature>/issue.md",
+    ".scratch/<feature>/issues/*.md",
+    ".scratch/<feature>/issues/<ticket-file>.md",
+    ".scratch/*/issues/*.md",
+    ".scratch/*/issue.md",
+}
+approved_compatibility_identifiers = {
+    "read_issue(issue_id)",
+    "claim_issue(issue_id, branch, worktree)",
+    "set_state(issue_id, state)",
+    "add_flag(issue_id, flag)",
+    "remove_flag(issue_id, flag)",
+    "record_blocker(issue_id, reason, evidence_link_or_summary)",
+    "link_change(issue_id, branch_or_worktree_or_commit_or_pr)",
+    "link_validation(issue_id, command_or_check_run, status)",
+    "close_completed(issue_id)",
+}
+approved_provider_native_names = {"GitHub Issue", "GitLab Issue"}
+approved_legacy_spans = []
+for code_span in re.finditer(r"`([^`\n]+)`", solve):
+    literal = code_span.group(1)
+    if literal in approved_storage_literals | approved_compatibility_identifiers:
+        approved_legacy_spans.append(code_span.span(1))
+for provider_name in approved_provider_native_names:
+    approved_legacy_spans.extend(match.span() for match in re.finditer(re.escape(provider_name), solve))
+
+unapproved_legacy_terms = []
+for match in re.finditer("issue", solve, flags=re.IGNORECASE):
+    if any(start <= match.start() and match.end() <= end for start, end in approved_legacy_spans):
+        continue
+    line = solve.count("\n", 0, match.start()) + 1
+    excerpt = solve.splitlines()[line - 1].strip()
+    unapproved_legacy_terms.append(f"line {line}: {excerpt}")
+assert not unapproved_legacy_terms, (
+    "Ultra Solve contains unapproved legacy Ticket terminology:\n"
+    + "\n".join(unapproved_legacy_terms)
+)
+assert (
+    "compatibility API identifiers retain their established spellings while operating on Tickets"
+    in solve
+), "compatibility identifiers must identify their surrounding domain objects as Tickets"
+
 assert "Context:" not in brief
 for field in ("Constraints:", "Validation:", "Hints:"):
     assert field in brief, f"Agent Brief field missing: {field}"

@@ -1,45 +1,47 @@
 # Ultra Solve
 
-`/ultra solve` is a subcommand of `/ultra`. It picks up AFK-ready issues, coordinates execution worktrees, integrates results, validates finished candidates, and creates outcome Solve Records when an Attempt reaches a meaningful candidate or recovery handoff. Claim remains the temporary concurrency lock; it never creates a receipt. The command optionally merges eligible candidates when the user explicitly asks for it.
+`/ultra solve` is a subcommand of `/ultra`. It picks up AFK-ready Tickets, coordinates execution worktrees, integrates results, validates finished candidates, and creates outcome Solve Records when an Attempt reaches a meaningful candidate or recovery handoff. Claim remains the temporary concurrency lock; it never creates a receipt. The command optionally merges eligible candidates when the user explicitly asks for it.
 
 It has its own state machine and coordination workflow, so handle it before normal target-skill profile lookup.
 
 ## Tracker Operations
 
+Ticket is the canonical domain term for a Work Order throughout this runbook. Retain provider-native artifact terminology only when naming the provider artifact itself. Retain the legacy noun only inside established `.scratch/<feature>/issues/` and `.scratch/<feature>/issue.md` storage paths or compatibility identifiers such as `read_issue(issue_id)` whose spelling is an external contract. Prose surrounding every retained path or identifier must still name the domain object as a Ticket.
+
 Use tracker verbs, not hard-coded frontmatter fields, so local markdown trackers and future remote adapters can share the same workflow contract:
 
-- list issues ready for agent work
-- read issue body, acceptance criteria, state, flags, notes/comments, and linked branches/worktrees/changes
-- claim issue
-- set issue state
-- add or remove issue flags
-- record issue-state-relevant notes, decisions, or blocker reasons
+- list Tickets ready for agent work
+- read Ticket body, acceptance criteria, state, flags, notes/comments, and linked branches/worktrees/changes
+- claim Ticket
+- set Ticket state
+- add or remove Ticket flags
+- record Ticket-state-relevant notes, decisions, or blocker reasons
 - link branches, worktrees, commits, PRs, solve records, or validation runs
-- close completed issues
+- close completed Tickets
 
-Current mutation support is configured Local Markdown trackers, such as `.scratch/<feature>/issues/*.md`, `.scratch/<feature>/issue.md`, or safely delimited Ticket sections in a configured `tickets.md`. Read `docs/agents/ultra-tracker.md` before discovery when present. A tickets-file adapter requires exact machine-readable section boundaries, stable Ticket IDs, safe state mutation, blocker lookup, and conflict-detecting Claim semantics; otherwise fail closed without mutation. If the tracker is remote and no adapter is available, you may read issue context, but stop before claim/update/close operations and report that a remote tracker adapter is needed. For configured GitHub or GitLab review publication, provisional, partially promoted, superseded, or run-membership-unverified Tickets are never eligible for discovery or Claim. Treat missing exact ready-state verification or a conflict-detecting Claim operation as unavailable, not as permission to infer readiness from a missing label.
+Current mutation support is configured Local Markdown trackers, such as `.scratch/<feature>/issues/*.md`, `.scratch/<feature>/issue.md`, or safely delimited Ticket sections in a configured `tickets.md`. Read `docs/agents/ultra-tracker.md` before discovery when present. A tickets-file adapter requires exact machine-readable section boundaries, stable Ticket IDs, safe state mutation, blocker lookup, and conflict-detecting Claim semantics; otherwise fail closed without mutation. If the tracker is remote and no adapter is available, you may read Ticket context, but stop before Claim/update/close operations and report that a remote tracker adapter is needed. For configured GitHub or GitLab review publication, provisional, partially promoted, superseded, or run-membership-unverified Tickets are never eligible for discovery or Claim. Treat missing exact ready-state verification or a conflict-detecting Claim operation as unavailable, not as permission to infer readiness from a missing label.
 
 For a contract declaring `Frontier adapter: bundled-local-markdown-v1`, use the bundled `scripts/local_ticket_frontier.py` for both explicit and `--all` discovery and Claim. Its structured snapshot is the configured tracker contract: it resolves the declared state, completed state, blocker fields/body heading, Claim field/value, and assignment fields; adds the promoted-journal gate only for run-tagged Tickets; and reports claimable versus non-frontier work. Do not reproduce its graph by grepping Markdown. A missing, prose-only, unknown, or malformed adapter contract is unsupported and stops mutation.
 
-Tracker updates should record state-relevant facts. Use the tracker state, labels, assignment, or project status for claim/progress when available. Use PRs, commits, branches, and CI/check runs for implementation and validation evidence, linking them from the issue when useful. Use issue comments or local issue notes for requirement clarification, concise blockers, human decisions, or completion notes only when that is the tracker's normal review surface. Keep batch logs and large command output in the final solve summary or validation artifacts.
+Tracker updates should record state-relevant facts. Use the tracker state, labels, assignment, or project status for Claim/progress when available. Use PRs, commits, branches, and CI/check runs for implementation and validation evidence, linking them from the Ticket when useful. Use provider-native tracker comments or local Ticket notes for requirement clarification, concise blockers, human decisions, or completion notes only when that is the tracker's normal review surface. Keep batch logs and large command output in the final solve summary or validation artifacts.
 
 ## Invocation
 
 ```text
-/ultra solve [issue-id... | --all] [--auto-merge] [message]
+/ultra solve [ticket-id... | --all] [--auto-merge] [message]
 ```
 
-- Explicit issue ids: solve only those issues.
+- Explicit Ticket IDs: solve only those Tickets.
 - `--all`: repeatedly solve the configured current claimable frontier, re-reading after each completed frontier generation. It never preselects the transitive dependency graph.
-- `--auto-merge`: after finished solve records are created, merge eligible records into the local base branch one by one through the merge gate. It does not fetch, push, deploy, or broaden the selected issue set.
-- Free-form message: infer the relevant issues from the conversation and tracker, then state the selection before claiming.
+- `--auto-merge`: after finished solve records are created, merge eligible records into the local base branch one by one through the merge gate. It does not fetch, push, deploy, or broaden the selected Ticket set.
+- Free-form message: infer the relevant Tickets from the conversation and tracker, then state the selection before claiming.
 - Merge/apply/ship/land wording: treat as auto-merge intent after the solve pipeline succeeds and the merge gates pass.
 
 ## Core Semantics
 
 `/ultra solve` is the coordinator. It must keep six surfaces consistent:
 
-- issue tracker state
+- Ticket tracker state
 - group worktrees and branches
 - validation evidence
 - solve records
@@ -50,13 +52,13 @@ Group worktrees produce candidate changes. The coordinator owns integration and 
 
 Default successful completion, when no `--auto-merge` or merge/apply/ship/land intent is present, is a clean committed candidate branch plus an `outcome: candidate` receipt. `head` is the candidate branch whose current head contains finished work. `base` is the landing branch the candidate is meant to enter later. A meaningful stopped Attempt instead creates the matching recovery receipt; a transient or fully cleaned no-value Attempt releases its Claim without leaving a record. Push, deploy, and cleanup happen only when the user's latest wording explicitly asks for them or when a later solve-record command advances the recorded outcome.
 
-Issues are assumed AFK-ready when they are in `ready-for-agent`: the issue body, acceptance criteria, and any agent brief are treated as approved input. Continue the batch unless the issue selection or merge target is ambiguous and cannot be inferred safely.
+Tickets are assumed AFK-ready when they are in `ready-for-agent`: the Ticket body, acceptance criteria, and any Agent Brief are treated as approved input. Continue the batch unless the Ticket selection or merge target is ambiguous and cannot be inferred safely.
 
-An Agent Brief is an optional, non-duplicative delta to the issue and source Spec, never a schema gate. If present, use only its constraints, validation guidance, and optional hints during planning; re-check hints against current code and repo conventions before relying on them. If it is absent or empty, infer from the issue, codebase, and conversation where possible; missing core requirements become `needs-info`, and human-owned decisions become `ready-for-human`. Agent Brief content never participates in parsing, eligibility, state transitions, or merge gates.
+An Agent Brief is an optional, non-duplicative delta to the Ticket and source Spec, never a schema gate. If present, use only its constraints, validation guidance, and optional hints during planning; re-check hints against current code and repo conventions before relying on them. If it is absent or empty, infer from the Ticket, codebase, and conversation where possible; missing core requirements become `needs-info`, and human-owned decisions become `ready-for-human`. Agent Brief content never participates in parsing, eligibility, state transitions, or merge gates.
 
 ## Worktree Boundary
 
-`/ultra solve` owns worktree identity and lifecycle semantics: issue grouping, branch-from ref, branch name, worktree path, claim state, validation, integration, solve-record finalization, and merge gates.
+`/ultra solve` owns worktree identity and lifecycle semantics: Ticket grouping, branch-from ref, branch name, worktree path, Claim state, validation, integration, solve-record finalization, and merge gates.
 
 Use native `git worktree add` as the normal creation interface for assigned solve worktrees. If the repo has an `agent-worktree` post-checkout hook installed, Agent payload injection is a repo-local side effect of that native Git operation.
 
@@ -66,7 +68,7 @@ When adopting an existing worktree, verify the expected path, branch, and assign
 
 ## Adoption Routing
 
-Before claiming, decide the worktree route from the current branch/worktree, selected issues, tracker claim state, dirty status, branch topology, and risk. Adoption is Agent-judged behavior, not a required explicit flag.
+Before claiming, decide the worktree route from the current branch/worktree, selected Tickets, tracker Claim state, dirty status, branch topology, and risk. Adoption is Agent-judged behavior, not a required explicit flag.
 
 Choose exactly one route and state an adoption declaration before implementation:
 
@@ -77,7 +79,7 @@ Choose exactly one route and state an adoption declaration before implementation
 
 For ordinary AFK pickup with no safely indicated prepared development branch, keep the existing `isolated` solve boundary.
 
-A prepared development branch is the current branch, or a branch clearly identified by the user request, tracker metadata, Codex App setup, or stack topology, as intended for the selected issue work. Branch names, commit messages, and issue paths may support this judgment, but name similarity alone is not enough. The branch must be non-protected, aligned with the issue scope, free of active claim conflicts, and able to pass entry safety.
+A prepared development branch is the current branch, or a branch clearly identified by the user request, tracker metadata, Codex App setup, or stack topology, as intended for the selected Ticket work. Branch names, commit messages, and Ticket paths may support this judgment, but name similarity alone is not enough. The branch must be non-protected, aligned with the Ticket scope, free of active Claim conflicts, and able to pass entry safety.
 
 The declaration must name:
 
@@ -99,13 +101,13 @@ Cleanup ownership: <solve-owned temporary resources | user-owned adopted resourc
 Use `isolated` when adoption has a safety failure:
 
 - the current branch is a protected baseline such as `main`, `master`, or a project-defined protected release branch
-- the current branch/worktree conflicts with tracker claim metadata or an active claim
-- dirty or untracked paths overlap likely issue write paths or may be overwritten
+- the current branch/worktree conflicts with tracker Claim metadata or an active Claim
+- dirty or untracked paths overlap likely Ticket write paths or may be overwritten
 - branch topology, branch-from ref, or candidate identity is unsafe enough that adopting could hide or overwrite work
 
-When creating an isolated worktree because adoption is unsuitable, choose a branch-from ref that preserves the user's current integration context. Prefer the current branch or current HEAD when it is the strongest signal; use issue text, tracker metadata, stack relationships, release branches, or repo convention only when they clearly identify a better branch-from ref. When invoked from a protected baseline, default the branch-from ref to the current baseline or HEAD unless the user, tracker, Codex App setup, or stack topology clearly identifies another integration branch for this work. Branch existence alone is insufficient as a switch signal to or away from `main` or `master`.
+When creating an isolated worktree because adoption is unsuitable, choose a branch-from ref that preserves the user's current integration context. Prefer the current branch or current HEAD when it is the strongest signal; use Ticket text, tracker metadata, stack relationships, release branches, or repo convention only when they clearly identify a better branch-from ref. When invoked from a protected baseline, default the branch-from ref to the current baseline or HEAD unless the user, tracker, Codex App setup, or stack topology clearly identifies another integration branch for this work. Branch existence alone is insufficient as a switch signal to or away from `main` or `master`.
 
-The branch-from ref is only the starting point for `git worktree add`; it is not necessarily the solve record `base`. In solve records, `base` remains the landing branch the candidate is meant to enter later. For example, if dirty issue-scoped work prevents adopting the current `feature/billing` branch, an isolated solve branch may be created from `feature/billing` HEAD while the solve record still uses `base: main` when `main` is the landing branch.
+The branch-from ref is only the starting point for `git worktree add`; it is not necessarily the solve record `base`. In solve records, `base` remains the landing branch the candidate is meant to enter later. For example, if dirty Ticket-scoped work prevents adopting the current `feature/billing` branch, an isolated solve branch may be created from `feature/billing` HEAD while the solve record still uses `base: main` when `main` is the landing branch.
 
 Use `ask` when the current branch/worktree looks plausibly safe but user intent is unclear. Offer context-relevant choices that include:
 
@@ -138,7 +140,7 @@ State meanings:
 - `solve-in-progress`: a claim flag, added immediately after claim to prevent parallel pickup.
 - `completed`: acceptance criteria are implemented and verified.
 - `ready-for-human`: semantic conflict, final validation failure, or other non-requirements blocker.
-- `needs-info`: core requirement cannot be inferred from the issue, code, or conversation.
+- `needs-info`: core requirement cannot be inferred from the Ticket, code, or conversation.
 - `ready-for-agent`: also receives an abandoned or clean-restart Ticket that remains valid and claimable.
 
 Primary states, Claim flags, and receipt outcomes are separate. `ready-for-agent`, `completed`, `ready-for-human`, and `needs-info` are primary states. `solve-in-progress` is a temporary claim flag that may be stored as a label, flag, status metadata, or another tracker-specific convention. `candidate`, `blocked`, `needs-info`, `ready-for-human`, `abandoned`, and `superseded` are Solve Record outcomes; a recovery outcome does not add a new Ticket state. Record-worthy low-risk decisions belong in the active Execution Digest and then the outcome Solve Record, not in Ticket state or flags.
@@ -147,7 +149,7 @@ Flag lifecycle:
 
 - Add `solve-in-progress` only after a claim succeeds.
 - Remove `solve-in-progress` whenever the Attempt hands off and no actor remains actively assigned to resume the same retained resources and recovery context. Retain it only when the recovery next action is `resume`, the same assignment is intentionally still active, and the tracker contract supports a resumable Claim; otherwise a later resume must reclaim the Ticket.
-- If a stale `solve-in-progress` flag references a missing branch or worktree, inspect the issue history and branch refs. Resume, clear, or ask before mutating; do not silently discard it.
+- If a stale `solve-in-progress` flag references a missing branch or worktree, inspect the Ticket history and branch refs. Resume, clear, or ask before mutating; do not silently discard it.
 
 When setting `ready-for-human` or `needs-info`, record a concise blocker reason when the tracker supports state-relevant notes:
 
@@ -161,7 +163,7 @@ When setting `ready-for-human` or `needs-info`, record a concise blocker reason 
 
 A blocker reason explains a state transition; it is not a new state.
 
-Discovery must skip issues carrying an active `solve-in-progress` claim and report them as already claimed.
+Discovery must skip Tickets carrying an active `solve-in-progress` Claim and report them as already claimed.
 
 `review-pending` is a Local Markdown Ultra adapter state, not a global triage role. It is never claimable through explicit selection or `--all`. A run-tagged Ticket is eligible only when its exact state is `ready-for-agent`, the configured publication journal is `promoted`, the complete registered set re-verifies unchanged and ready, blocker targets are resolved, and Claim metadata is free. A provisional Ticket carrying `solve-in-progress` is malformed provisional state, not an active Claim; report it and do not execute it.
 
@@ -177,7 +179,7 @@ For configured Local Markdown publication runs, route both explicit and batch di
 
 For configured GitHub or GitLab publication runs, route explicit and batch discovery through the configured remote adapter. It must verify the exact publication-set identity, complete membership, non-claimable/provisional marker removal, configured ready state, verified parent/blocking relationships, and free Claim metadata. Durable local staging is not a remote Ticket surface and must never enter tracker scans. If that adapter cannot establish every gate, report the selected Ticket as non-frontier and do not mutate it.
 
-Report skipped issues with a short reason:
+Report skipped Tickets with a short reason:
 
 - wrong state
 - has active `solve-in-progress`
@@ -192,7 +194,7 @@ Cycles, self-cycles, missing targets, non-completed blocker states, and Claim co
 
 ### 2. Claim
 
-For every selected issue:
+For every selected Ticket:
 
 - determine the adoption route and intended branch/worktree reference
 - pass the discovery snapshot back to the adapter and atomically re-read state, blockers, publication gates, and Claim metadata
@@ -218,16 +220,16 @@ Completion can unlock a dependent in the next generation. A failed, recovery, hu
 
 ### 3. Assess: Pre-Implementation Checkpoint
 
-For each claimed issue, run the Pre-Implementation Checkpoint after claim and before implementation edits. Read the issue body, acceptance criteria, comments, linked docs, optional Agent Brief, and enough current repository context to decide whether the issue is executable.
+For each claimed Ticket, run the Pre-Implementation Checkpoint after Claim and before implementation edits. Read the Ticket body, acceptance criteria, comments, linked docs, optional Agent Brief, and enough current repository context to decide whether the Ticket is executable.
 
-Classify the issue disposition:
+Classify the Ticket disposition:
 
 - `executable`: enough information exists or can be inferred.
 - `needs exploration`: technical details are missing, but the codebase can likely answer them.
 - `needs-info`: a core requirement cannot be inferred.
-- `ready-for-human`: the issue is really an unapproved architecture, product, security, data, or significant UX decision.
+- `ready-for-human`: the Ticket is really an unapproved architecture, product, security, data, or significant UX decision.
 
-If an issue becomes `needs-info` or `ready-for-human`, record the blocker reason and route the Attempt through Outcome Finalization. A substantive assessment with durable findings creates the matching recovery receipt; an immediate no-value stop releases its Claim without a record. Continue with the rest of the batch after the Ticket, Claim, resources, and backlink reflect that disposition.
+If a Ticket becomes `needs-info` or `ready-for-human`, record the blocker reason and route the Attempt through Outcome Finalization. A substantive assessment with durable findings creates the matching recovery receipt; an immediate no-value stop releases its Claim without a record. Continue with the rest of the batch after the Ticket, Claim, resources, and backlink reflect that disposition.
 
 The main Agent records, without requesting approval:
 
@@ -235,9 +237,9 @@ The main Agent records, without requesting approval:
 - validation plan: commands, manual evidence, check-run links, or why no meaningful automated check exists
 - Digest disposition: `simple` or `digest-worthy`
 
-Direct main-Agent execution requires positive evidence that the issue is simple, familiar, local, low-risk, fully specified, and obviously verifiable. Existing high-quality exploration in the active context may satisfy part of that evidence and avoid duplicate fan-out. A clear local fix alone is not enough.
+Direct main-Agent execution requires positive evidence that the Ticket is simple, familiar, local, low-risk, fully specified, and obviously verifiable. Existing high-quality exploration in the active context may satisfy part of that evidence and avoid duplicate fan-out. A clear local fix alone is not enough.
 
-Bias most non-trivial or uncertain issues toward adaptive read-only subagent fan-out. Use task-shaped lenses only when they add independent evidence: affected modules, contracts, risks, dependencies, validation, or relevant external facts. Subagents return compressed findings—relevant modules, constraints, risks, validation paths, and unresolved questions. The main Agent retains synthesis, implementation edits, validation, tracker transitions, and solve-record finalization. Raw exploration output stays outside the issue, Execution Digest, and Solve Record.
+Bias most non-trivial or uncertain Tickets toward adaptive read-only subagent fan-out. Use task-shaped lenses only when they add independent evidence: affected modules, contracts, risks, dependencies, validation, or relevant external facts. Subagents return compressed findings—relevant modules, constraints, risks, validation paths, and unresolved questions. The main Agent retains synthesis, implementation edits, validation, tracker transitions, and solve-record finalization. Raw exploration output stays outside the Ticket, Execution Digest, and Solve Record.
 
 Use external research only when a source-verifiable external API, framework, standard, platform, compatibility, or security fact affects implementation or validation and local approved context cannot settle it. Link the source and keep the finding factual. Research never substitutes for a human-owned product, architecture, data-policy, or security-policy choice.
 
@@ -251,7 +253,7 @@ For a local Ticket at `.scratch/<feature>/issues/<ticket-file>.md` or `.scratch/
 .scratch/<feature>/execution-digests/<digest-key>.md
 ```
 
-Derive `digest-key` in this order: use the stable tracker Ticket ID when present and matching `[A-Za-z0-9][A-Za-z0-9._-]*`; otherwise use the local Ticket filename stem when it matches that pattern; otherwise use the full SHA-256 of the canonical Ticket identity (the repo-relative local Ticket path). A feature owns one `issue.md` and each `issues/*.md` filename is unique within that feature, so the feature directory plus this key is collision-safe. The derivation never accepts path separators. The directory is outside normal Ticket discovery: discover only `.scratch/*/issues/*.md` and `.scratch/*/issue.md`, never a broad `.scratch/**/*.md` glob.
+Derive `digest-key` in this order: use the stable tracker Ticket ID when present and matching `[A-Za-z0-9][A-Za-z0-9._-]*`; otherwise use the local Ticket filename stem when it matches that pattern; otherwise use the full SHA-256 of the canonical Ticket identity (the repo-relative local Ticket path). A feature owns at most one single-Ticket file, and each `.scratch/<feature>/issues/*.md` filename is unique within that feature, so the feature directory plus this key is collision-safe. The derivation never accepts path separators. The directory is outside normal Ticket discovery: discover only `.scratch/*/issues/*.md` and `.scratch/*/issue.md`, never a broad `.scratch/**/*.md` glob.
 
 Keep the file compressed:
 
@@ -280,13 +282,13 @@ When the same retained branch, worktree, and recovery context resume, reopen and
 
 Complex, delegated, resumable, or digest-worthy Attempts receive a Pre-Edit Plan Review before implementation edits. Prefer a fresh read-only reviewer when that capability exists; otherwise the main Agent performs the equivalent findings-first review. Check the compressed plan, acceptance criteria, constraints, risks, and validation strategy for omitted steps, unsafe assumptions, and validation gaps. Incorporate findings into the plan or Digest; the review creates no standalone lifecycle artifact and no blanket human approval gate.
 
-Record-worthy low-risk decisions go in the active Digest and outcome Solve Record. Human-owned product, API, data, security, architecture, or significant UX choices set the issue to `ready-for-human`; missing core requirements set it to `needs-info`.
+Record-worthy low-risk decisions go in the active Digest and outcome Solve Record. Human-owned product, API, data, security, architecture, or significant UX choices set the Ticket to `ready-for-human`; missing core requirements set it to `needs-info`.
 
-The Pre-Implementation Checkpoint is complete when each claimed issue has an issue disposition, exploration disposition, validation plan, Digest disposition, and any required Digest or Pre-Edit Plan Review incorporated before implementation edits.
+The Pre-Implementation Checkpoint is complete when each claimed Ticket has a Ticket disposition, exploration disposition, validation plan, Digest disposition, and any required Digest or Pre-Edit Plan Review incorporated before implementation edits.
 
 ### 4. Group
 
-Group executable issues by module, dependency, and likely file overlap.
+Group executable Tickets by module, dependency, and likely file overlap.
 
 - Same module or shared files: one group, serial execution.
 - Independent modules: separate groups that may be executed in parallel when the runtime supports it.
@@ -316,7 +318,7 @@ Before writing ANY implementation file, the coordinator must verify and report:
 - [ ] Branch-from, landing, and current context match the solve assignment before implementation commits
 - [ ] `git status --short --branch` shows the assigned group branch
 - [ ] Tracker claim metadata matches the assigned worktree/branch
-- [ ] Dirty and untracked paths are absent, or proven unrelated to the selected issue scope before adoption
+- [ ] Dirty and untracked paths are absent, or proven unrelated to the selected Ticket scope before adoption
 
 Do not edit code, tests, docs, config, migrations, or generated artifacts until this gate passes.
 
@@ -339,11 +341,11 @@ Create the assigned worktree with native Git, for example:
 git worktree add -b "<group-branch>" "<group-worktree-path>" "<branch-from-ref>"
 ```
 
-If the repo-level Agent-ready hook is installed, payload bootstrap happens automatically during `git worktree add`. Solve creates and verifies assigned worktrees with native Git, and removes solve-owned resources through solve-record cleanup gates; `agent-worktree` remains hook/config scaffolding. If native Git cannot create the exact assigned identity, mark only the affected issue/group with `tooling_unavailable`.
+If the repo-level Agent-ready hook is installed, payload bootstrap happens automatically during `git worktree add`. Solve creates and verifies assigned worktrees with native Git, and removes solve-owned resources through solve-record cleanup gates; `agent-worktree` remains hook/config scaffolding. If native Git cannot create the exact assigned identity, mark only the affected Ticket/group with `tooling_unavailable`.
 
 For `adopted-integration`, temporary group branches are solve-owned resources. The adopted integration branch is the candidate branch and remains user-owned.
 
-For each issue in a group:
+For each Ticket in a group:
 
 1. Execute from the Pre-Implementation Checkpoint. Refresh exploration only when code changed since planning or the assigned worktree exposes new facts.
 2. Choose execution route. These are optional routing heuristics, not mandatory skill calls:
@@ -352,7 +354,7 @@ For each issue in a group:
    - medium feature with clear AC: consider `/ultra tdd` in AFK mode when test-first development would help
    - approved refactor with clear AC: implement directly, or consider `/ultra tdd` when behavior coverage is needed
    - speculative architecture change: mark `ready-for-human`
-   - docs/config-only issue: edit directly
+   - docs/config-only Ticket: edit directly
 3. Implement.
 4. Verify each acceptance criterion. In a declared shared-integration sequence, a migration batch verifies its scoped mechanical acceptance; only the named final integrate-and-verify Ticket verifies the full integrated green result.
 5. Record validation evidence as a PR, commit, CI/check, tracker pointer, or final solve summary entry.
@@ -361,10 +363,10 @@ For each issue in a group:
 Commit rules:
 
 - Leave successful group work as clean, committed group branches for integration.
-- Split commits by issue, vertical slice, or coherent logical change when that makes review and rollback clearer.
+- Split commits by Ticket, vertical slice, or coherent logical change when that makes review and rollback clearer.
 - Keep tightly coupled code, tests, docs, and generated artifacts together when separating them would create broken intermediate commits.
-- Commit granularity should follow coherent behavior and review boundaries: separate unrelated issues, and keep mechanical fragments together when they explain one behavior.
-- Commit messages should reference the relevant issue id(s) and, when useful, the validation command or evidence.
+- Commit granularity should follow coherent behavior and review boundaries: separate unrelated Tickets, and keep mechanical fragments together when they explain one behavior.
+- Commit messages should reference the relevant Ticket ID(s) and, when useful, the validation command or evidence.
 
 ### 6. Review Groups
 
@@ -376,12 +378,12 @@ Review before integration:
 
 For implementation groups, pin the group review range against the group branch base before reviewing. Treat the following as review lenses, not mandatory output sections. Report real findings under the relevant axis:
 
-- Spec: compare the committed group diff with the originating issue body, acceptance criteria, PRD, or agent brief. Flag missing requirements, partial implementations, scope creep, and behavior that appears wrong against the spec.
+- Spec: compare the committed group diff with the originating Ticket body, acceptance criteria, PRD, or Agent Brief. Flag missing requirements, partial implementations, scope creep, and behavior that appears wrong against the spec.
 - Standards: compare the committed group diff with documented repo standards, project conventions, ADRs, and nearby code patterns. Flag hard violations separately from judgment calls.
 
-Also check supporting engineering risks only when relevant to the changed files or risk: side effects and regression risk, test/validation coverage, and dependency or compatibility issues.
+Also check supporting engineering risks only when relevant to the changed files or risk: side effects and regression risk, test/validation coverage, and dependency or compatibility concerns.
 
-Fix blocking review findings before integration, then commit the fixes to the relevant group branch with the same split-commit rules. If a finding requires human judgment, mark the issue `ready-for-human`, remove or retain `solve-in-progress` according to resumability, and exclude it from merge gates.
+Fix blocking review findings before integration, then commit the fixes to the relevant group branch with the same split-commit rules. If a finding requires human judgment, mark the Ticket `ready-for-human`, remove or retain `solve-in-progress` according to resumability, and exclude it from merge gates.
 
 ### 7. Integrate
 
@@ -395,7 +397,7 @@ Suggested names:
 Merge or cherry-pick committed, locally validated group branches into integration in dependency order. Each group worktree must be clean before integration starts. For a declared shared-integration sequence, continue from its named shared branch in declared graph order; the final integrate-and-verify Ticket reopens that branch only after contract is completed and runs the full integration validation there.
 
 - Mechanical conflicts: the coordinator may resolve them.
-- Semantic conflicts: stop integration for the affected issues and route each meaningful stopped Attempt through Outcome Finalization as `ready-for-human`; the remaining batch may continue without those issues.
+- Semantic conflicts: stop integration for the affected Tickets and route each meaningful stopped Attempt through Outcome Finalization as `ready-for-human`; the remaining batch may continue without those Tickets.
 - Any mechanical conflict resolution or integration-only fix must be committed on the integration branch before final validation is considered complete.
 
 The integration stage exists to catch hidden coupling between parallel work: shared types, migrations, router registration, scheduler registration, config defaults, fixtures, generated artifacts, and dependency changes.
@@ -407,12 +409,12 @@ Run the repo-appropriate validation commands in the integration worktree. Prefer
 If final validation passes:
 
 - ensure the integration worktree is clean and all intended changes are committed
-- capture the landing `base`, `base_sha`, candidate `head`, `head_sha`, issue paths, worktree path, checks status, validation evidence, rollout/config disposition, and cleanup ownership for solve record creation
-- proceed to finalization before marking linked issues completed
+- capture the landing `base`, `base_sha`, candidate `head`, `head_sha`, Ticket paths, worktree path, checks status, validation evidence, rollout/config disposition, and cleanup ownership for solve record creation
+- proceed to finalization before marking linked Tickets completed
 
 If final validation fails:
 
-- identify affected issues when possible
+- identify affected Tickets when possible
 - record the blocker reason and a concise failing command summary or check-run link
 - route every affected substantive Attempt through Outcome Finalization as `blocked`, with `ready-for-human` as the default actionable Ticket state
 - retain `solve-in-progress` only when the same assignment remains actively resumable on the linked resources
@@ -436,9 +438,9 @@ Check for:
 - validation gaps, unavailable required checks, or missing manual gates
 - solve-record evidence that would be incomplete or misleading
 
-Fix actionable findings directly, rerun the relevant validation, and repeat Post-Execution Review on the corrected candidate. If a finding prevents a finished candidate and cannot be resolved without human input, record the blocker on the issue and set the issue to `ready-for-human` or `needs-info`. Do not create a **candidate** solve record for that issue. During Outcome Finalization, create a recovery receipt when the stopped Attempt leaves meaningful decision, evidence, or retained-resource context; a transient Attempt that is fully cleaned up stays recordless. If the candidate is finished but still has human acceptance, merge review, rollout approval, or another manual gate, keep the issue completed and record the gate in the solve record.
+Fix actionable findings directly, rerun the relevant validation, and repeat Post-Execution Review on the corrected candidate. If a finding prevents a finished candidate and cannot be resolved without human input, record the blocker on the Ticket and set the Ticket to `ready-for-human` or `needs-info`. Do not create a **candidate** solve record for that Ticket. During Outcome Finalization, create a recovery receipt when the stopped Attempt leaves meaningful decision, evidence, or retained-resource context; a transient Attempt that is fully cleaned up stays recordless. If the candidate is finished but still has human acceptance, merge review, rollout approval, or another manual gate, keep the Ticket completed and record the gate in the solve record.
 
-Post-Execution Review is complete when no fixable findings remain, unresolved state-relevant residue is routed to the issue or solve record, and every record-worthy Digest item is ready to distill into the applicable outcome section.
+Post-Execution Review is complete when no fixable findings remain, unresolved state-relevant residue is routed to the Ticket or solve record, and every record-worthy Digest item is ready to distill into the applicable outcome section.
 
 ### 8.5 Outcome Finalization
 
@@ -517,34 +519,34 @@ All record merge gates must pass:
 
 The landing gate constructs `landing_sha` before touching the user's base worktree. Fast-forward candidates use head as `landing_sha`; non-fast-forward candidates and mechanical conflicts must be merged or resolved in a disposable worktree or equivalent throwaway environment. Semantic conflict resolution still stops as `manual required`.
 
-After `landing_sha` exists, the base worktree may only advance with `git merge --ff-only <landing_sha>` or an equivalent ref-safe fast-forward. Dirty or untracked base paths are allowed only when the final landing write surface is proven disjoint from those paths. `/ultra solve --auto-merge` must not fetch, push, deploy, broaden selected issues, or silently merge dependencies.
+After `landing_sha` exists, the base worktree may only advance with `git merge --ff-only <landing_sha>` or an equivalent ref-safe fast-forward. Dirty or untracked base paths are allowed only when the final landing write surface is proven disjoint from those paths. `/ultra solve --auto-merge` must not fetch, push, deploy, broaden selected Tickets, or silently merge dependencies.
 
 If merge succeeds, update the solve record to `state: merged`, set `merged_at` and `merged_sha` to the landed `landing_sha`, write a concise merge rationale, and then attempt safe cleanup. If cleanup fails after the merge, do not roll back the code merge; keep the record merged with `cleanup_done: false` and report cleanup blockers.
 
-If merge fails or conflicts before completion, abort the merge when possible, keep the solve record open, write `manual required` in the record, do not clean up the candidate branch/worktree, and do not roll linked issues back from `completed` unless the candidate itself is invalidated.
+If merge fails or conflicts before completion, abort the merge when possible, keep the solve record open, write `manual required` in the record, do not clean up the candidate branch/worktree, and do not roll linked Tickets back from `completed` unless the candidate itself is invalidated.
 
-By default, show the issue list, group branches, validation commands and results, pending blockers, and final target branch. Include a full diff only when the user asks for it or review needs it.
+By default, show the Ticket list, group branches, validation commands and results, pending blockers, and final target branch. Include a full diff only when the user asks for it or review needs it.
 
 ## AFK Mode For Routed Skills
 
 When routing to the debugging skill, `/ultra tdd`, or another skill:
 
-- Treat the issue body, acceptance criteria, and agent brief as approved input.
+- Treat the Ticket body, acceptance criteria, and Agent Brief as approved input.
 - Continue without waiting for user confirmation.
-- If a routed skill reaches an unanswerable decision, update only that issue to `ready-for-human` or `needs-info` and continue the batch.
-- Isolate blocked issues and continue unrelated issues.
+- If a routed skill reaches an unanswerable decision, update only that Ticket to `ready-for-human` or `needs-info` and continue the batch.
+- Isolate blocked Tickets and continue unrelated Tickets.
 
-Architecture proposal skills such as `/ultra improve-codebase-architecture` are analysis-first. Solve executes approved ready issues; speculative architecture work stays in the proposal/review track.
+Architecture proposal skills such as `/ultra improve-codebase-architecture` are analysis-first. Solve executes approved ready Tickets; speculative architecture work stays in the proposal/review track.
 
-## Upstream Issue Quality
+## Upstream Ticket Quality
 
-`technical_context` is optional in v1. If an issue lacks technical detail, solve should infer what it can from the codebase. If missing context blocks completion, set `needs-info` with a blocker reason. If recurring issue-quality gaps appear, mention them in the final solve summary or an existing project issue-generation surface; issue-generation improvements can stay within the existing tracker schema.
+`technical_context` is optional in v1. If a Ticket lacks technical detail, solve should infer what it can from the codebase. If missing context blocks completion, set `needs-info` with a blocker reason. If recurring Ticket-quality gaps appear, mention them in the final solve summary or an existing project Ticket-generation surface; Ticket-generation improvements can stay within the existing tracker schema.
 
 This is a feedback loop, not a schema gate: `to-tickets -> solve notices missing context -> solve reports the gap -> future Ticket generation improves`.
 
 ## Tracker Adapter Compatibility
 
-Current mutation support is local markdown trackers. The conceptual contract for future remote tracker support is:
+Current mutation support is Local Markdown trackers. The following compatibility API identifiers retain their established spellings while operating on Tickets; the conceptual contract for future remote tracker support is:
 
 For Local Markdown, detect and preserve the repo's configured Ticket conventions. Existing structured fields may include frontmatter keys such as `state`/`status`, `flags`/`labels`, comments/notes, branch/worktree links, stable Ticket IDs, and publication-run identities. Use existing body-marker conventions only when they are already part of the tracker. A configured tickets-file must use exact safe section markers; title- or heading-based inference is never sufficient for mutation. Batch claims require a machine-readable conflict-detecting Claim surface. Run-tagged Tickets additionally require the complete-set promoted journal gate before either single or batch Claim.
 
