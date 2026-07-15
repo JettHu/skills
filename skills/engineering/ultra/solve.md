@@ -21,7 +21,7 @@ Use tracker verbs, not hard-coded frontmatter fields, so local markdown trackers
 
 Read `docs/agents/ultra-tracker.md` before discovery. Use only its configured adapter and fail closed when the mutation contract is missing, malformed, or unsupported. Provisional, staged, partially promoted, superseded, or membership-unverified Tickets are outside solve discovery. A remote tracker without a mutation adapter is read-only.
 
-For `Frontier adapter: bundled-local-markdown-v1`, use `scripts/local_ticket_frontier.py` for both explicit and `--all` discovery and Claim. Frontier exclusively owns whole-tracker discovery, blocker and publication gates, snapshots, conflict detection, and execution branch/worktree assignment. Treat its structured result as authoritative; never rebuild the graph or Claim with Markdown edits.
+For `Frontier adapter: bundled-local-markdown-v1`, prefer the bundled `scripts/ultra_tracker.py` facade for both explicit and `--all` discovery and Claim (`ticket frontier` and `ticket claim`). The facade delegates to frontier, which exclusively owns whole-tracker discovery, blocker and publication gates, snapshots, conflict detection, and execution branch/worktree assignment. Treat its structured result as authoritative; never rebuild the graph or Claim with Markdown edits. If the facade itself is unavailable, make one explicit handoff to the capability-equivalent bundled direct helper; preserve the completed-operation result and never repeat a completed mutation. Neither route requires a global executable on `PATH`.
 
 Tracker updates record state-relevant facts. During execution, concrete Attempt branch/worktree identities enter only the configured Claim or tracker metadata. At handoff, resource identities, ownership, cleanup, commits, and PR/MR details remain authoritative in the Solve Record or native PR/MR. A concise Ticket note may add a lifecycle backlink, but must not duplicate those resource facts. Keep batch logs and large command output in validation artifacts or the final summary.
 
@@ -579,7 +579,7 @@ This is a feedback loop, not a schema gate: `to-tickets -> solve notices missing
 
 Current mutation support is Local Markdown trackers. The following compatibility API identifiers retain their established spellings while operating on Tickets; the conceptual contract for future remote tracker support is:
 
-For Local Markdown, route discovery and Claim through the configured frontier adapter and all publication operations through the publication adapter. Contract-bounded normalization applies only to declared presentation aliases; identities remain exact. No manual fallback is permitted.
+For Local Markdown, prefer `scripts/ultra_tracker.py` for configured publication, frontier, Claim, and Solve Record helper operations. It centralizes configured publication discovery and result envelopes while the owning adapter or helper retains all semantics. If that facade is unavailable, make one explicit capability-equivalent direct-helper handoff only before the operation begins; never retry or repeat a completed operation through the other route. Contract-bounded normalization applies only to declared presentation aliases; identities remain exact. No manual fallback is permitted.
 
 - `list_ready_for_agent(filter)`
 - `read_issue(issue_id)`

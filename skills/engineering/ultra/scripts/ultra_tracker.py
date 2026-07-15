@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""Thin bundled facade for Ultra Ticket, publication, and Solve Record helpers."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+from typing import Any
+
+
+SCHEMA = "ultra-tracker/v1"
+CONTRACT = Path("docs/agents/ultra-tracker.md")
+SUCCESS = 0
+REFUSED = 3
+INVALID = 4
+UNAVAILABLE = 5
+
+
+class FacadeError(RuntimeError):
+    """A facade input or configured route is unavailable or invalid."""
+
+
+def envelope(operation: str, *, data: Any = None, error: dict[str, str] | None = None) -> None:
+    result: dict[str, Any] = {"schema": SCHEMA, "operation": operation, "ok": error is None}
+    if error is None:
+        result["data"] = data
+    else:
+        result["error"] = error
+    print(json.dumps(result, indent=2, sort_keys=True))
+
+
+def error(operation: str, code: str, detail: str) -> None:
+    envelope(operation, error={"code": code, "detail": detail})
+
+
+def exactly_one_contract_value(text: str, field: str) -> str:
+    values = re.findall(rf"(?m)^{re.escape(field)}:[ \t]*(\S(?:.*\S)?)[ \t]*$", text)
+    if len(values) != 1:
+        raise FacadeError(f"Tracker contract must define exactly one {field}")
+    return values[0]
+
+
+def publication_config(repo: Path) -> tuple[str, str]:
+    """Read the configured publication coordinates without interpreting Ticket state."""
+    path = repo / CONTRACT
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise FacadeError(f"missing Tracker contract: {path}") from exc
+    if exactly_one_contract_value(text, "Publication strategy") != "local-review-pending":
+        raise FacadeError("configured publication strategy is not supported by bundled Local Markdown helper")
+    representation = exactly_one_contract_value(text, "Local Ticket representation")
+    location = exactly_one_contract_value(text, "Local Ticket path")
+    if representation not in {"file-per-ticket", "tickets-file"}:
+        raise FacadeError(f"unsupported configured Local Ticket representation: {representation}")
+    return representation, location
+
+
+def helper_path(name: str) -> Path:
+    ultra = Path(__file__).resolve().parent
+    if name == "publication":
+        return ultra / "local_ticket_publication.py"
+    if name == "ticket":
+        return ultra / "local_ticket_frontier.py"
+    if name == "solve-record":
+        return ultra.parent.parent / "solve-records" / "scripts" / "solve-records.py"
+    raise AssertionError(f"unknown helper: {name}")
+
+
+def refusal(detail: str) -> bool:
+    normalized = detail.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "not claimable",
+            "stale dependency state",
+            "claim-conflict",
+            "requires --explicit",
+            "cleanup requires",
+            "merge gate",
+            "not eligible",
+        )
+    )
+
+
+def delegate(operation: str, helper: str, args: list[str]) -> int:
+    path = helper_path(helper)
+    if not path.is_file():
+        error(operation, "helper-unavailable", f"bundled delegated helper is unavailable: {path}")
+        return UNAVAILABLE
+    result = subprocess.run(
+        [sys.executable, str(path), *args],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode:
+        detail = (result.stderr or result.stdout).strip() or f"delegated helper exited {result.returncode}"
+        if refusal(detail):
+            error(operation, "not-allowed", detail)
+            return REFUSED
+        error(operation, "invalid-input-or-state", detail)
+        return INVALID
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        error(operation, "invalid-delegated-result", "delegated helper did not emit a JSON result")
+        return INVALID
+    envelope(operation, data=payload)
+    return SUCCESS
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Bundled Ultra Tracker facade for Ticket publication, Claim, Attempt, and Solve Record helpers."
+    )
+    groups = parser.add_subparsers(dest="group", required=True, title="command groups")
+
+    publication = groups.add_parser("publication", help="Local Markdown Ticket publication lifecycle")
+    publication_actions = publication.add_subparsers(dest="action", required=True, title="publication operations")
+    for action in ("register", "inspect", "promote", "cleanup"):
+        child = publication_actions.add_parser(action, help=f"delegate Ticket publication {action}")
+        child.add_argument("--repo", default=".", help="repository containing the configured Tracker contract")
+        child.add_argument("--run-id", required=True, help="publication run identity")
+        child.add_argument(
+            "--location",
+            help="concrete configured Ticket surface when the contract path contains <feature>",
+        )
+        if action == "register":
+            child.add_argument("--allow-membership-change", action="store_true")
+        if action == "cleanup":
+            child.add_argument("--explicit", action="store_true")
+
+    ticket = groups.add_parser("ticket", help="Ticket frontier discovery and conflict-detecting Claim")
+    ticket_actions = ticket.add_subparsers(dest="action", required=True, title="Ticket operations")
+    frontier = ticket_actions.add_parser("frontier", help="discover claimable Tickets")
+    frontier.add_argument("--repo", default=".")
+    frontier.add_argument("--ticket-id", action="append", default=[], help="exact Ticket identity; repeatable")
+    claim = ticket_actions.add_parser("claim", help="atomically Claim one Ticket from a frontier snapshot")
+    claim.add_argument("--repo", default=".")
+    claim.add_argument("--ticket-id", required=True, help="exact Ticket identity")
+    claim.add_argument("--expected-snapshot", required=True, help="frontier snapshot returned by discovery")
+    claim.add_argument("--branch", required=True, help="configured Ticket coordination branch assignment")
+    claim.add_argument("--worktree", required=True, help="configured Ticket coordination worktree assignment")
+
+    records = groups.add_parser("solve-record", help="read-only Attempt and Solve Record inspection and gates")
+    record_actions = records.add_subparsers(dest="action", required=True, title="Solve Record operations")
+    for action in ("dashboard", "list", "select", "merge-gate", "landing-plan", "cleanup-plan"):
+        child = record_actions.add_parser(action, help=f"delegate Solve Record {action}")
+        child.add_argument("--repo", default=".")
+        if action == "select":
+            child.add_argument("--query", required=True)
+        if action in {"merge-gate", "landing-plan", "cleanup-plan"}:
+            child.add_argument("--record", required=True)
+        if action == "landing-plan":
+            child.add_argument("--landing-sha")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    operation = f"{args.group}.{args.action}"
+    repo = Path(args.repo).resolve()
+    try:
+        if args.group == "publication":
+            representation, configured_location = publication_config(repo)
+            if "<feature>" in configured_location and not args.location:
+                raise FacadeError(
+                    "publication requires --location for the contract's concrete <feature> Ticket surface"
+                )
+            location = args.location or configured_location
+            delegated = [args.action, "--repo", str(repo), "--representation", representation, "--location", location, "--run-id", args.run_id]
+            if getattr(args, "allow_membership_change", False):
+                delegated.append("--allow-membership-change")
+            if getattr(args, "explicit", False):
+                delegated.append("--explicit")
+            return delegate(operation, "publication", delegated)
+        if args.group == "ticket":
+            delegated = [args.action, "--repo", str(repo)]
+            if args.action == "frontier":
+                for ticket_id in args.ticket_id:
+                    delegated.extend(["--ticket-id", ticket_id])
+            else:
+                delegated.extend(["--ticket-id", args.ticket_id, "--expected-snapshot", args.expected_snapshot, "--branch", args.branch, "--worktree", args.worktree])
+            return delegate(operation, "ticket", delegated)
+        delegated = [args.action, "--repo", str(repo), "--json"]
+        if args.action == "select":
+            delegated.extend(["--query", args.query])
+        if args.action in {"merge-gate", "landing-plan", "cleanup-plan"}:
+            delegated.extend(["--record", args.record])
+        if args.action == "landing-plan" and args.landing_sha:
+            delegated.extend(["--landing-sha", args.landing_sha])
+        return delegate(operation, "solve-record", delegated)
+    except FacadeError as exc:
+        error(operation, "invalid-input-or-state", str(exc))
+        return INVALID
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
