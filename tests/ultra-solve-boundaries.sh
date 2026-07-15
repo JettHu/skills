@@ -168,7 +168,7 @@ for predicate in (
     assert predicate in solve, f"Pre-Implementation Checkpoint contract missing: {predicate}"
 
 for predicate in (
-    "For a contract declaring `Frontier adapter: bundled-local-markdown-v1`",
+    "For `Frontier adapter: bundled-local-markdown-v1`",
     "Explicit Ticket IDs bound the selection universe",
     "#### `--all` Frontier Loop",
     "Treat one discovery result as one frontier generation",

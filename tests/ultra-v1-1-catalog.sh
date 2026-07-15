@@ -98,9 +98,11 @@ assert re.search(r"^\| to-spec \| yes \| cond \| cond \|", profiles, re.MULTILIN
 assert "The Spec is large, ambiguous, cross-system, or high-risk" in profiles
 assert re.search(r"^\| to-tickets \| yes \| cond \| yes \|", profiles, re.MULTILINE)
 assert "For `to-tickets`, first read and follow [Ticket Review Publication]" in core
-assert "The main Agent fixes every finding derivable from approved context and current code" in core
-assert "only the fully verified set becomes `ready-for-agent`" in core
+assert "The main Agent fixes every derivable finding in those same artifacts" in core
+assert "only verified promotion yields `ready-for-agent`" in core
 assert "review-pending" in publication and "publication-run identity" in publication
+assert "Manual fallback is prohibited for every operation" in publication
+assert "Publication has no public" in publication
 
 print("ultra v1.1 catalog and wrapper smoke fixture passed")
 PY

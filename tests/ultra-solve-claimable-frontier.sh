@@ -26,7 +26,11 @@ Local Ticket representation: $representation
 Local Ticket path: $location
 Cancellation policy: retain-until-explicit-cleanup
 Frontier adapter: bundled-local-markdown-v1
+Ticket ID field aliases: Ticket ID, ID
+Publication Run field aliases: Publication Run
+Source field aliases: Source Spec, Parent
 Ticket state fields: Status, State
+Ticket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info
 Ready state: ready-for-agent
 Completed state: completed
 Human-blocked states: ready-for-human, needs-info
@@ -284,6 +288,57 @@ PY
 sections_snapshot="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["snapshot"])' "$TMPDIR_ROOT/sections.json")"
 claim "$SECTIONS" S-1 "$sections_snapshot" >/dev/null
 grep -Fq 'Flags: solve-in-progress' "$SECTIONS/.scratch/product/tickets.md"
+
+# Contract-bounded normalization accepts only declared presentation variants.
+NORMALIZED="$TMPDIR_ROOT/normalized"
+init_repo "$NORMALIZED"
+cat >"$NORMALIZED/.scratch/feature/issues/NORM.md" <<'EOF'
+sTaTuS: READY_FOR_AGENT
+ticket_id: NORM
+blocked-by: []
+fLaGs:
+
+# Declared casing and separator variants
+EOF
+frontier "$NORMALIZED" >"$TMPDIR_ROOT/normalized.json"
+python3 - "$TMPDIR_ROOT/normalized.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["claimable"] == ["NORM"]
+PY
+normalized_snapshot="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["snapshot"])' "$TMPDIR_ROOT/normalized.json")"
+claim "$NORMALIZED" NORM "$normalized_snapshot" >/dev/null
+grep -Fq 'sTaTuS: READY_FOR_AGENT' "$NORMALIZED/.scratch/feature/issues/NORM.md"
+grep -Fq 'fLaGs: solve-in-progress' "$NORMALIZED/.scratch/feature/issues/NORM.md"
+
+for kind in duplicate-empty duplicate-equal unknown-state undeclared-singular; do
+  repo="$TMPDIR_ROOT/normalization-$kind"
+  init_repo "$repo"
+  case "$kind" in
+    duplicate-empty) metadata=$'Status:\nState: ready-for-agent\nTicket ID: DUP-EMPTY\nFlags:' ;;
+    duplicate-equal) metadata=$'Status: ready-for-agent\nState: ready_for_agent\nTicket ID: DUP-EQUAL\nFlags:' ;;
+    unknown-state) metadata=$'Status: almost-ready\nTicket ID: UNKNOWN\nFlags:' ;;
+    undeclared-singular) metadata=$'Status: ready-for-agent\nTicket ID: SINGULAR\nFlags:\nBlocker:' ;;
+  esac
+  printf '%s\n\n# Unsafe normalization\n' "$metadata" >"$repo/.scratch/feature/issues/$kind.md"
+  if frontier "$repo" >"$TMPDIR_ROOT/$kind.out" 2>&1; then
+    echo "unsafe normalization unexpectedly produced a frontier: $kind" >&2
+    exit 1
+  fi
+done
+grep -Fq 'conflicting Ticket metadata fields' "$TMPDIR_ROOT/duplicate-empty.out"
+grep -Fq 'conflicting Ticket metadata fields' "$TMPDIR_ROOT/duplicate-equal.out"
+grep -Fq 'unknown configured state' "$TMPDIR_ROOT/unknown-state.out"
+grep -Fq 'undeclared field aliases: blocker' "$TMPDIR_ROOT/undeclared-singular.out"
+
+# Identity values are never case-folded even though presentation keys are.
+frontier "$NORMALIZED" --ticket-id norm >"$TMPDIR_ROOT/exact-id.json"
+python3 - "$TMPDIR_ROOT/exact-id.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["claimable"] == []
+assert data["non_frontier"] == {"norm": ["missing-ticket"]}
+PY
 
 python3 -m py_compile "$ADAPTER"
 echo 'ultra solve claimable-frontier fixture passed'

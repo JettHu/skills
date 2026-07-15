@@ -15,7 +15,7 @@ write_contract() {
   local representation="${3:-file-per-ticket}"
   local location="${4:-.scratch/<feature>/issues/<ticket-file>.md}"
   mkdir -p "$repo/docs/agents"
-  printf 'Publication strategy: local-review-pending\nLocal Ticket representation: %s\nLocal Ticket path: %s\nCancellation policy: %s\n' "$representation" "$location" "$policy" >"$repo/docs/agents/ultra-tracker.md"
+  printf 'Publication strategy: local-review-pending\nLocal Ticket representation: %s\nLocal Ticket path: %s\nCancellation policy: %s\nTicket ID field aliases: Ticket ID, ID\nPublication Run field aliases: Publication Run\nSource field aliases: Source Spec, Parent\nTicket state fields: Status, State\nTicket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info\nReady state: ready-for-agent\nCompleted state: completed\nHuman-blocked states: ready-for-human, needs-info\nBlocker metadata fields: Blocked By, Blockers\nClaim field aliases: Flags, Labels\nSolve branch field aliases: Solve Branch, Branch\nSolve worktree field aliases: Solve Worktree, Worktree\n' "$representation" "$location" "$policy" >"$repo/docs/agents/ultra-tracker.md"
 }
 
 write_contract "$FILE_REPO" retain-until-explicit-cleanup
@@ -113,7 +113,7 @@ if adapter "$SURFACE_CLAIM_REPO" file-per-ticket .scratch/outside/issues surface
   echo "claim accepted a path outside the configured surface" >&2
   surface_failures=1
 fi
-grep -Fq 'configured Local Ticket path does not authorize requested surface' "$TMPDIR_ROOT/surface-claim.out" || surface_failures=1
+grep -Fq 'unsupported operation: claim' "$TMPDIR_ROOT/surface-claim.out" || surface_failures=1
 if grep -Fq 'solve-in-progress' "$SURFACE_CLAIM_REPO/.scratch/outside/issues/SURFACE-CLAIM.md"; then
   echo "surface-mismatched claim mutated Claim metadata" >&2
   surface_failures=1
@@ -177,7 +177,19 @@ def write_contract(repo: Path) -> None:
         "Publication strategy: local-review-pending\n"
         "Local Ticket representation: file-per-ticket\n"
         "Local Ticket path: .scratch/<feature>/issues/<ticket-file>.md\n"
-        "Cancellation policy: delete-on-cancel\n",
+        "Cancellation policy: delete-on-cancel\n"
+        "Ticket ID field aliases: Ticket ID, ID\n"
+        "Publication Run field aliases: Publication Run\n"
+        "Source field aliases: Source Spec, Parent\n"
+        "Ticket state fields: Status, State\n"
+        "Ticket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info\n"
+        "Ready state: ready-for-agent\n"
+        "Completed state: completed\n"
+        "Human-blocked states: ready-for-human, needs-info\n"
+        "Blocker metadata fields: Blocked By, Blockers\n"
+        "Claim field aliases: Flags, Labels\n"
+        "Solve branch field aliases: Solve Branch, Branch\n"
+        "Solve worktree field aliases: Solve Worktree, Worktree\n",
         encoding="utf-8",
     )
 
@@ -339,7 +351,6 @@ python3 - "$TMPDIR_ROOT/interrupted.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1], encoding="utf-8"))
 assert data["phase"] == "promoting"
-assert data["claimable"] == []
 assert set(data["statuses"].values()) == {"review-pending", "ready-for-agent"}
 PY
 if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim-check --ticket-id T-1 >/dev/null 2>&1; then
@@ -348,55 +359,18 @@ if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run c
 fi
 adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run promote >/dev/null
 adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run promote >/dev/null
-adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim-check --ticket-id T-1 >/dev/null
-if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim-check --ticket-id T-2 >/dev/null 2>&1; then
-  echo "blocked Ticket became claimable" >&2
-  exit 1
-fi
-adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim --ticket-id T-1 >/dev/null
-if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim --ticket-id T-1 >/dev/null 2>&1; then
-  echo "conflicting second Claim unexpectedly succeeded" >&2
-  exit 1
-fi
-grep -Fq 'Flags: solve-in-progress' "$FILE_REPO/.scratch/feature/issues/T-1.md"
-grep -Fq 'Status: ready-for-agent' "$FILE_REPO/.scratch/feature/issues/T-1.md"
-python3 - "$FILE_REPO/.scratch/feature/issues/T-1.md" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-text = path.read_text(encoding="utf-8")
-text = text.replace("Status: ready-for-agent", "Status: completed", 1)
-text = text.replace("Flags: solve-in-progress", "Flags:", 1)
-path.write_text(text, encoding="utf-8")
-PY
-adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim --ticket-id T-3 >/dev/null
-python3 - "$FILE_REPO/.scratch/feature/issues/T-3.md" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-text = path.read_text(encoding="utf-8")
-text = text.replace("Status: ready-for-agent", "Status: completed", 1)
-text = text.replace("Flags: solve-in-progress", "Flags:", 1)
-path.write_text(text, encoding="utf-8")
-PY
-adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim-check --ticket-id T-2 >/dev/null
-python3 - "$FILE_REPO/.scratch/feature/issues/T-2.md" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-path.write_text(
-    path.read_text(encoding="utf-8").replace("Status: ready-for-agent", "Status: needs-info", 1),
-    encoding="utf-8",
-)
-PY
-adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run inspect >/dev/null
-if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run claim-check --ticket-id T-2 >/dev/null 2>&1; then
-  echo "needs-info Ticket unexpectedly became claimable" >&2
-  exit 1
-fi
+for removed in claim-check claim; do
+  before="$(shasum -a 256 "$FILE_REPO/.scratch/feature/issues/T-1.md")"
+  if adapter "$FILE_REPO" file-per-ticket .scratch/feature/issues review-fix-run "$removed" --ticket-id T-1 >"$TMPDIR_ROOT/removed-$removed.out" 2>&1; then
+    echo "removed publication operation unexpectedly succeeded: $removed" >&2
+    exit 1
+  fi
+  grep -Fq "unsupported operation: $removed" "$TMPDIR_ROOT/removed-$removed.out"
+  test "$before" = "$(shasum -a 256 "$FILE_REPO/.scratch/feature/issues/T-1.md")"
+done
 
 # Frontmatter State/Labels aliases preserve their configured field spelling for
-# promotion and conflict-detecting Claim.
+# publication; Claim belongs only to frontier.
 ALIAS_REPO="$TMPDIR_ROOT/alias-file-per"
 mkdir -p "$ALIAS_REPO/.scratch/feature/issues"
 write_contract "$ALIAS_REPO" retain-until-explicit-cleanup
@@ -404,11 +378,11 @@ python3 - "$ALIAS_REPO/.scratch/feature/issues/A-1.md" <<'PY'
 from pathlib import Path
 import sys
 Path(sys.argv[1]).write_text("""---
-State: review-pending
-Ticket ID: A-1
-Publication Run: alias-run
-Source Spec: docs/spec.md
-Blocked By: []
+sTaTe: REVIEW_PENDING
+ticket_id: A-1
+publication_run: alias-run
+source-spec: docs/spec.md
+blocked-by: []
 Labels: []
 ---
 
@@ -417,9 +391,8 @@ Labels: []
 PY
 adapter "$ALIAS_REPO" file-per-ticket .scratch/feature/issues alias-run register >/dev/null
 adapter "$ALIAS_REPO" file-per-ticket .scratch/feature/issues alias-run promote >/dev/null
-adapter "$ALIAS_REPO" file-per-ticket .scratch/feature/issues alias-run claim --ticket-id A-1 >/dev/null
-grep -Fq 'State: ready-for-agent' "$ALIAS_REPO/.scratch/feature/issues/A-1.md"
-grep -Fq 'Labels: solve-in-progress' "$ALIAS_REPO/.scratch/feature/issues/A-1.md"
+grep -Fq 'sTaTe: ready-for-agent' "$ALIAS_REPO/.scratch/feature/issues/A-1.md"
+grep -Fq 'Labels: []' "$ALIAS_REPO/.scratch/feature/issues/A-1.md"
 
 # Cancellation retains formal artifacts by default. Explicit cleanup is scoped
 # to the named provisional run and cannot delete a promoted run.
@@ -623,9 +596,11 @@ grep -Fq 'Unrelated introduction stays byte-for-byte.' "$SECTION_REPO/.scratch/f
 grep -Fq 'Unrelated footer stays byte-for-byte.' "$SECTION_REPO/.scratch/feature/tickets.md"
 test "$(grep -Fc 'Status: ready-for-agent' "$SECTION_REPO/.scratch/feature/tickets.md")" -eq 2
 grep -Fq 'State: ready-for-agent' "$SECTION_REPO/.scratch/feature/tickets.md"
-adapter "$SECTION_REPO" tickets-file .scratch/feature/tickets.md section-run claim-check --ticket-id S-1 >/dev/null
-adapter "$SECTION_REPO" tickets-file .scratch/feature/tickets.md second-section-run claim --ticket-id S-3 >/dev/null
-grep -Fq 'Labels: solve-in-progress' "$SECTION_REPO/.scratch/feature/tickets.md"
+if adapter "$SECTION_REPO" tickets-file .scratch/feature/tickets.md section-run claim-check --ticket-id S-1 >"$TMPDIR_ROOT/section-claim-check.out" 2>&1; then
+  echo 'tickets-file publication exposed claim-check' >&2
+  exit 1
+fi
+grep -Fq 'unsupported operation: claim-check' "$TMPDIR_ROOT/section-claim-check.out"
 
 # Unsafe tickets-file adapters fail closed without changing any byte.
 for kind in duplicate missing-status nested unresolved heading-only mixed-identity; do
@@ -686,22 +661,22 @@ solve = (repo / "skills/engineering/ultra/solve.md").read_text(encoding="utf-8")
 setup = (repo / "skills/engineering/setup-ultra-skills/SKILL.md").read_text(encoding="utf-8")
 
 for text in (
-    "allocate or resume its stable publication-run identity",
-    "rediscover the complete formal set by publication-run identity",
+    "Route Local Markdown publication only through its declared operations",
+    "route complete-set registration through the publication adapter",
     "independent acceptance, context-window sizing, validation, source pointers, and true blocker edges",
-    "only the fully verified set becomes `ready-for-agent`",
+    "only verified promotion yields `ready-for-agent`",
 ):
     assert text in core, text
 for text in (
     "The approved Spec or approved conversation already authorizes ordinary Ticket",
     "conversation-only review is not a successful tracker mutation",
-    "journal `promoting`",
-    "A provisional Ticket carrying",
+    "Manual fallback is prohibited for every operation",
+    "Publication has no public",
 ):
     assert text in reference, text
-assert "never claimable through explicit selection or `--all`" in solve
-assert "title- or heading-based section inference is never sufficient" in solve
-assert "safely delimited `tickets-file`" in setup
+assert "It is never claimable" in solve
+assert "never rebuild the graph or Claim with Markdown edits" in solve
+assert "Manual transaction fallback is prohibited" in setup
 assert "## GitHub and GitLab remote adapter contract" in reference
 assert "## Local Markdown adapter contract" in reference
 PY

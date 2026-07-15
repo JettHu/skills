@@ -38,7 +38,11 @@ Local Ticket representation: file-per-ticket
 Local Ticket path: .scratch/<feature>/issues/<ticket-file>.md
 Cancellation policy: retain-until-explicit-cleanup
 Frontier adapter: bundled-local-markdown-v1
+Ticket ID field aliases: Ticket ID, ID
+Publication Run field aliases: Publication Run
+Source field aliases: Source Spec, Parent
 Ticket state fields: Status, State
+Ticket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info
 Ready state: ready-for-agent
 Completed state: completed
 Human-blocked states: ready-for-human, needs-info

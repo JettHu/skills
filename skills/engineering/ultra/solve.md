@@ -19,11 +19,11 @@ Use tracker verbs, not hard-coded frontmatter fields, so local markdown trackers
 - link branches, worktrees, commits, PRs, solve records, or validation runs
 - close completed Tickets
 
-Current mutation support is configured Local Markdown trackers, such as `.scratch/<feature>/issues/*.md`, `.scratch/<feature>/issue.md`, or safely delimited Ticket sections in a configured `tickets.md`. Read `docs/agents/ultra-tracker.md` before discovery when present. A tickets-file adapter requires exact machine-readable section boundaries, stable Ticket IDs, safe state mutation, blocker lookup, and conflict-detecting Claim semantics; otherwise fail closed without mutation. If the tracker is remote and no adapter is available, you may read Ticket context, but stop before Claim/update/close operations and report that a remote tracker adapter is needed. For configured GitHub or GitLab review publication, provisional, partially promoted, superseded, or run-membership-unverified Tickets are never eligible for discovery or Claim. Treat missing exact ready-state verification or a conflict-detecting Claim operation as unavailable, not as permission to infer readiness from a missing label.
+Read `docs/agents/ultra-tracker.md` before discovery. Use only its configured adapter and fail closed when the mutation contract is missing, malformed, or unsupported. Provisional, staged, partially promoted, superseded, or membership-unverified Tickets are outside solve discovery. A remote tracker without a mutation adapter is read-only.
 
-For a contract declaring `Frontier adapter: bundled-local-markdown-v1`, use the bundled `scripts/local_ticket_frontier.py` for both explicit and `--all` discovery and Claim. Its structured snapshot is the configured tracker contract: it resolves the declared state, completed state, blocker fields/body heading, Claim field/value, and assignment fields; adds the promoted-journal gate only for run-tagged Tickets; and reports claimable versus non-frontier work. Do not reproduce its graph by grepping Markdown. A missing, prose-only, unknown, or malformed adapter contract is unsupported and stops mutation.
+For `Frontier adapter: bundled-local-markdown-v1`, use `scripts/local_ticket_frontier.py` for both explicit and `--all` discovery and Claim. Frontier exclusively owns whole-tracker discovery, blocker and publication gates, snapshots, conflict detection, and execution branch/worktree assignment. Treat its structured result as authoritative; never rebuild the graph or Claim with Markdown edits.
 
-Tracker updates should record state-relevant facts. Use the tracker state, labels, assignment, or project status for Claim/progress when available. Use PRs, commits, branches, and CI/check runs for implementation and validation evidence, linking them from the Ticket when useful. Use provider-native tracker comments or local Ticket notes for requirement clarification, concise blockers, human decisions, or completion notes only when that is the tracker's normal review surface. Keep batch logs and large command output in the final solve summary or validation artifacts.
+Tracker updates record state-relevant facts. During execution, concrete Attempt branch/worktree identities enter only the configured Claim or tracker metadata. At handoff, resource identities, ownership, cleanup, commits, and PR/MR details remain authoritative in the Solve Record or native PR/MR. A concise Ticket note may add a lifecycle backlink, but must not duplicate those resource facts. Keep batch logs and large command output in validation artifacts or the final summary.
 
 ## Invocation
 
@@ -165,17 +165,17 @@ A blocker reason explains a state transition; it is not a new state.
 
 Discovery must skip Tickets carrying an active `solve-in-progress` Claim and report them as already claimed.
 
-`review-pending` is a Local Markdown Ultra adapter state, not a global triage role. It is never claimable through explicit selection or `--all`. A run-tagged Ticket is eligible only when its exact state is `ready-for-agent`, the configured publication journal is `promoted`, the complete registered set re-verifies unchanged and ready, blocker targets are resolved, and Claim metadata is free. A provisional Ticket carrying `solve-in-progress` is malformed provisional state, not an active Claim; report it and do not execute it.
+`review-pending` is a Local Markdown adapter state, not a global triage role. It is never claimable. Frontier reports all publication, blocker, state, and Claim diagnostics; do not infer or manually repair claimability.
 
 ## Workflow
 
 ### 1. Discover
 
-Read the configured Ticket universe and blocker graph through the tracker adapter. A Ticket is claimable only when its exact configured state is the configured ready state, every declared blocker currently has the configured completed state, its publication gate (when any) is complete, and its Claim metadata is free. Missing blocker metadata means no blockers unless the configured contract explicitly requires the metadata; never invent edges from numbering, prose, or likely implementation order.
+Read the configured Ticket universe through frontier. Select only IDs in its `claimable` result and report its `non_frontier` diagnostics. Never invent blocker edges from numbering, prose, or likely implementation order.
 
 Explicit Ticket IDs bound the selection universe: intersect exactly those Ticket IDs with the current frontier and report every requested non-frontier Ticket. Never add an unrequested blocker or dependent. `--all` bounds the universe to the configured adapter surface and begins with only its current frontier.
 
-For configured Local Markdown publication runs, route both explicit and batch discovery through the adapter's complete-set Claim check. Do not infer readiness from a heading, filename, section title, or `Status: ready-for-agent` alone when `Publication Run` metadata is present.
+For configured Local Markdown, route both explicit and batch discovery through frontier. Publication exposes no Claim or Claim-check operation.
 
 For configured GitHub or GitLab publication runs, route explicit and batch discovery through the configured remote adapter. It must verify the exact publication-set identity, complete membership, non-claimable/provisional marker removal, configured ready state, verified parent/blocking relationships, and free Claim metadata. Durable local staging is not a remote Ticket surface and must never enter tracker scans. If that adapter cannot establish every gate, report the selected Ticket as non-frontier and do not mutate it.
 
@@ -202,7 +202,7 @@ For every selected Ticket:
 - claim it in one conflict-detecting mutation by adding the configured Claim value and recording the intended branch/worktree through the declared assignment fields
 - create or adopt the assigned branch/worktree after the claim succeeds
 
-Do this before code changes. For Local Markdown, preserve existing structured conventions such as `state`/`status`, `flags`/`labels`, `branch`/`worktree`/`solve_branch`/`solve_worktree`, stable Ticket IDs, and publication-run identities. A configured tickets-file must use its exact safe section markers; title- or heading-based section inference is never sufficient for mutation. Batch or parallel solve requires a machine-readable conflict-detecting Claim surface. Run-tagged Tickets additionally require the complete-set promoted journal gate before either single or batch Claim. If no reliable Claim surface exists, do not run unsafe mutation even for an explicit Ticket; report the adapter limitation.
+Do this before code changes. Pass the exact Ticket ID, discovery snapshot, and intended execution assignment to frontier. Stop on any structured failure; do not fall back to direct metadata edits, even for one explicit Ticket.
 
 If branch/worktree creation or adoption fails after claiming, clean any partial resources and release the Claim when the failure leaves no useful finding or recovery value. When partial resources, evidence, or a durable blocker make the failed Attempt worth handing off, route it through Outcome Finalization as `blocked`; keep `solve-in-progress` only when the same assignment remains actively resumable.
 
@@ -548,7 +548,7 @@ This is a feedback loop, not a schema gate: `to-tickets -> solve notices missing
 
 Current mutation support is Local Markdown trackers. The following compatibility API identifiers retain their established spellings while operating on Tickets; the conceptual contract for future remote tracker support is:
 
-For Local Markdown, detect and preserve the repo's configured Ticket conventions. Existing structured fields may include frontmatter keys such as `state`/`status`, `flags`/`labels`, comments/notes, branch/worktree links, stable Ticket IDs, and publication-run identities. Use existing body-marker conventions only when they are already part of the tracker. A configured tickets-file must use exact safe section markers; title- or heading-based inference is never sufficient for mutation. Batch claims require a machine-readable conflict-detecting Claim surface. Run-tagged Tickets additionally require the complete-set promoted journal gate before either single or batch Claim.
+For Local Markdown, route discovery and Claim through the configured frontier adapter and all publication operations through the publication adapter. Contract-bounded normalization applies only to declared presentation aliases; identities remain exact. No manual fallback is permitted.
 
 - `list_ready_for_agent(filter)`
 - `read_issue(issue_id)`

@@ -71,10 +71,45 @@ class LocalContract:
     representation: str
     location_pattern: str
     cancellation_policy: str
+    identity_fields: tuple[str, ...]
+    run_fields: tuple[str, ...]
+    source_fields: tuple[str, ...]
+    state_fields: tuple[str, ...]
+    blocker_fields: tuple[str, ...]
+    claim_fields: tuple[str, ...]
+    branch_fields: tuple[str, ...]
+    worktree_fields: tuple[str, ...]
+    states: dict[str, str]
 
 
 def normalize_key(key: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", key.strip().lower()).strip("_")
+
+
+RESERVED_FIELD_ALIASES = {
+    normalize_key(field)
+    for field in (
+        "Ticket ID", "ID", "Publication Run", "Publication Run ID",
+        "Source Spec", "Parent", "Status", "State", "Ticket Status",
+        "Blocked By", "Blocker", "Blockers", "Flags", "Labels",
+        "Solve Branch", "Branch", "Solve Worktree", "Worktree",
+    )
+}
+
+
+def csv(value: str) -> tuple[str, ...]:
+    return tuple(part.strip() for part in value.split(",") if part.strip())
+
+
+def state_registry(value: str) -> dict[str, str]:
+    """Parse an explicit canonical-state registry with separator/case variants."""
+    result: dict[str, str] = {}
+    for canonical in csv(value):
+        key = normalize_key(canonical)
+        if not key or key in result:
+            raise AdapterError("State values must be unique and non-empty")
+        result[key] = canonical
+    return result
 
 
 def parse_scalar(value: str) -> str | list[str]:
@@ -120,20 +155,34 @@ def parse_metadata(text: str) -> dict[str, str | list[str]]:
     return metadata
 
 
+def metadata_spelling(text: str, normalized: str) -> str:
+    start, end, _kind = metadata_region(text)
+    for line in text[start:end].splitlines():
+        if not line.strip() or line.lstrip().startswith("-") or ":" not in line:
+            continue
+        key, _value = line.split(":", 1)
+        if normalize_key(key) == normalized:
+            return key.strip()
+    return ""
+
+
 def one(metadata: dict[str, str | list[str]], *keys: str) -> str:
-    values = [metadata.get(key) for key in keys if metadata.get(key) not in (None, "", [])]
+    values = [(key, metadata[key]) for key in keys if key in metadata]
     if len(values) > 1:
         raise AdapterError(f"conflicting Ticket metadata fields: {', '.join(keys)}")
     if not values:
         return ""
-    value = values[0]
+    _key, value = values[0]
     if isinstance(value, list):
         raise AdapterError(f"Ticket metadata field {keys[0]} must be scalar")
     return str(value).strip()
 
 
 def many(metadata: dict[str, str | list[str]], *keys: str) -> list[str]:
-    value = next((metadata.get(key) for key in keys if metadata.get(key) not in (None, "", [])), [])
+    values = [(key, metadata[key]) for key in keys if key in metadata]
+    if len(values) > 1:
+        raise AdapterError(f"conflicting Ticket metadata fields: {', '.join(keys)}")
+    value = values[0][1] if values else []
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     return [item for item in re.split(r"[,\s]+", str(value).strip()) if item]
@@ -142,12 +191,23 @@ def many(metadata: dict[str, str | list[str]], *keys: str) -> list[str]:
 def replace_metadata_field(text: str, field: str, value: str) -> str:
     start, end, _kind = metadata_region(text)
     region = text[start:end]
-    pattern = re.compile(rf"(?mi)^({re.escape(field)}[ \t]*:)[ \t]*.*$")
-    matches = list(pattern.finditer(region))
+    pattern = re.compile(r"(?m)^([^\n:]+)([ \t]*:)[ \t]*.*$")
+    matches = [
+        match
+        for match in pattern.finditer(region)
+        if normalize_key(match.group(1)) == normalize_key(field)
+    ]
     if len(matches) != 1:
         raise AdapterError(f"Ticket must define exactly one {field.title()} field")
     match = matches[0]
-    updated = region[: match.start()] + match.group(1) + " " + value + region[match.end() :]
+    updated = (
+        region[: match.start()]
+        + match.group(1)
+        + match.group(2)
+        + " "
+        + value
+        + region[match.end() :]
+    )
     return text[:start] + updated + text[end:]
 
 
@@ -177,14 +237,42 @@ def normalize_operational_fields(text: str) -> str:
     return text[:start] + region + text[end:]
 
 
-def ticket_from_inner(path: Path, text: str, inner_start: int, inner_end: int, marker_id: str = "") -> Ticket | None:
+def ticket_from_inner(
+    path: Path,
+    text: str,
+    inner_start: int,
+    inner_end: int,
+    contract: LocalContract,
+    marker_id: str = "",
+) -> Ticket | None:
     inner = text[inner_start:inner_end]
     metadata = parse_metadata(inner)
-    ticket_id = one(metadata, "ticket_id", "id")
-    run_id = one(metadata, "publication_run")
-    status = one(metadata, "status", "state")
-    state_field = "status" if "status" in metadata else "state" if "state" in metadata else ""
-    flags_field = "flags" if "flags" in metadata else "labels" if "labels" in metadata else ""
+    identity_keys = tuple(normalize_key(field) for field in contract.identity_fields)
+    run_keys = tuple(normalize_key(field) for field in contract.run_fields)
+    state_keys = tuple(normalize_key(field) for field in contract.state_fields)
+    source_keys = tuple(normalize_key(field) for field in contract.source_fields)
+    blocker_keys = tuple(normalize_key(field) for field in contract.blocker_fields)
+    claim_keys = tuple(normalize_key(field) for field in contract.claim_fields)
+    branch_keys = tuple(normalize_key(field) for field in contract.branch_fields)
+    worktree_keys = tuple(normalize_key(field) for field in contract.worktree_fields)
+    configured_keys = {
+        *identity_keys, *run_keys, *state_keys, *source_keys, *blocker_keys,
+        *claim_keys,
+        *branch_keys, *worktree_keys,
+    }
+    undeclared = sorted((metadata.keys() & RESERVED_FIELD_ALIASES) - configured_keys)
+    if undeclared:
+        raise AdapterError(
+            "Ticket metadata uses undeclared field aliases: " + ", ".join(undeclared)
+        )
+    ticket_id = one(metadata, *identity_keys)
+    run_id = one(metadata, *run_keys)
+    raw_status = one(metadata, *state_keys)
+    status = contract.states.get(normalize_key(raw_status), "")
+    state_key = next((key for key in state_keys if key in metadata), "")
+    flags_key = next((key for key in claim_keys if key in metadata), "")
+    state_field = metadata_spelling(inner, state_key) if state_key else ""
+    flags_field = metadata_spelling(inner, flags_key) if flags_key else ""
     touched = any((ticket_id, run_id, status == "review-pending"))
     if not touched and not marker_id:
         return None
@@ -194,24 +282,20 @@ def ticket_from_inner(path: Path, text: str, inner_start: int, inner_end: int, m
         raise AdapterError(f"section marker ID does not match Ticket ID in {path}")
     if not run_id or not SAFE_ID.fullmatch(run_id):
         raise AdapterError(f"unsafe or missing Publication Run for {ticket_id}")
-    if status not in {
-        "review-pending",
-        "ready-for-agent",
-        "completed",
-        "ready-for-human",
-        "needs-info",
-    }:
-        raise AdapterError(f"unsupported status for {ticket_id}: {status or '<missing>'}")
-    source = one(metadata, "source_spec", "parent")
+    if not status:
+        raise AdapterError(f"unsupported status for {ticket_id}: {raw_status or '<missing>'}")
+    source = one(metadata, *source_keys)
     if not source:
         raise AdapterError(f"missing Source Spec or Parent for {ticket_id}")
+    one(metadata, *branch_keys)
+    one(metadata, *worktree_keys)
     return Ticket(
         ticket_id=ticket_id,
         run_id=run_id,
         status=status,
         source=source,
-        blockers=many(metadata, "blocked_by", "blockers"),
-        flags=many(metadata, "flags", "labels"),
+        blockers=many(metadata, *blocker_keys),
+        flags=many(metadata, *claim_keys),
         state_field=state_field,
         flags_field=flags_field,
         path=path,
@@ -259,7 +343,33 @@ def configured_local_contract(repo: Path) -> LocalContract:
     policy = contract_value(text, "Cancellation policy")
     if policy not in CANCELLATION_POLICIES:
         raise AdapterError(f"unsupported cancellation policy: {policy}")
-    return LocalContract(representation, location_pattern, policy)
+    fields = {
+        "identity_fields": csv(contract_value(text, "Ticket ID field aliases")),
+        "run_fields": csv(contract_value(text, "Publication Run field aliases")),
+        "source_fields": csv(contract_value(text, "Source field aliases")),
+        "state_fields": csv(contract_value(text, "Ticket state fields")),
+        "blocker_fields": csv(contract_value(text, "Blocker metadata fields")),
+        "claim_fields": csv(contract_value(text, "Claim field aliases")),
+        "branch_fields": csv(contract_value(text, "Solve branch field aliases")),
+        "worktree_fields": csv(contract_value(text, "Solve worktree field aliases")),
+    }
+    if not all(fields.values()):
+        raise AdapterError("Local tracker contract contains an empty field alias list")
+    normalized = [normalize_key(alias) for aliases in fields.values() for alias in aliases]
+    if len(normalized) != len(set(normalized)):
+        raise AdapterError("Local tracker contract has ambiguous field aliases")
+    states = state_registry(contract_value(text, "Ticket state values"))
+    required_states = {
+        "review-pending",
+        contract_value(text, "Ready state"),
+        contract_value(text, "Completed state"),
+        *csv(contract_value(text, "Human-blocked states")),
+    }
+    if not all(normalize_key(state) in states for state in required_states):
+        raise AdapterError("Local tracker contract state registry is incomplete")
+    return LocalContract(
+        representation, location_pattern, policy, states=states, **fields
+    )
 
 
 def configured_location_regex(contract: LocalContract) -> re.Pattern[str]:
@@ -288,19 +398,19 @@ def validate_configured_surface(
     return location, contract
 
 
-def load_file_per(location: Path) -> list[Ticket]:
+def load_file_per(location: Path, contract: LocalContract) -> list[Ticket]:
     if not location.is_dir():
         raise AdapterError(f"file-per-ticket location is not a directory: {location}")
     tickets = []
     for path in sorted(location.glob("*.md")):
         text = path.read_text(encoding="utf-8")
-        ticket = ticket_from_inner(path, text, 0, len(text))
+        ticket = ticket_from_inner(path, text, 0, len(text), contract)
         if ticket:
             tickets.append(ticket)
     return tickets
 
 
-def load_tickets_file(location: Path) -> list[Ticket]:
+def load_tickets_file(location: Path, contract: LocalContract) -> list[Ticket]:
     if not location.is_file():
         raise AdapterError(f"tickets-file does not exist: {location}")
     text = location.read_text(encoding="utf-8")
@@ -317,7 +427,9 @@ def load_tickets_file(location: Path) -> list[Ticket]:
         nested = BEGIN.search(text, begin.end())
         if not end or (nested and nested.start() < end.start()):
             raise AdapterError("tickets-file has an ambiguous or nested Ticket section")
-        ticket = ticket_from_inner(location, text, begin.end(), end.start(), begin.group(1))
+        ticket = ticket_from_inner(
+            location, text, begin.end(), end.start(), contract, begin.group(1)
+        )
         if ticket is None:
             raise AdapterError("tickets-file marker encloses no formal Ticket")
         ticket.section_start = begin.start()
@@ -341,8 +453,14 @@ def load_tickets_file(location: Path) -> list[Ticket]:
     return tickets
 
 
-def load_tickets_at(location: Path, representation: str) -> list[Ticket]:
-    tickets = load_file_per(location) if representation == "file-per-ticket" else load_tickets_file(location)
+def load_tickets_at(
+    location: Path, representation: str, contract: LocalContract
+) -> list[Ticket]:
+    tickets = (
+        load_file_per(location, contract)
+        if representation == "file-per-ticket"
+        else load_tickets_file(location, contract)
+    )
     seen: dict[str, Path] = {}
     for ticket in tickets:
         if ticket.ticket_id in seen:
@@ -352,8 +470,8 @@ def load_tickets_at(location: Path, representation: str) -> list[Ticket]:
 
 
 def load_tickets(repo: Path, representation: str, raw_location: str) -> tuple[Path, list[Ticket]]:
-    location = safe_location(repo, raw_location)
-    return location, load_tickets_at(location, representation)
+    location, contract = validate_configured_surface(repo, representation, raw_location)
+    return location, load_tickets_at(location, representation, contract)
 
 
 def journal_dir(location: Path, representation: str) -> Path:
@@ -453,7 +571,7 @@ def register(repo: Path, representation: str, raw_location: str, run_id: str, al
         repo, representation, raw_location
     ) as (location, _contract):
         path = journal_path(location, representation, run_id)
-        tickets = load_tickets_at(location, representation)
+        tickets = load_tickets_at(location, representation, _contract)
         selected = run_tickets(tickets, run_id)
         validate_blocker_targets(tickets)
         if any(ticket.status != "review-pending" for ticket in selected):
@@ -478,9 +596,14 @@ def register(repo: Path, representation: str, raw_location: str, run_id: str, al
 
 
 def validate_against_journal_at(
-    repo: Path, representation: str, location: Path, run_id: str
+    repo: Path,
+    representation: str,
+    location: Path,
+    run_id: str,
+    contract: LocalContract | None = None,
 ) -> tuple[Path, list[Ticket], dict]:
-    tickets = load_tickets_at(location, representation)
+    contract = contract or configured_local_contract(repo)
+    tickets = load_tickets_at(location, representation, contract)
     selected = run_tickets(tickets, run_id)
     validate_blocker_targets(tickets)
     data = read_journal(journal_path(location, representation, run_id))
@@ -494,10 +617,12 @@ def validate_against_journal_at(
 
 
 def validate_against_journal(repo: Path, representation: str, raw_location: str, run_id: str) -> tuple[Path, list[Ticket], dict]:
-    location, _contract = validate_configured_surface(
+    location, contract = validate_configured_surface(
         repo, representation, raw_location
     )
-    return validate_against_journal_at(repo, representation, location, run_id)
+    return validate_against_journal_at(
+        repo, representation, location, run_id, contract
+    )
 
 
 def replace_status(ticket: Ticket, status: str) -> str:
@@ -508,10 +633,10 @@ def replace_status(ticket: Ticket, status: str) -> str:
 def promote(repo: Path, representation: str, raw_location: str, run_id: str) -> dict:
     with stable_mutation_surface(
         repo, representation, raw_location
-    ) as (location, _contract):
+    ) as (location, contract):
         path = journal_path(location, representation, run_id)
         location, tickets, data = validate_against_journal_at(
-            repo, representation, location, run_id
+            repo, representation, location, run_id, contract
         )
         if data.get("phase") == "promoted":
             if all(ticket.status == "ready-for-agent" for ticket in run_tickets(tickets, run_id)):
@@ -566,104 +691,19 @@ def promote(repo: Path, representation: str, raw_location: str, run_id: str) -> 
         return final
 
 
-def claimable_ids_at(
-    repo: Path, representation: str, location: Path, run_id: str
-) -> list[str]:
-    _location, tickets, data = validate_against_journal_at(
-        repo, representation, location, run_id
-    )
-    selected = run_tickets(tickets, run_id)
-    post_publication_states = {
-        "ready-for-agent",
-        "completed",
-        "ready-for-human",
-        "needs-info",
-    }
-    if data.get("phase") != "promoted" or any(
-        ticket.status not in post_publication_states for ticket in selected
-    ):
-        return []
-    by_id = {ticket.ticket_id: ticket for ticket in tickets}
-    result = []
-    for ticket in selected:
-        if ticket.status != "ready-for-agent":
-            continue
-        if "solve-in-progress" in ticket.flags:
-            continue
-        if all(by_id[blocker].status == "completed" for blocker in ticket.blockers):
-            result.append(ticket.ticket_id)
-    return sorted(result)
-
-
-def claimable_ids(repo: Path, representation: str, raw_location: str, run_id: str) -> list[str]:
-    location, _contract = validate_configured_surface(
-        repo, representation, raw_location
-    )
-    return claimable_ids_at(repo, representation, location, run_id)
-
-
-def claim(repo: Path, representation: str, raw_location: str, run_id: str, ticket_id: str) -> dict:
-    if not ticket_id:
-        raise AdapterError("claim requires --ticket-id")
-    with stable_mutation_surface(
-        repo, representation, raw_location
-    ) as (location, _contract):
-        location, tickets, _data = validate_against_journal_at(
-            repo, representation, location, run_id
-        )
-        if ticket_id not in claimable_ids_at(
-            repo, representation, location, run_id
-        ):
-            raise AdapterError(f"Ticket is not claimable: {ticket_id}")
-        target = next(ticket for ticket in tickets if ticket.ticket_id == ticket_id)
-        if not target.flags_field:
-            raise AdapterError(
-                f"Ticket has no configured Flags or Labels Claim field: {ticket_id}"
-            )
-        updated_flags = sorted(set(target.flags) | {"solve-in-progress"})
-        replacement = replace_metadata_field(
-            target.inner, target.flags_field, ", ".join(updated_flags)
-        )
-        if representation == "file-per-ticket":
-            current = target.path.read_text(encoding="utf-8")
-            if current != target.text:
-                raise AdapterError("concurrent Ticket change detected before Claim")
-            atomic_write(target.path, replacement)
-        else:
-            current = location.read_text(encoding="utf-8")
-            if current != target.text:
-                raise AdapterError("concurrent tickets-file change detected before Claim")
-            updated = current[: target.inner_start] + replacement + current[target.inner_end :]
-            atomic_write(location, updated)
-        _location, refreshed, _journal = validate_against_journal_at(
-            repo, representation, location, run_id
-        )
-        claimed = next(ticket for ticket in refreshed if ticket.ticket_id == ticket_id)
-        if "solve-in-progress" not in claimed.flags:
-            raise AdapterError("Claim post-write verification failed")
-        return {"run_id": run_id, "ticket_id": ticket_id, "claimed": True}
-
-
 def inspect(repo: Path, representation: str, raw_location: str, run_id: str) -> dict:
-    location, _contract = validate_configured_surface(
+    location, contract = validate_configured_surface(
         repo, representation, raw_location
     )
-    tickets = load_tickets_at(location, representation)
+    tickets = load_tickets_at(location, representation, contract)
     selected = run_tickets(tickets, run_id)
     path = journal_path(location, representation, run_id)
     data = read_journal(path) if path.exists() else None
-    claimable = []
-    if data:
-        try:
-            claimable = claimable_ids_at(repo, representation, location, run_id)
-        except AdapterError:
-            claimable = []
     return {
         "run_id": run_id,
         "phase": data.get("phase") if data else "unregistered",
         "members": sorted(ticket.ticket_id for ticket in selected),
         "statuses": {ticket.ticket_id: ticket.status for ticket in selected},
-        "claimable": claimable,
     }
 
 
@@ -711,7 +751,7 @@ def cleanup(repo: Path, representation: str, raw_location: str, run_id: str, exp
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("register", "inspect", "promote", "claim-check", "claim", "cleanup"))
+    parser.add_argument("action")
     parser.add_argument("--repo", default=".")
     parser.add_argument("--representation", required=True, choices=("file-per-ticket", "tickets-file"))
     parser.add_argument("--location", required=True)
@@ -726,28 +766,16 @@ def main() -> int:
     args = parse_args()
     repo = Path(args.repo).resolve()
     try:
+        if args.action not in {"register", "inspect", "promote", "cleanup"}:
+            raise AdapterError(f"unsupported operation: {args.action}")
         if args.action == "register":
             payload = register(repo, args.representation, args.location, args.run_id, args.allow_membership_change)
         elif args.action == "promote":
             payload = promote(repo, args.representation, args.location, args.run_id)
         elif args.action == "cleanup":
             payload = cleanup(repo, args.representation, args.location, args.run_id, args.explicit)
-        elif args.action == "claim":
-            payload = claim(
-                repo,
-                args.representation,
-                args.location,
-                args.run_id,
-                args.ticket_id,
-            )
         else:
             payload = inspect(repo, args.representation, args.location, args.run_id)
-            if args.action == "claim-check":
-                claimable = payload["claimable"]
-                payload["ticket_id"] = args.ticket_id
-                payload["allowed"] = args.ticket_id in claimable if args.ticket_id else bool(claimable)
-                print(json.dumps(payload, indent=2, sort_keys=True))
-                return 0 if payload["allowed"] else 3
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
     except (AdapterError, OSError) as error:

@@ -54,6 +54,18 @@ Publication strategy: local-review-pending
 Local Ticket representation: tickets-file
 Local Ticket path: .scratch/feature-a/tickets.md
 Cancellation policy: retain-until-explicit-cleanup
+Ticket ID field aliases: Ticket ID, ID
+Publication Run field aliases: Publication Run
+Source field aliases: Source Spec, Parent
+Ticket state fields: Status, State
+Ticket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info
+Ready state: ready-for-agent
+Completed state: completed
+Human-blocked states: ready-for-human, needs-info
+Blocker metadata fields: Blocked By, Blockers
+Claim field aliases: Flags, Labels
+Solve branch field aliases: Solve Branch, Branch
+Solve worktree field aliases: Solve Worktree, Worktree
 EOF
 
 cat >"$REPO/.scratch/feature-a/issues/01-ready.md" <<'EOF'
@@ -745,6 +757,18 @@ Publication strategy: local-review-pending
 Local Ticket representation: file-per-ticket
 Local Ticket path: .tracker/tickets/<ticket-file>.md
 Cancellation policy: retain-until-explicit-cleanup
+Ticket ID field aliases: Ticket ID, ID
+Publication Run field aliases: Publication Run
+Source field aliases: Source Spec, Parent
+Ticket state fields: Status, State
+Ticket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info
+Ready state: ready-for-agent
+Completed state: completed
+Human-blocked states: ready-for-human, needs-info
+Blocker metadata fields: Blocked By, Blockers
+Claim field aliases: Flags, Labels
+Solve branch field aliases: Solve Branch, Branch
+Solve worktree field aliases: Solve Worktree, Worktree
 EOF
 cat >"$CONFIGURED_FILE_REPO/.tracker/tickets/CONFIG-1.md" <<'EOF'
 State: review-pending

@@ -50,6 +50,10 @@ class FrontierContract:
     branch_aliases: tuple[str, ...]
     worktree_field: str
     worktree_aliases: tuple[str, ...]
+    identity_fields: tuple[str, ...]
+    run_fields: tuple[str, ...]
+    source_fields: tuple[str, ...]
+    states: dict[str, str]
 
 
 @dataclass
@@ -85,6 +89,16 @@ def normalize_key(value: str) -> str:
 
 def csv(value: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in value.split(",") if part.strip())
+
+
+def state_registry(value: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for canonical in csv(value):
+        key = normalize_key(canonical)
+        if not key or key in result:
+            raise FrontierError("Ticket state values must be unique and non-empty")
+        result[key] = canonical
+    return result
 
 
 def contract_value(text: str, field: str) -> str:
@@ -126,6 +140,10 @@ def read_contract(repo: Path) -> tuple[FrontierContract, str]:
         branch_aliases=csv(contract_value(text, "Solve branch field aliases")),
         worktree_field=contract_value(text, "Solve worktree field"),
         worktree_aliases=csv(contract_value(text, "Solve worktree field aliases")),
+        identity_fields=csv(contract_value(text, "Ticket ID field aliases")),
+        run_fields=csv(contract_value(text, "Publication Run field aliases")),
+        source_fields=csv(contract_value(text, "Source field aliases")),
+        states=state_registry(contract_value(text, "Ticket state values")),
     )
     if not all(
         (
@@ -134,9 +152,34 @@ def read_contract(repo: Path) -> tuple[FrontierContract, str]:
             contract.claim_aliases,
             contract.branch_aliases,
             contract.worktree_aliases,
+            contract.identity_fields,
+            contract.run_fields,
+            contract.source_fields,
         )
     ):
         raise FrontierError("Local frontier contract contains an empty field list")
+    configured_aliases = [
+        normalize_key(alias)
+        for aliases in (
+            contract.state_fields,
+            contract.blocker_fields,
+            contract.claim_aliases,
+            contract.branch_aliases,
+            contract.worktree_aliases,
+            contract.identity_fields,
+            contract.run_fields,
+            contract.source_fields,
+        )
+        for alias in aliases
+    ]
+    if len(configured_aliases) != len(set(configured_aliases)):
+        raise FrontierError("Local frontier contract has ambiguous field aliases")
+    required_states = {
+        "review-pending", contract.ready_state, contract.completed_state,
+        *contract.human_states,
+    }
+    if not all(normalize_key(state) in contract.states for state in required_states):
+        raise FrontierError("Local frontier contract state registry is incomplete")
     return contract, text
 
 
@@ -188,8 +231,8 @@ def one(values: dict[str, str | list[str]], fields: tuple[str, ...]) -> tuple[st
     found = []
     for field in fields:
         normalized = normalize_key(field)
-        value = values.get(normalized)
-        if value not in (None, "", []):
+        if normalized in values:
+            value = values[normalized]
             if isinstance(value, list):
                 raise FrontierError(f"Ticket metadata field {field} must be scalar")
             found.append((field, str(value).strip()))
@@ -201,9 +244,9 @@ def one(values: dict[str, str | list[str]], fields: tuple[str, ...]) -> tuple[st
 def many(values: dict[str, str | list[str]], fields: tuple[str, ...]) -> tuple[str, list[str]]:
     found = []
     for field in fields:
-        value = values.get(normalize_key(field))
-        if value not in (None, "", []):
-            found.append((field, value))
+        normalized = normalize_key(field)
+        if normalized in values:
+            found.append((field, values[normalized]))
     if len(found) > 1:
         raise FrontierError(f"conflicting Ticket metadata fields: {', '.join(field for field, _ in found)}")
     if not found:
@@ -255,15 +298,37 @@ def parse_ticket(
 ) -> Ticket:
     inner = container[inner_start:inner_end]
     values, spellings = parse_metadata(inner)
-    state_field, status = one(values, contract.state_fields)
-    if not state_field or not status:
+    configured = {
+        normalize_key(alias)
+        for aliases in (
+            contract.state_fields,
+            contract.blocker_fields,
+            contract.claim_aliases,
+            contract.branch_aliases,
+            contract.worktree_aliases,
+            contract.identity_fields,
+            contract.run_fields,
+            contract.source_fields,
+        )
+        for alias in aliases
+    }
+    undeclared = sorted((values.keys() & publication.RESERVED_FIELD_ALIASES) - configured)
+    if undeclared:
+        raise FrontierError(
+            "Ticket metadata uses undeclared field aliases: " + ", ".join(undeclared)
+        )
+    state_field, raw_status = one(values, contract.state_fields)
+    if not state_field or not raw_status:
         raise FrontierError(f"Ticket has no configured state field: {path.relative_to(repo)}")
+    status = contract.states.get(normalize_key(raw_status), "")
+    if not status:
+        raise FrontierError(f"Ticket has unknown configured state: {raw_status}")
     flags_field, flags = many(values, contract.claim_aliases)
     blocker_field, blockers = many(values, contract.blocker_fields)
     del blocker_field
     blockers.extend(heading_blockers(inner, contract.blocker_heading))
     blockers = list(dict.fromkeys(blockers))
-    identity_field, ticket_id = one(values, ("Ticket ID", "ID"))
+    identity_field, ticket_id = one(values, contract.identity_fields)
     del identity_field
     relative = path.relative_to(repo).as_posix()
     identity = marker_id or ticket_id or relative
@@ -271,8 +336,10 @@ def parse_ticket(
         raise FrontierError(f"unsafe Ticket identity: {identity}")
     if marker_id and ticket_id and marker_id != ticket_id:
         raise FrontierError(f"section marker ID does not match Ticket ID in {relative}")
-    publication_field, publication_run = one(values, ("Publication Run",))
+    publication_field, publication_run = one(values, contract.run_fields)
     del publication_field
+    source_field, _source = one(values, contract.source_fields)
+    del source_field, _source
     branch_field, branch = one(values, contract.branch_aliases)
     worktree_field, worktree = one(values, contract.worktree_aliases)
     aliases = {identity}
@@ -563,15 +630,23 @@ def replace_or_insert_field(
 ) -> str:
     start, end = metadata_region(text)
     region = text[start:end]
-    matches = []
-    for alias in aliases:
-        pattern = re.compile(rf"(?mi)^({re.escape(alias)}[ \t]*:)[ \t]*.*$")
-        matches.extend(pattern.finditer(region))
+    allowed = {normalize_key(alias) for alias in aliases}
+    pattern = re.compile(r"(?m)^([^\n:]+)([ \t]*:)[ \t]*.*$")
+    matches = [
+        match for match in pattern.finditer(region)
+        if normalize_key(match.group(1)) in allowed
+    ]
     if len(matches) > 1:
         raise FrontierError(f"Ticket defines conflicting {canonical} fields")
     if matches:
         match = matches[0]
-        updated = region[: match.start()] + match.group(1) + f" {value}" + region[match.end() :]
+        updated = (
+            region[: match.start()]
+            + match.group(1)
+            + match.group(2)
+            + f" {value}"
+            + region[match.end() :]
+        )
     else:
         separator = "" if region.endswith("\n") or not region else "\n"
         updated = f"{region}{separator}{canonical}: {value}\n"

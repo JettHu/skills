@@ -351,9 +351,10 @@ def discover_issues(repo):
     if helper is None:
         raise RuntimeError("Maintainer Board requires the Local Markdown publication adapter for tickets-file discovery")
     pattern = re.sub(r"<[^>]+>", "*", contract["location"])
+    publication_contract = helper.configured_local_contract(repo)
     for path in sorted(repo.glob(pattern)):
         try:
-            tickets = helper.load_tickets_file(path.resolve())
+            tickets = helper.load_tickets_file(path.resolve(), publication_contract)
         except helper.AdapterError as error:
             raise RuntimeError(f"unsafe configured tickets-file {path.relative_to(repo)}: {error}") from error
         for ticket in tickets:

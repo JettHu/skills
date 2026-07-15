@@ -32,22 +32,18 @@ Use the base contract as evidence for one preset:
   representation and path. Formal Tickets start in `review-pending`, carry a
   stable Ticket ID and publication-run identity, become `ready-for-agent` only
   after complete-set review and promotion, and use one executable cancellation
-  policy: `retain-until-explicit-cleanup` or `delete-on-cancel`. The adapter
-  reads that policy plus the exact representation and safely normalized path
-  pattern from the managed contract. Path grammar is shared with the runtime:
+  policy: `retain-until-explicit-cleanup` or `delete-on-cancel`. Publication
+  exposes only `register`, `inspect`, `promote`, and `cleanup`; frontier alone
+  owns whole-tracker discovery, blockers, snapshots, Claim, and execution
+  branch/worktree assignment. Both read their exact contract. Path grammar is shared with the runtime:
   only a complete single-segment `<feature>` placeholder is optional, while
   `file-per-ticket` requires exactly one final `<ticket-file>.md` component;
-  unknown, embedded, repeated, or missing placeholders fail closed. Every read or mutation resolves the CLI
-  surface inside the repository and verifies it against those configured
-  fields before creating a lock, journal, or Ticket change. A mutation locks
-  one resolved surface, confirms the same resolution while holding that lock,
-  and retries from a new lock if a symlink target changed; all Ticket and
-  journal access then stays pinned to the confirmed surface. Unknown or
-  mismatched values fail closed even for explicit cleanup. Either policy may
-  delete only a journal and complete member set still exactly in
-  `review-pending`; a `promoting` or `promoted` run must be resumed, not cleaned.
-  A tickets-file without exact section markers, stable IDs, safe state mutation,
-  blocker lookup, and conflict-detecting Claim semantics is unsupported.
+  unknown, embedded, repeated, or missing placeholders fail closed. Contract-bounded
+  normalization accepts only declared key aliases and state presentation
+  variants; singular/plural aliases are allowlisted field by field, while all
+  identity values and section markers remain exact. Duplicate, unknown,
+  undeclared, ambiguous, or conflicting variants fail closed. A `promoting` or
+  `promoted` run is resumed, not cleaned. Manual transaction fallback is prohibited.
   The generated Solve Coordination section also declares
   `Frontier adapter: bundled-local-markdown-v1` and the exact state, completed,
   human-blocked, blocker, Claim, branch, and worktree fields consumed by the

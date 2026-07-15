@@ -206,7 +206,7 @@ assert "Publication strategy: local-review-pending" in local_contract
 assert "Local Ticket representation: file-per-ticket" in local_contract
 assert "Local Ticket path: .scratch/<feature>/issues/<ticket-file>.md" in local_contract
 assert "Status: review-pending" in local_contract
-assert "Status: ready-for-agent" in local_contract
+assert "Ticket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info" in local_contract
 assert "not a sixth global triage role" in local_contract
 assert "Cancellation policy: retain-until-explicit-cleanup" in local_contract
 assert "Cancellation behavior: retain the named review-pending run until explicit cleanup." in local_contract
@@ -216,12 +216,20 @@ for field in (
     "Claim safety:",
     "Frontier adapter: bundled-local-markdown-v1",
     "Ticket state fields: Status, State",
+    "Ticket ID field aliases: Ticket ID, ID",
+    "Publication Run field aliases: Publication Run",
+    "Source field aliases: Source Spec, Parent",
     "Ready state: ready-for-agent",
     "Completed state: completed",
     "Blocker metadata fields: Blocked By, Blockers",
     "Claim value: solve-in-progress",
     "Solve branch field: Solve Branch",
     "Solve worktree field: Solve Worktree",
+    "Publication operation `register`:",
+    "Publication operation `inspect`:",
+    "Publication operation `promote`:",
+    "Publication operation `cleanup`:",
+    "manual fallback=prohibited",
 ):
     assert field in local_contract
 

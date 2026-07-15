@@ -220,10 +220,14 @@ def local_publication(
     lines.extend(
         [
             "Publication journal: `.ultra-publications/<run-id>.json` beside the configured surface records only complete-set membership, reviewed body digests, representation, location, and phase; it is not a Ticket draft.",
-            "Review update operation: reviewers are read-only; the main Agent revises the same formal Tickets in place and re-registers intentional membership changes under the same run.",
-            "Publish or promote operation: after exact-artifact review passes, atomically gate the run as promoting, update only configured status fields to `Status: ready-for-agent`, re-read the complete set, and gate it as promoted.",
-            "Partial-publish recovery: interrupted review or promotion retains the formal Tickets and journal; resumption re-discovers the same run, rejects concurrent body changes, and creates no replacements.",
-            "Claim safety: a run-tagged Ticket is claimable only when its exact status is `ready-for-agent`, its journal is `promoted`, every run member is ready and unchanged, blockers are resolved, and conflict-detecting Claim metadata is absent.",
+            "Publication operation `register`: stage=after formal draft creation and after every semantic repair; inputs=repository, configured representation/location, run ID, and explicit membership-change authorization when needed; success evidence=review-pending phase plus exact member IDs and body digests; errors=structured fail-closed refusal with no Ticket mutation; resume=re-run after repairing the reported contract or artifact; manual fallback=prohibited.",
+            "Publication operation `inspect`: stage=review and recovery diagnosis; inputs=repository, configured representation/location, and run ID; success evidence=phase, exact members, and canonical statuses; errors=structured fail-closed refusal with no mutation; resume=repair the reported contract or artifact and re-run; manual fallback=prohibited.",
+            "Publication operation `promote`: stage=only after semantic review passes; inputs=repository, configured representation/location, and registered run ID; success evidence=promoted phase after complete-set re-verification; errors=structured fail-closed refusal retaining resumable state; resume=re-run the same operation after resolving the reported error; manual fallback=prohibited.",
+            "Publication operation `cleanup`: stage=cancelled review-pending run only; inputs=repository, configured representation/location, run ID, and explicit authorization when policy requires it; success evidence=exact cleaned member IDs; errors=structured fail-closed refusal with retained artifacts; resume=repair policy/artifact mismatch or resume promotion as reported; manual fallback=prohibited.",
+            "Review update operation: reviewers are read-only; the main Agent semantically repairs the same formal Tickets in place and routes the corrected set through `register`.",
+            "Publish or promote operation: route the reviewed registered set through `promote`; the adapter owns all transaction mechanics.",
+            "Partial-publish recovery: inspect the durable run, then resume the operation named by its phase; never reproduce transaction mechanics manually.",
+            "Claim safety: publication exposes no Claim operation. Route whole-tracker discovery, blockers, snapshots, and conflict-detecting Claim through the configured frontier adapter.",
             f"Cancellation policy: {cancellation_policy}",
             f"Cancellation behavior: {CANCELLATION_POLICIES[cancellation_policy]}",
             "",
@@ -253,8 +257,8 @@ def custom_coordination(policy: dict[str, str]) -> list[str]:
 
 def coordination(preset: str) -> list[str]:
     if preset == "local-markdown":
-        resource_links = "store `Solve Branch`, `Solve Worktree`, and PR or commit links in the Ticket's structured metadata or its established backlink surface."
-        claim = "re-read a ready Ticket, record its branch and worktree, and transition it to the configured active Claim representation before execution; release that Claim when the Attempt ends."
+        resource_links = "during execution, store only configured Claim branch/worktree identity in Ticket metadata. At handoff, resource identity, ownership, and cleanup remain authoritative in the Solve Record or native PR/MR; Ticket notes may add concise lifecycle backlinks but never duplicate those facts."
+        claim = "route the discovery snapshot, ready/blocker/publication re-read, active Claim, and execution branch/worktree assignment through the bundled frontier adapter; release follows the outcome workflow."
     elif preset == "github":
         resource_links = "record branch, worktree, commit, and pull-request links in the configured development-link or concise issue-comment surface."
         claim = "re-read a ready, unblocked, unassigned Ticket and assign the session actor through the configured GitHub operation; release the assignment when the Attempt ends without a terminal state."
@@ -279,7 +283,11 @@ def coordination(preset: str) -> list[str]:
     if preset == "local-markdown":
         lines[2:2] = [
             "Frontier adapter: bundled-local-markdown-v1",
+            "Ticket ID field aliases: Ticket ID, ID",
+            "Publication Run field aliases: Publication Run",
+            "Source field aliases: Source Spec, Parent",
             "Ticket state fields: Status, State",
+            "Ticket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info",
             "Ready state: ready-for-agent",
             "Completed state: completed",
             "Human-blocked states: ready-for-human, needs-info",

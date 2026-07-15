@@ -56,6 +56,18 @@ def write_local_contract(repo: Path) -> None:
 Local Ticket representation: tickets-file
 Local Ticket path: .scratch/feature/tickets.md
 Cancellation policy: retain-until-explicit-cleanup
+Ticket ID field aliases: Ticket ID, ID
+Publication Run field aliases: Publication Run
+Source field aliases: Source Spec, Parent
+Ticket state fields: Status, State
+Ticket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info
+Ready state: ready-for-agent
+Completed state: completed
+Human-blocked states: ready-for-human, needs-info
+Blocker metadata fields: Blocked By, Blockers
+Claim field aliases: Flags, Labels
+Solve branch field aliases: Solve Branch, Branch
+Solve worktree field aliases: Solve Worktree, Worktree
 """,
     )
 
@@ -116,7 +128,8 @@ For each scenario, read `TASK.md`, approved inputs, and the exact formal
 intentional review-fix membership change and to promote only when the contract
 allows it. Write `run-decision.json` with keys `scenario`, `action`,
 `human_choice`, `review_iterations`, `contract_sha256`, and `evidence` (an exact
-contract excerpt). Do not ask the parent user ordinary split/blocker questions.
+contract excerpt). Set `evidence` exactly to `Manual fallback is prohibited for every operation.`
+Do not ask the parent user ordinary split/blocker questions.
 """,
     )
 

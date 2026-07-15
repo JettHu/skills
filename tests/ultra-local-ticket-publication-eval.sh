@@ -58,7 +58,7 @@ subprocess.run([sys.executable, str(adapter), "promote", "--repo", str(repo), "-
     "human_choice": False,
     "review_iterations": 2,
     "contract_sha256": manifest["contract_sha256"],
-    "evidence": "The main Agent fixes every finding derivable from approved context and current code in those same artifacts: factual drift, canonical Spec/Ticket terminology (use `Ticket`, not `Issue`), acceptance or validation gaps, sizing and split/merge repairs, blocker-edge corrections, and formatting or backlink defects.",
+    "evidence": "Manual fallback is prohibited for every operation.",
 }, indent=2) + "\n", encoding="utf-8")
 
 second = run / "scenarios/02-human-owned-choice"
@@ -68,7 +68,7 @@ second = run / "scenarios/02-human-owned-choice"
     "human_choice": True,
     "review_iterations": 1,
     "contract_sha256": manifest["contract_sha256"],
-    "evidence": "Ask the user only for an unresolved scope, product-semantic, ownership, release-policy, data/security-policy, architecture, significant UX, or missing-core-requirement choice.",
+    "evidence": "Manual fallback is prohibited for every operation.",
 }, indent=2) + "\n", encoding="utf-8")
 (second / "escalation.json").write_text(json.dumps({"choice": "release owner"}) + "\n", encoding="utf-8")
 PY
