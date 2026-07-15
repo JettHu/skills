@@ -48,15 +48,35 @@ approved_compatibility_identifiers = {
 }
 approved_provider_native_names = {"GitHub Issue", "GitLab Issue"}
 approved_legacy_spans = []
+compatibility_heading = solve.index("## Tracker Adapter Compatibility")
 for code_span in re.finditer(r"`([^`\n]+)`", solve):
     literal = code_span.group(1)
-    if literal in approved_storage_literals | approved_compatibility_identifiers:
+    if literal in approved_storage_literals:
+        approved_legacy_spans.append(code_span.span(1))
+        continue
+    if literal not in approved_compatibility_identifiers:
+        continue
+    line_start = solve.rfind("\n", 0, code_span.start()) + 1
+    line_end = solve.find("\n", code_span.end())
+    line_end = len(solve) if line_end < 0 else line_end
+    line_text = solve[line_start:line_end]
+    documented_example = (
+        "compatibility identifiers" in line_text and "Ticket" in line_text
+    )
+    adapter_signature = (
+        code_span.start() > compatibility_heading
+        and line_text.strip() == f"- `{literal}`"
+    )
+    if documented_example or adapter_signature:
         approved_legacy_spans.append(code_span.span(1))
 for provider_name in approved_provider_native_names:
     approved_legacy_spans.extend(match.span() for match in re.finditer(re.escape(provider_name), solve))
 
 unapproved_legacy_terms = []
-for match in re.finditer("issue", solve, flags=re.IGNORECASE):
+legacy_term = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*issues?(?:[_-][A-Za-z0-9]+)*(?![A-Za-z0-9])"
+)
+for match in legacy_term.finditer(solve):
     if any(start <= match.start() and match.end() <= end for start, end in approved_legacy_spans):
         continue
     line = solve.count("\n", 0, match.start()) + 1
@@ -112,7 +132,7 @@ for predicate in (
 
 for predicate in (
     "For a contract declaring `Frontier adapter: bundled-local-markdown-v1`",
-    "Explicit ids bound the selection universe",
+    "Explicit Ticket IDs bound the selection universe",
     "#### `--all` Frontier Loop",
     "Treat one discovery result as one frontier generation",
     "Distinguish a valid empty frontier from an adapter failure",

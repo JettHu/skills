@@ -173,7 +173,7 @@ Discovery must skip Tickets carrying an active `solve-in-progress` Claim and rep
 
 Read the configured Ticket universe and blocker graph through the tracker adapter. A Ticket is claimable only when its exact configured state is the configured ready state, every declared blocker currently has the configured completed state, its publication gate (when any) is complete, and its Claim metadata is free. Missing blocker metadata means no blockers unless the configured contract explicitly requires the metadata; never invent edges from numbering, prose, or likely implementation order.
 
-Explicit ids bound the selection universe: intersect exactly those ids with the current frontier and report every requested non-frontier Ticket. Never add an unrequested blocker or dependent. `--all` bounds the universe to the configured adapter surface and begins with only its current frontier.
+Explicit Ticket IDs bound the selection universe: intersect exactly those Ticket IDs with the current frontier and report every requested non-frontier Ticket. Never add an unrequested blocker or dependent. `--all` bounds the universe to the configured adapter surface and begins with only its current frontier.
 
 For configured Local Markdown publication runs, route both explicit and batch discovery through the adapter's complete-set Claim check. Do not infer readiness from a heading, filename, section title, or `Status: ready-for-agent` alone when `Publication Run` metadata is present.
 
@@ -245,7 +245,7 @@ Use external research only when a source-verifiable external API, framework, sta
 
 ### Execution Digest: Conditional Working Memory
 
-An Execution Digest is a separate ticket-level working file, never a Ticket-body section, tracker state, schema gate, or second requirement source. Create it at the start of a digest-worthy Attempt: a multi-module, delegated, resumable, interrupted, non-obvious-validation, or likely record-worthy-decision Attempt. A simple Attempt creates no Digest until its first material decision or deviation; create it at that event without rewriting the Ticket.
+An Execution Digest is a separate Ticket-level working file, never a Ticket-body section, tracker state, schema gate, or second requirement source. Create it at the start of a digest-worthy Attempt: a multi-module, delegated, resumable, interrupted, non-obvious-validation, or likely record-worthy-decision Attempt. A simple Attempt creates no Digest until its first material decision or deviation; create it at that event without rewriting the Ticket.
 
 For a local Ticket at `.scratch/<feature>/issues/<ticket-file>.md` or `.scratch/<feature>/issue.md`, use exactly:
 
@@ -349,7 +349,7 @@ For each Ticket in a group:
 
 1. Execute from the Pre-Implementation Checkpoint. Refresh exploration only when code changed since planning or the assigned worktree exposes new facts.
 2. Choose execution route. These are optional routing heuristics, not mandatory skill calls:
-   - direct execution: only when the Checkpoint recorded every required simple-ticket predicate
+   - direct execution: only when the Checkpoint recorded every required simple-Ticket predicate
    - unclear bug: prefer the debugging skill (`/ultra diagnosing-bugs`, or a configured alias) in AFK mode when a diagnosis loop would reduce risk
    - medium feature with clear AC: consider `/ultra tdd` in AFK mode when test-first development would help
    - approved refactor with clear AC: implement directly, or consider `/ultra tdd` when behavior coverage is needed
