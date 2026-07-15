@@ -127,6 +127,10 @@ def grade(repo: Path) -> Grade:
         result.check(len(acquires) == 1 and acquires[0].get("actor") != "root", "one bounded implementation subagent acquired the worktree")
     if expected["review_action"]:
         actions = evidence.get("review_actions", [])
+        if isinstance(actions, str):
+            actions = [actions]
+        if not actions and isinstance(evidence.get("review_action"), str):
+            actions = [evidence["review_action"]]
         result.check(expected["review_action"] in actions, f"review action includes {expected['review_action']}")
 
     result.check(git(repo, "rev-parse", "main").stdout.strip() == git(repo, "rev-parse", "eval-base").stdout.strip(), "landing branch was not advanced")

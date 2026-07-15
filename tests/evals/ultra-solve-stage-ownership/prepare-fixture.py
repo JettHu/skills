@@ -185,8 +185,8 @@ def create(repo: Path, name: str, scenario: dict, ref: str) -> None:
             validation, receipt, candidate worktree, and `eval/stage-evidence.json`
             state for the grader. The evidence JSON must record `implementation_route`,
             optional `root_exception`, ordered `events`, exclusive writer acquire and
-            handoff events with worktree/actor fields when delegated, and review
-            actions when applicable. Do not edit EVAL_EXPECTATIONS.json.
+            handoff events with worktree/actor fields when delegated, and a
+            `review_actions` array when applicable. Do not edit EVAL_EXPECTATIONS.json.
         """),
     }
     for path, value in files.items():

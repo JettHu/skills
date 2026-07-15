@@ -31,6 +31,7 @@ for path in expectations:
     repo = path.parent
     assert (repo / data["issue_path"]).is_file()
     assert "stage-evidence.json" in (repo / "EVAL_PROMPT.md").read_text(encoding="utf-8")
+    assert "`review_actions` array" in (repo / "EVAL_PROMPT.md").read_text(encoding="utf-8")
     solve = (repo / "skills/engineering/ultra/solve.md").read_text(encoding="utf-8")
     assert "## Stage Ownership" in solve
 PY
