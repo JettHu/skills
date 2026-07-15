@@ -464,7 +464,7 @@ For every recorded outcome, complete one atomic tracker handoff:
 
 - create or update one receipt under `.scratch/<feature>/solve-records/` or `.scratch/solve-records/`
 - append its path-only backlink to the Ticket, using the plural backlink heading when historical receipts already exist
-- keep each retained branch, worktree, commit, or PR linked through the tracker's resource surface and named in the receipt with its owner, resume action, cleanup owner, and current disposition
+- keep retained branch/worktree assignment in configured Claim metadata only while the Attempt remains active; at handoff, name branch, worktree, commit, and PR/MR resource identity, ownership, resume action, cleanup owner, and disposition authoritatively in the Solve Record or native PR/MR, while the Ticket receives only the concise receipt lifecycle backlink
 - set the Ticket to the outcome's actionable state
 - release or intentionally retain `solve-in-progress` according to the table, recording the active resume owner when retained
 - distill each durable Digest decision or deviation into candidate `## Review` or `## Notes`, or recovery `## Attempt Summary` or `## Confirmed Findings`; retain the Digest only while the same recovery context has resume value or repo policy requires it

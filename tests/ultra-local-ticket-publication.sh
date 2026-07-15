@@ -394,6 +394,59 @@ adapter "$ALIAS_REPO" file-per-ticket .scratch/feature/issues alias-run promote 
 grep -Fq 'sTaTe: ready-for-agent' "$ALIAS_REPO/.scratch/feature/issues/A-1.md"
 grep -Fq 'Labels: []' "$ALIAS_REPO/.scratch/feature/issues/A-1.md"
 
+# Digest normalization derives every operational field family from the
+# configured contract, including non-default aliases. Status-only partial
+# promotion and assignment/Claim metadata changes remain resumable.
+CUSTOM_ALIAS_REPO="$TMPDIR_ROOT/custom-operational-aliases"
+mkdir -p "$CUSTOM_ALIAS_REPO/.scratch/feature/issues"
+write_contract "$CUSTOM_ALIAS_REPO" retain-until-explicit-cleanup
+python3 - "$CUSTOM_ALIAS_REPO/docs/agents/ultra-tracker.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace("Ticket state fields: Status, State", "Ticket state fields: Ticket Status")
+text = text.replace("Claim field aliases: Flags, Labels", "Claim field aliases: Work Flags")
+text = text.replace("Solve branch field aliases: Solve Branch, Branch", "Solve branch field aliases: Attempt Branch")
+text = text.replace("Solve worktree field aliases: Solve Worktree, Worktree", "Solve worktree field aliases: Attempt Worktree")
+path.write_text(text, encoding="utf-8")
+PY
+for id in CUSTOM-1 CUSTOM-2; do
+  cat >"$CUSTOM_ALIAS_REPO/.scratch/feature/issues/$id.md" <<EOF
+Ticket Status: REVIEW_PENDING
+Ticket ID: $id
+Publication Run: custom-alias-run
+Source Spec: docs/spec.md
+Blocked By:
+Work Flags:
+Attempt Branch:
+Attempt Worktree:
+
+# Custom operational aliases $id
+EOF
+done
+adapter "$CUSTOM_ALIAS_REPO" file-per-ticket .scratch/feature/issues custom-alias-run register >/dev/null
+python3 - "$CUSTOM_ALIAS_REPO/.scratch/feature/issues/CUSTOM-1.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace("Work Flags:", "Work Flags: solve-in-progress")
+text = text.replace("Attempt Branch:", "Attempt Branch: solve/custom-1")
+text = text.replace("Attempt Worktree:", "Attempt Worktree: /tmp/custom-1")
+path.write_text(text, encoding="utf-8")
+PY
+if ULTRA_PUBLICATION_FAIL_AFTER=1 adapter "$CUSTOM_ALIAS_REPO" file-per-ticket .scratch/feature/issues custom-alias-run promote >"$TMPDIR_ROOT/custom-alias-interrupted.out" 2>&1; then
+  echo 'custom operational alias promotion interruption unexpectedly succeeded' >&2
+  exit 1
+fi
+grep -Fq 'injected mid-promotion interruption' "$TMPDIR_ROOT/custom-alias-interrupted.out"
+adapter "$CUSTOM_ALIAS_REPO" file-per-ticket .scratch/feature/issues custom-alias-run promote >/dev/null
+test "$(grep -Rh '^Ticket Status: ready-for-agent$' "$CUSTOM_ALIAS_REPO/.scratch/feature/issues" | wc -l | tr -d ' ')" -eq 2
+grep -Fq 'Work Flags: solve-in-progress' "$CUSTOM_ALIAS_REPO/.scratch/feature/issues/CUSTOM-1.md"
+grep -Fq 'Attempt Branch: solve/custom-1' "$CUSTOM_ALIAS_REPO/.scratch/feature/issues/CUSTOM-1.md"
+grep -Fq 'Attempt Worktree: /tmp/custom-1' "$CUSTOM_ALIAS_REPO/.scratch/feature/issues/CUSTOM-1.md"
+
 # Cancellation retains formal artifacts by default. Explicit cleanup is scoped
 # to the named provisional run and cannot delete a promoted run.
 write_file_ticket "$FILE_REPO/.scratch/feature/issues/C-1.md" C-1 cancel-run review-pending "" "Cancelled draft"
@@ -676,6 +729,9 @@ for text in (
     assert text in reference, text
 assert "It is never claimable" in solve
 assert "never rebuild the graph or Claim with Markdown edits" in solve
+assert "at handoff, name branch, worktree, commit, and PR/MR resource identity" in solve
+assert "Ticket receives only the concise receipt lifecycle backlink" in solve
+assert "linked through the tracker's resource surface" not in solve
 assert "Manual transaction fallback is prohibited" in setup
 assert "## GitHub and GitLab remote adapter contract" in reference
 assert "## Local Markdown adapter contract" in reference

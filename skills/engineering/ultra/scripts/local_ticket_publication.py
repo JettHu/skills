@@ -55,6 +55,10 @@ class Ticket:
     inner_end: int = 0
     section_start: int = 0
     section_end: int = 0
+    state_aliases: tuple[str, ...] = ()
+    claim_aliases: tuple[str, ...] = ()
+    branch_aliases: tuple[str, ...] = ()
+    worktree_aliases: tuple[str, ...] = ()
 
     @property
     def inner(self) -> str:
@@ -62,7 +66,13 @@ class Ticket:
 
     @property
     def body_digest(self) -> str:
-        normalized = normalize_operational_fields(self.inner)
+        normalized = normalize_operational_fields(
+            self.inner,
+            self.state_aliases,
+            self.claim_aliases,
+            self.branch_aliases,
+            self.worktree_aliases,
+        )
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
@@ -211,29 +221,39 @@ def replace_metadata_field(text: str, field: str, value: str) -> str:
     return text[:start] + updated + text[end:]
 
 
-def normalize_operational_fields(text: str) -> str:
+def normalize_operational_fields(
+    text: str,
+    state_fields: tuple[str, ...],
+    claim_fields: tuple[str, ...],
+    branch_fields: tuple[str, ...],
+    worktree_fields: tuple[str, ...],
+) -> str:
     start, end, _kind = metadata_region(text)
     region = text[start:end]
-    fields = {
-        "status": (r"status", False),
-        "state": (r"state", False),
-        "flags": (r"flags", False),
-        "labels": (r"labels", False),
-        "solve_branch": (r"(?:solve[ _-]+branch|branch)", True),
-        "solve_worktree": (r"(?:solve[ _-]+worktree|worktree)", True),
-    }
-    for field, (spelling, remove) in fields.items():
-        pattern = re.compile(
-            rf"(?mi)^({spelling}[ \t]*:)[ \t]*.*(?:\n|\Z)" if remove
-            else rf"(?mi)^({spelling}[ \t]*:)[ \t]*.*$"
-        )
-        matches = list(pattern.finditer(region))
-        if len(matches) > 1:
-            raise AdapterError(f"Ticket defines {field} more than once")
-        if matches:
-            match = matches[0]
-            replacement = "" if remove else match.group(1) + f" <{field}>"
-            region = region[: match.start()] + replacement + region[match.end() :]
+    groups = (
+        ({normalize_key(field) for field in state_fields}, "state", False),
+        ({normalize_key(field) for field in claim_fields}, "claim", False),
+        ({normalize_key(field) for field in branch_fields}, "branch", True),
+        ({normalize_key(field) for field in worktree_fields}, "worktree", True),
+    )
+    pattern = re.compile(r"(?m)^([^\n:]+)([ \t]*:)[ \t]*.*(?:\n|\Z)")
+    seen: set[str] = set()
+
+    def replacement(match: re.Match[str]) -> str:
+        key = normalize_key(match.group(1))
+        for aliases, semantic, remove in groups:
+            if key not in aliases:
+                continue
+            if semantic in seen:
+                raise AdapterError(f"Ticket defines {semantic} more than once")
+            seen.add(semantic)
+            if remove:
+                return ""
+            newline = "\n" if match.group(0).endswith("\n") else ""
+            return f"<{semantic}>:{newline}"
+        return match.group(0)
+
+    region = pattern.sub(replacement, region)
     return text[:start] + region + text[end:]
 
 
@@ -298,6 +318,10 @@ def ticket_from_inner(
         flags=many(metadata, *claim_keys),
         state_field=state_field,
         flags_field=flags_field,
+        state_aliases=contract.state_fields,
+        claim_aliases=contract.claim_fields,
+        branch_aliases=contract.branch_fields,
+        worktree_aliases=contract.worktree_fields,
         path=path,
         text=text,
         inner_start=inner_start,
@@ -657,7 +681,15 @@ def promote(repo: Path, representation: str, raw_location: str, run_id: str) -> 
                 if ticket.status == "ready-for-agent":
                     continue
                 current = ticket.path.read_text(encoding="utf-8")
-                if hashlib.sha256(normalize_operational_fields(current).encode()).hexdigest() != ticket.body_digest:
+                if hashlib.sha256(
+                    normalize_operational_fields(
+                        current,
+                        ticket.state_aliases,
+                        ticket.claim_aliases,
+                        ticket.branch_aliases,
+                        ticket.worktree_aliases,
+                    ).encode()
+                ).hexdigest() != ticket.body_digest:
                     raise AdapterError(f"concurrent Ticket change detected: {ticket.ticket_id}")
                 atomic_write(
                     ticket.path,
