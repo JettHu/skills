@@ -87,6 +87,13 @@ whole-tracker ready/blocker/publication-gate snapshot and conflict-detecting
 Claim with branch/worktree assignment. Never reproduce either adapter's
 transaction mechanics in Agent prose or manual file edits.
 
+Prefer the bundled `scripts/ultra_tracker.py` facade for configured Local
+Markdown publication and frontier operations. It discovers only the configured
+publication coordinates, preserves the owning helper result in its versioned
+envelope, and does not add state-machine authority. If the facade is
+unavailable before an operation starts, make one explicit handoff to the same
+bundled helper; never retry a completed operation through the other route.
+
 ### Publication operation contract
 
 | Operation | Stage and required inputs | Success evidence | Error and resume boundary |
