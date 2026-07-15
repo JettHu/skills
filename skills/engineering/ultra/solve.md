@@ -56,6 +56,25 @@ Tickets are assumed AFK-ready when they are in `ready-for-agent`: the Ticket bod
 
 An Agent Brief is an optional, non-duplicative delta to the Ticket and source Spec, never a schema gate. If present, use only its constraints, validation guidance, and optional hints during planning; re-check hints against current code and repo conventions before relying on them. If it is absent or empty, infer from the Ticket, codebase, and conversation where possible; missing core requirements become `needs-info`, and human-owned decisions become `ready-for-human`. Agent Brief content never participates in parsing, eligibility, state transitions, or merge gates.
 
+## Stage Ownership
+
+The root Agent coordinates the Attempt. The Pre-Implementation Checkpoint is the single owner of each stage disposition and its current evidence; later stages consume and revalidate that disposition instead of inventing a second routing decision. Express delegation through runtime-neutral capabilities, bounded outcomes, write boundaries, and completion evidence. The active runtime owns tool-specific agent types, model settings, permission profiles, and other execution configuration.
+
+Direct implementation is the narrow branch. It is allowed only when positive current evidence establishes every property: simple, familiar, local, low-risk, fully specified, and obviously verifiable. An unproven property is not negative evidence and does not require a prior root judgment that delegation would help; it keeps read-only exploration and independent review available and selects delegated implementation when its capability and worktree gates pass.
+
+When implementation is not on the direct branch, use exactly one bounded implementation subagent for an assigned worktree when the runtime exposes implementation delegation and that worktree identity can be verified. That subagent is the only active implementation writer in its assigned worktree until explicit handoff. Independent groups may still run in parallel in different assigned worktrees, while dependent stages and shared-worktree stages remain serialized. After handoff, the root re-reads and integrates the committed result; a subagent summary is never final evidence.
+
+Root implementation fallback is limited to these objective conditions:
+
+- implementation delegation is unavailable
+- the assigned subagent worktree cannot be verified
+- another active writer already owns that worktree
+- the stage requires concurrent mutation of non-namespaced shared state outside the worktree
+
+These fallbacks are separate from the direct branch and must be recorded at the Checkpoint with current evidence. An active-writer fallback never permits concurrent writing: wait for explicit handoff or assign a separate verified worktree before the root edits. For bounded exploration, analysis, verification, and independent review, bias toward a suitable read-only subagent when the required capability exists. The root may perform such a stage when current context already supplies its required evidence, the stage is trivial and local, delegation overhead would exceed the work, or no suitable runtime capability is available.
+
+The root always retains sequencing, synthesis, integration, final validation, tracker transitions, Post-Execution Review closure, and Solve Record finalization. Delegating a stage transfers only its stated bounded work, never those responsibilities or landing authority.
+
 ## Worktree Boundary
 
 `/ultra solve` owns worktree identity and lifecycle semantics: Ticket grouping, branch-from ref, branch name, worktree path, Claim state, validation, integration, solve-record finalization, and merge gates.
@@ -231,15 +250,17 @@ Classify the Ticket disposition:
 
 If a Ticket becomes `needs-info` or `ready-for-human`, record the blocker reason and route the Attempt through Outcome Finalization. A substantive assessment with durable findings creates the matching recovery receipt; an immediate no-value stop releases its Claim without a record. Continue with the rest of the batch after the Ticket, Claim, resources, and backlink reflect that disposition.
 
-The main Agent records, without requesting approval:
+The root Agent records, without requesting approval:
 
-- exploration disposition: `direct main-Agent execution`, `narrow main-Agent exploration`, `adaptive read-only subagent fan-out`, or `conditional external research`
+- exploration disposition: `direct root exploration`, `narrow root exploration`, `adaptive read-only subagent fan-out`, or `conditional external research`
+- implementation disposition: `direct root implementation`, `one bounded implementation subagent`, or `objective root implementation fallback`, with current evidence for every required predicate or fallback
+- bounded analysis, verification, and independent-review dispositions, including any root-execution exception
 - validation plan: commands, manual evidence, check-run links, or why no meaningful automated check exists
 - Digest disposition: `simple` or `digest-worthy`
 
-Direct main-Agent execution requires positive evidence that the Ticket is simple, familiar, local, low-risk, fully specified, and obviously verifiable. Existing high-quality exploration in the active context may satisfy part of that evidence and avoid duplicate fan-out. A clear local fix alone is not enough.
+Direct root implementation requires positive evidence that the Ticket is simple, familiar, local, low-risk, fully specified, and obviously verifiable. Existing high-quality exploration in the active context may satisfy part of that evidence and avoid duplicate fan-out. A clear local fix alone is not enough.
 
-Bias most non-trivial or uncertain Tickets toward adaptive read-only subagent fan-out. Use task-shaped lenses only when they add independent evidence: affected modules, contracts, risks, dependencies, validation, or relevant external facts. Subagents return compressed findings—relevant modules, constraints, risks, validation paths, and unresolved questions. The main Agent retains synthesis, implementation edits, validation, tracker transitions, and solve-record finalization. Raw exploration output stays outside the Ticket, Execution Digest, and Solve Record.
+Bias most non-trivial or uncertain Tickets toward adaptive read-only subagent fan-out. Use task-shaped lenses only when they add independent evidence: affected modules, contracts, risks, dependencies, validation, or relevant external facts. Subagents return compressed findings—relevant modules, constraints, risks, validation paths, and unresolved questions. The root Agent retains synthesis, integration, final validation, tracker transitions, Post-Execution Review closure, and Solve Record finalization; implementation edits follow the recorded Stage Ownership disposition. Raw exploration output stays outside the Ticket, Execution Digest, and Solve Record.
 
 Use external research only when a source-verifiable external API, framework, standard, platform, compatibility, or security fact affects implementation or validation and local approved context cannot settle it. Link the source and keep the finding factual. Research never substitutes for a human-owned product, architecture, data-policy, or security-policy choice.
 
@@ -280,11 +301,11 @@ Record only a non-obvious decision or deviation that is not settled by the Ticke
 
 When the same retained branch, worktree, and recovery context resume, reopen and update the same Digest path. At candidate handoff, distill durable decisions and deviations into `## Review` or `## Notes`; at recovery handoff, distill them into `## Attempt Summary` or `## Confirmed Findings`. Retain the Digest only while it has resume value or repository policy requires it; otherwise delete it after that durable transfer. If a required Digest cannot be written durably, keep the same compact fields in the active conversation and report the reduced interruption-recovery guarantee.
 
-Complex, delegated, resumable, or digest-worthy Attempts receive a Pre-Edit Plan Review before implementation edits. Prefer a fresh read-only reviewer when that capability exists; otherwise the main Agent performs the equivalent findings-first review. Check the compressed plan, acceptance criteria, constraints, risks, and validation strategy for omitted steps, unsafe assumptions, and validation gaps. Incorporate findings into the plan or Digest; the review creates no standalone lifecycle artifact and no blanket human approval gate.
+Complex, delegated, resumable, or digest-worthy Attempts receive a Pre-Edit Plan Review before implementation edits. Follow the Checkpoint's independent-review disposition: prefer a fresh read-only reviewer when that capability exists, and use a recorded root-execution exception only under the Stage Ownership conditions. Check the compressed plan, acceptance criteria, constraints, risks, and validation strategy for omitted steps, unsafe assumptions, and validation gaps. Incorporate findings into the plan or Digest; the review creates no standalone lifecycle artifact and no blanket human approval gate.
 
 Record-worthy low-risk decisions go in the active Digest and outcome Solve Record. Human-owned product, API, data, security, architecture, or significant UX choices set the Ticket to `ready-for-human`; missing core requirements set it to `needs-info`.
 
-The Pre-Implementation Checkpoint is complete when each claimed Ticket has a Ticket disposition, exploration disposition, validation plan, Digest disposition, and any required Digest or Pre-Edit Plan Review incorporated before implementation edits.
+The Pre-Implementation Checkpoint is complete when each claimed Ticket has a Ticket disposition; exploration, implementation, analysis, verification, and independent-review dispositions; a validation plan; a Digest disposition; and any required Digest or Pre-Edit Plan Review incorporated before implementation edits. Later stages must revalidate the recorded evidence when repository state, runtime capability, worktree ownership, or Ticket context changes.
 
 ### 4. Group
 
@@ -324,7 +345,16 @@ Do not edit code, tests, docs, config, migrations, or generated artifacts until 
 
 If this gate fails, stop and create or enter the correct group worktree before continuing.
 
-If delegating to a subagent, include the assigned worktree path and branch in the brief. The subagent must run the same gate before editing. If the runtime cannot guarantee the subagent's working directory, do not delegate implementation work; run it serially with tools explicitly pointed at the group worktree.
+Every delegated implementation receives a self-contained stage assignment that names:
+
+- the authoritative Ticket and approved source context
+- the current branch, assigned worktree, and source snapshot
+- exclusive write ownership and the explicit handoff boundary
+- relevant Execution Digest decisions and deviations
+- the bounded stage outcome and acceptance criteria
+- validation expectations and post-handoff revalidation requirements
+
+The assignment must be sufficient without inherited conversation history. Inherited history is advisory and never supplies missing requirements, constraints, ownership, acceptance criteria, or validation obligations. The implementation subagent must run and report this same Pre-Execute Gate before editing. If the assigned worktree cannot be verified, use the recorded objective root fallback; do not relax the gate or silently redirect the subagent.
 
 ### 5. Execute Groups
 
@@ -348,13 +378,11 @@ For `adopted-integration`, temporary group branches are solve-owned resources. T
 For each Ticket in a group:
 
 1. Execute from the Pre-Implementation Checkpoint. Refresh exploration only when code changed since planning or the assigned worktree exposes new facts.
-2. Choose execution route. These are optional routing heuristics, not mandatory skill calls:
-   - direct execution: only when the Checkpoint recorded every required simple-Ticket predicate
+2. Revalidate and follow the Checkpoint's implementation disposition. Do not reclassify a Ticket from a file-type heuristic: docs/config-only work is direct only when all six direct-branch properties have positive current evidence. Optional routed skills may shape the bounded implementation, but they do not replace Stage Ownership:
    - unclear bug: prefer the debugging skill (`/ultra diagnosing-bugs`, or a configured alias) in AFK mode when a diagnosis loop would reduce risk
    - medium feature with clear AC: consider `/ultra tdd` in AFK mode when test-first development would help
-   - approved refactor with clear AC: implement directly, or consider `/ultra tdd` when behavior coverage is needed
+   - approved refactor with clear AC: consider `/ultra tdd` when behavior coverage is needed
    - speculative architecture change: mark `ready-for-human`
-   - docs/config-only Ticket: edit directly
 3. Implement.
 4. Verify each acceptance criterion. In a declared shared-integration sequence, a migration batch verifies its scoped mechanical acceptance; only the named final integrate-and-verify Ticket verifies the full integrated green result.
 5. Record validation evidence as a PR, commit, CI/check, tracker pointer, or final solve summary entry.
@@ -372,18 +400,18 @@ Commit rules:
 
 Review before integration:
 
-- Simple group: coordinator self-check against every acceptance criterion.
-- Medium group: two-pass review for completeness and consistency.
-- Complex or cross-cutting group: stronger multi-review when available.
+- Simple group: one compact pass against every acceptance criterion.
+- Medium group: two review lenses for completeness and consistency.
+- Complex or cross-cutting group: stronger independent review when available.
 
-For implementation groups, pin the group review range against the group branch base before reviewing. Treat the following as review lenses, not mandatory output sections. Report real findings under the relevant axis:
+For implementation groups, pin the group review range against the group branch base before reviewing. Follow and revalidate the Checkpoint's independent-review disposition. Treat the following as review lenses, not mandatory output sections. Report real findings under the relevant axis:
 
 - Spec: compare the committed group diff with the originating Ticket body, acceptance criteria, PRD, or Agent Brief. Flag missing requirements, partial implementations, scope creep, and behavior that appears wrong against the spec.
 - Standards: compare the committed group diff with documented repo standards, project conventions, ADRs, and nearby code patterns. Flag hard violations separately from judgment calls.
 
 Also check supporting engineering risks only when relevant to the changed files or risk: side effects and regression risk, test/validation coverage, and dependency or compatibility concerns.
 
-Fix blocking review findings before integration, then commit the fixes to the relevant group branch with the same split-commit rules. If a finding requires human judgment, mark the Ticket `ready-for-human`, remove or retain `solve-in-progress` according to resumability, and exclude it from merge gates.
+Classify every finding first by **Repairability**, then by **Decision Ownership**. Severity labels P0-P3 rank impact only; they never decide whether the Agent fixes a finding. Fix every in-scope P0-P3 finding whose repair is derivable from the approved Ticket, current code, and repository policy, rerun affected validation, and repeat the affected review. A clearly out-of-scope, non-blocking finding may become a follow-up. Reserve user input for genuinely human-owned scope, product, architecture, ownership, release, data, security, or significant UX choices. Any unresolved acceptance-affecting finding blocks candidate handoff and routes the Attempt to the appropriate recovery outcome regardless of severity.
 
 ### 7. Integrate
 
@@ -404,11 +432,12 @@ The integration stage exists to catch hidden coupling between parallel work: sha
 
 ### 8. Final Validate
 
-Run the repo-appropriate validation commands in the integration worktree. Prefer the project's documented commands; otherwise use the narrowest meaningful test/build/lint set first and expand when risk requires it.
+Follow and revalidate the Checkpoint's verification disposition, then run the repo-appropriate validation commands in the integration worktree. The root owns the final validation conclusion even when a bounded verification pass is delegated. Prefer the project's documented commands; otherwise use the narrowest meaningful test/build/lint set first and expand when risk requires it.
 
 If final validation passes:
 
 - ensure the integration worktree is clean and all intended changes are committed
+- have the root re-read the integrated candidate, claimed Tickets, and validation evidence instead of accepting group summaries as final evidence
 - capture the landing `base`, `base_sha`, candidate `head`, `head_sha`, Ticket paths, worktree path, checks status, validation evidence, rollout/config disposition, and cleanup ownership for solve record creation
 - proceed to finalization before marking linked Tickets completed
 
@@ -427,7 +456,7 @@ When a blocked, needs-info, ready-for-human, abandoned, superseded, or retained-
 
 ### 8.4 Post-Execution Review
 
-After final validation and before Outcome Finalization, review the integrated candidate against the claimed Tickets, acceptance criteria, source Specs, approved decisions, optional Agent Briefs, applicable living Execution Digests, repository standards, side effects, validation evidence, and receipt readiness. Use reviewer subagents when that improves coverage; otherwise run the same review in the main agent.
+After final validation and before Outcome Finalization, the root re-reads and reviews the integrated candidate against the claimed Tickets, acceptance criteria, source Specs, approved decisions, optional Agent Briefs, applicable living Execution Digests, repository standards, side effects, validation evidence, and receipt readiness. Follow and revalidate the Checkpoint's independent-review disposition: bias independent review toward suitable read-only subagents when available, using the documented root exceptions only when their current evidence still holds. A subagent summary supplements but never replaces the root's integrated-candidate read.
 
 Check for:
 
@@ -438,7 +467,7 @@ Check for:
 - validation gaps, unavailable required checks, or missing manual gates
 - solve-record evidence that would be incomplete or misleading
 
-Fix actionable findings directly, rerun the relevant validation, and repeat Post-Execution Review on the corrected candidate. If a finding prevents a finished candidate and cannot be resolved without human input, record the blocker on the Ticket and set the Ticket to `ready-for-human` or `needs-info`. Do not create a **candidate** solve record for that Ticket. During Outcome Finalization, create a recovery receipt when the stopped Attempt leaves meaningful decision, evidence, or retained-resource context; a transient Attempt that is fully cleaned up stays recordless. If the candidate is finished but still has human acceptance, merge review, rollout approval, or another manual gate, keep the Ticket completed and record the gate in the solve record.
+Apply the same Repairability and Decision Ownership rules as group review. Fix every derivable in-scope finding across P0-P3, rerun the relevant validation, and repeat Post-Execution Review on the corrected candidate. Escalate only genuinely human-owned choices. A clearly out-of-scope non-blocking finding may become a follow-up, but any unresolved acceptance-affecting finding blocks candidate handoff and routes the Attempt to the appropriate recovery outcome regardless of severity. Do not create a **candidate** solve record for that Ticket. During Outcome Finalization, create a recovery receipt when the stopped Attempt leaves meaningful decision, evidence, or retained-resource context; a transient Attempt that is fully cleaned up stays recordless. If the candidate is finished but still has human acceptance, merge review, rollout approval, or another manual gate, keep the Ticket completed and record the gate in the solve record.
 
 Post-Execution Review is complete when no fixable findings remain, unresolved state-relevant residue is routed to the Ticket or solve record, and every record-worthy Digest item is ready to distill into the applicable outcome section.
 
@@ -481,6 +510,8 @@ Create a `candidate` receipt only after a finished, reviewable merge candidate e
 - passed Post-Execution Review
 - merge-gate and rollout/config dispositions
 - worktree and cleanup resource notes
+
+Autonomous review closure can satisfy this candidate gate, but it grants no merge or landing authority. Merge or land still requires `--auto-merge`, equivalent explicit user wording, or an explicit repository policy.
 
 Claim-time state, an in-progress Attempt, missing requirements, failed required checks, or an unresolved finding that prevents a finished candidate cannot produce a candidate receipt. A finished candidate awaiting human acceptance, merge review, rollout approval, or another manual gate remains a candidate: set `state: open`, set `## Merge` to `manual required`, and keep the Ticket `completed`.
 
