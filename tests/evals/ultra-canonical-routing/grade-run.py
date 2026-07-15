@@ -11,12 +11,12 @@ import sys
 
 
 COMMON_EXPECTED = {
-    "01-to-spec-bounded": {"requested_route": "to-spec", "resolved_profile": "to-spec", "code": True, "research": False, "review": False, "human_choice": False, "review_iterations": 0, "evidence": "| to-spec | yes | cond | cond | — |"},
+    "01-to-spec-bounded": {"requested_route": "to-spec", "resolved_profile": "to-spec", "code": False, "research": False, "review": False, "human_choice": False, "review_iterations": 0, "evidence": "Repository exploration is conditional `target-native`"},
     "02-to-spec-high-risk": {"requested_route": "to-spec", "resolved_profile": "to-spec", "code": True, "research": False, "review": True, "human_choice": False, "review_iterations": 1, "evidence": "The Spec is large, ambiguous, cross-system, or high-risk"},
-    "03-to-tickets-local": {"requested_route": "to-tickets", "resolved_profile": "to-tickets", "code": True, "research": False, "review": True, "human_choice": False, "review_iterations": 1, "evidence": "| to-tickets | yes | cond | yes | — |"},
-    "04-to-tickets-external-fact": {"requested_route": "to-tickets", "resolved_profile": "to-tickets", "code": True, "research": True, "review": True, "human_choice": False, "review_iterations": 1, "evidence": "A source-verifiable external fact directly determines an acceptance criterion or blocker edge"},
-    "05-review-fix": {"requested_route": "to-tickets", "resolved_profile": "to-tickets", "code": None, "research": False, "review": True, "human_choice": False, "review_iterations": 2, "evidence": "The main Agent fixes every finding derivable from approved context and current code"},
-    "06-human-owned-choice": {"requested_route": "to-tickets", "resolved_profile": "to-tickets", "code": None, "research": False, "review": True, "human_choice": True, "review_iterations": 1, "evidence": "Ask the user only for an unresolved scope, product-semantic, ownership, release-policy"},
+    "03-to-tickets-local": {"requested_route": "to-tickets", "resolved_profile": "to-tickets", "code": False, "research": False, "review": True, "human_choice": False, "review_iterations": 1, "evidence": "Always review the complete Ticket set once"},
+    "04-to-tickets-external-fact": {"requested_route": "to-tickets", "resolved_profile": "to-tickets", "code": False, "research": True, "review": True, "human_choice": False, "review_iterations": 1, "evidence": "A source-verifiable external fact directly determines an acceptance criterion or blocker edge"},
+    "05-review-fix": {"requested_route": "to-tickets", "resolved_profile": "to-tickets", "code": None, "research": False, "review": True, "human_choice": False, "review_iterations": 2, "evidence": "The main Agent fixes every derivable finding in those same artifacts"},
+    "06-human-owned-choice": {"requested_route": "to-tickets", "resolved_profile": "to-tickets", "code": None, "research": False, "review": True, "human_choice": True, "review_iterations": 1, "evidence": "Ask only for unresolved human-owned scope, product/API/data/security/architecture/significant-UX, ownership, release-policy"},
 }
 
 LEGACY_BRIDGE_EXPECTED = {
