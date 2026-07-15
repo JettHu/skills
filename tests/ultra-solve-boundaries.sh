@@ -73,13 +73,51 @@ for provider_name in approved_provider_native_names:
     approved_legacy_spans.extend(match.span() for match in re.finditer(re.escape(provider_name), solve))
 
 unapproved_legacy_terms = []
-legacy_term = re.compile(
-    r"(?i)(?<![A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*issues?(?:[_-][A-Za-z0-9]+)*(?![A-Za-z0-9])"
-)
-for match in legacy_term.finditer(solve):
-    if any(start <= match.start() and match.end() <= end for start, end in approved_legacy_spans):
+identifier_token = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
+legacy_piece = re.compile(r"issues?", flags=re.IGNORECASE)
+
+
+def legacy_term_spans(text):
+    for token_match in identifier_token.finditer(text):
+        token = token_match.group()
+        for piece in legacy_piece.finditer(token):
+            raw = piece.group()
+            before = token[piece.start() - 1] if piece.start() else ""
+            after = token[piece.end()] if piece.end() < len(token) else ""
+            left_boundary = (
+                not before
+                or before in "_-"
+                or (raw[0].isupper() and (before.islower() or before.isdigit()))
+                or (raw in {"Issue", "Issues"} and before.isupper())
+            )
+            right_boundary = not after or after in "_-" or after.isupper()
+            if left_boundary and right_boundary:
+                start = token_match.start() + piece.start()
+                yield start, start + len(raw)
+
+
+for legacy_identifier in (
+    "issue",
+    "issues",
+    "issue_id",
+    "issue-id",
+    "issueId",
+    "IssueTracker",
+    "issuesPath",
+    "legacyIssueId",
+    "readIssue",
+):
+    assert list(legacy_term_spans(legacy_identifier)), (
+        f"legacy Ticket identifier escaped structural detection: {legacy_identifier}"
+    )
+for unrelated_word in ("issuer", "issued", "tissue", "issuerId", "TissueTracker"):
+    assert not list(legacy_term_spans(unrelated_word)), (
+        f"unrelated word triggered legacy Ticket detection: {unrelated_word}"
+    )
+for match_start, match_end in legacy_term_spans(solve):
+    if any(start <= match_start and match_end <= end for start, end in approved_legacy_spans):
         continue
-    line = solve.count("\n", 0, match.start()) + 1
+    line = solve.count("\n", 0, match_start) + 1
     excerpt = solve.splitlines()[line - 1].strip()
     unapproved_legacy_terms.append(f"line {line}: {excerpt}")
 assert not unapproved_legacy_terms, (
