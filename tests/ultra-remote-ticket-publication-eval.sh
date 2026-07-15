@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-PREPARE="$ROOT/.evals/ultra-remote-ticket-publication/scripts/prepare-fixture.py"
-GRADER="$ROOT/.evals/ultra-remote-ticket-publication/scripts/grade-run.py"
+PREPARE="$ROOT/tests/evals/ultra-remote-ticket-publication/prepare-fixture.py"
+GRADER="$ROOT/tests/evals/ultra-remote-ticket-publication/grade-run.py"
 ADAPTER="$ROOT/skills/engineering/ultra/scripts/remote_ticket_publication.py"
 TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT

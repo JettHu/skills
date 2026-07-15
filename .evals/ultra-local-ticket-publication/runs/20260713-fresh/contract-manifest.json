@@ -1,8 +1,0 @@
-{
-  "inputs": {
-    "skills/engineering/ultra/SKILL.md": "89c82a4330cfc9727a20407018223082b7b3bd44e469fe227407a69cf0e6cba6",
-    "skills/engineering/ultra/references/ticket-review-publication.md": "c626632e408488c91395330aad9a593206afaeccc2bba6b0c7d1ad4fb85c4366",
-    "skills/engineering/ultra/scripts/local_ticket_publication.py": "a0a2d667336bdc5ceb249b89bbc0b5a604a4d365035612b51ff1d7c8b2e74fc1"
-  },
-  "contract_sha256": "9e82cf83a73ccf2fa55d3aac7acbc926e2c0746f7f750513f164f685606c61e4"
-}

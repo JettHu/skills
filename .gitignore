@@ -6,3 +6,7 @@ tmp/
 node_modules/
 .scratch/
 .evals/
+CONTEXT.md
+docs/adr/
+docs/prd/
+docs/agents/

@@ -23,9 +23,8 @@ wrapper = (repo / "skills/engineering/ultra-to-tickets/SKILL.md").read_text(enco
 record_format = (repo / "skills/engineering/solve-records/references/record-format.md").read_text(
     encoding="utf-8"
 )
-eval_plan = (repo / ".evals/ultra-solve-afk-safe-planning/20260708-model-adherence-eval-plan.md").read_text(
-    encoding="utf-8"
-)
+eval_prepare = repo / "tests/evals/ultra-solve-afk-safe-planning/prepare-fixture.py"
+eval_grader = repo / "tests/evals/ultra-solve-afk-safe-planning/grade-run.py"
 
 approved_storage_literals = {
     ".scratch/<feature>/issues/",
@@ -254,19 +253,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert unsafe == hashlib.sha256(b"ticket://feature/unsafe key").hexdigest()
     assert "/" not in unsafe
 
-for scenario in (
-    "Simple direct execution",
-    "Non-trivial adaptive fan-out",
-    "Pre-Edit Plan Review",
-    "First-deviation Digest creation",
-    "Stale Agent Brief hint",
-    "Handoff distillation",
-    "No unnecessary Digest residue",
-):
-    assert scenario in eval_plan, f"model-adherence scenario missing: {scenario}"
-assert "A real model-adherence run was started" in eval_plan
-assert "Ticket, Digest, and Solve Record state" in eval_plan
-assert (repo / ".evals/ultra-solve-afk-safe-planning/20260713-model-adherence-eval.md").is_file()
+assert eval_prepare.is_file(), "tracked eval prepare harness is missing"
+assert eval_grader.is_file(), "tracked final-state grader is missing"
 
 print("ultra solve boundary fixture passed")
 PY

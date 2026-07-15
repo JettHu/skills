@@ -10,14 +10,24 @@ from pathlib import Path
 import sys
 
 
-EXPECTED = {
+COMMON_EXPECTED = {
     "01-to-spec-bounded": {"requested_route": "to-spec", "resolved_profile": "to-spec", "code": True, "research": False, "review": False, "human_choice": False, "review_iterations": 0, "evidence": "| to-spec | yes | cond | cond | — |"},
     "02-to-spec-high-risk": {"requested_route": "to-spec", "resolved_profile": "to-spec", "code": True, "research": False, "review": True, "human_choice": False, "review_iterations": 1, "evidence": "The Spec is large, ambiguous, cross-system, or high-risk"},
     "03-to-tickets-local": {"requested_route": "to-tickets", "resolved_profile": "to-tickets", "code": True, "research": False, "review": True, "human_choice": False, "review_iterations": 1, "evidence": "| to-tickets | yes | cond | yes | — |"},
     "04-to-tickets-external-fact": {"requested_route": "to-tickets", "resolved_profile": "to-tickets", "code": True, "research": True, "review": True, "human_choice": False, "review_iterations": 1, "evidence": "A source-verifiable external fact directly determines an acceptance criterion or blocker edge"},
     "05-review-fix": {"requested_route": "to-tickets", "resolved_profile": "to-tickets", "code": None, "research": False, "review": True, "human_choice": False, "review_iterations": 2, "evidence": "The main Agent fixes every finding derivable from approved context and current code"},
     "06-human-owned-choice": {"requested_route": "to-tickets", "resolved_profile": "to-tickets", "code": None, "research": False, "review": True, "human_choice": True, "review_iterations": 1, "evidence": "Ask the user only for an unresolved scope, product-semantic, ownership, release-policy"},
-    "07-legacy-bridge": {"requested_route": "to-prd", "resolved_profile": "to-spec", "code": True, "research": False, "review": False, "human_choice": False, "review_iterations": 0, "evidence": "| to-prd | to-spec | Temporary internal bridge"},
+}
+
+LEGACY_BRIDGE_EXPECTED = {
+    "requested_route": "to-prd",
+    "resolved_profile": "to-spec",
+    "code": True,
+    "research": False,
+    "review": False,
+    "human_choice": False,
+    "review_iterations": 0,
+    "evidence": "| to-prd | to-spec | Temporary internal bridge",
 }
 
 
@@ -37,6 +47,12 @@ def main() -> None:
     output = args.output.resolve()
     scenarios = read_json(output / "scenarios.json")
     manifest = read_json(output / "contract-manifest.json")
+    phase = manifest.get("phase")
+    if phase not in {"expand", "contract"}:
+        raise SystemExit("contract manifest has an invalid or missing phase")
+    expected_by_id = dict(COMMON_EXPECTED)
+    if phase == "expand":
+        expected_by_id["07-legacy-bridge"] = LEGACY_BRIDGE_EXPECTED
     computed_inputs = {
         relative: sha256((output / "skill-input" / relative).read_text(encoding="utf-8"))
         for relative in manifest["inputs"]
@@ -50,7 +66,7 @@ def main() -> None:
         failures.append("contract manifest does not match supplied runbook/profile input")
 
     scenario_ids = [scenario.get("id") for scenario in scenarios]
-    expected_ids = set(EXPECTED)
+    expected_ids = set(expected_by_id)
     if len(scenario_ids) != len(set(scenario_ids)) or set(scenario_ids) != expected_ids:
         missing = sorted(expected_ids - set(scenario_ids))
         unexpected = sorted(set(scenario_ids) - expected_ids, key=lambda value: str(value))
@@ -60,7 +76,7 @@ def main() -> None:
 
     for scenario in scenarios:
         scenario_id = scenario["id"]
-        if scenario_id not in EXPECTED:
+        if scenario_id not in expected_by_id:
             continue
         root = output / "scenarios" / scenario_id
         decision_path = root / "routing-decision.json"
@@ -68,7 +84,7 @@ def main() -> None:
             failures.append(f"{scenario_id}: missing routing-decision.json")
             continue
         decision = read_json(decision_path)
-        expected = EXPECTED[scenario_id]
+        expected = expected_by_id[scenario_id]
         expected_keys = set(expected) | {"contract_sha256"}
         normalized_decision = dict(decision)
         requested_route = normalized_decision.get("requested_route")

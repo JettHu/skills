@@ -17,9 +17,6 @@ repo = Path(sys.argv[1])
 phase = sys.argv[2]
 core = (repo / "skills/engineering/ultra/SKILL.md").read_text(encoding="utf-8")
 profiles = (repo / "skills/engineering/ultra/PROFILES.md").read_text(encoding="utf-8")
-eval_record = (repo / ".evals/ultra-canonical-routing/20260713-model-adherence.md").read_text(
-    encoding="utf-8"
-)
 
 for text in (
     "Examples — /ultra to-spec, /ultra diagnosing-bugs, /ultra to-tickets, /ultra solve --all.",
@@ -64,39 +61,20 @@ else:
         assert row not in profiles, f"contracted catalog retained bridge: {row}"
 
 for path in (
-    repo / ".evals/ultra-canonical-routing/scripts/prepare-fixture.py",
-    repo / ".evals/ultra-canonical-routing/scripts/grade-run.py",
+    repo / "tests/evals/ultra-canonical-routing/prepare-fixture.py",
+    repo / "tests/evals/ultra-canonical-routing/grade-run.py",
 ):
     assert path.is_file(), f"model-adherence fixture surface missing: {path.relative_to(repo)}"
-
-for scenario in (
-    "01-to-spec-bounded",
-    "02-to-spec-high-risk",
-    "03-to-tickets-local",
-    "04-to-tickets-external-fact",
-    "05-review-fix",
-    "06-human-owned-choice",
-    "07-legacy-bridge",
-):
-    assert scenario in eval_record, f"model-adherence record missing scenario: {scenario}"
-assert "final-state grader" in eval_record, "eval record must name final-state grading"
 
 print(f"ultra canonical routing fixture passed ({phase[2:]} phase)")
 PY
 
-if [[ "$PHASE" == "--contract" ]]; then
-  python3 "$REPO_ROOT/.evals/ultra-canonical-routing/scripts/grade-run.py" \
-    --output "$REPO_ROOT/.evals/ultra-canonical-routing/runs/20260713-trace-fresh" \
-    --json >/dev/null
-  echo "retained expand-phase canonical routing eval passed"
-  exit 0
-fi
-
 fixture_root="$(mktemp -d)"
 trap 'rm -rf "$fixture_root"' EXIT
-python3 "$REPO_ROOT/.evals/ultra-canonical-routing/scripts/prepare-fixture.py" \
-  --source "$REPO_ROOT" --output "$fixture_root" >/dev/null
-python3 - "$REPO_ROOT" "$fixture_root" <<'PY'
+phase_name="${PHASE#--}"
+python3 "$REPO_ROOT/tests/evals/ultra-canonical-routing/prepare-fixture.py" \
+  --source "$REPO_ROOT" --output "$fixture_root" --phase "$phase_name" >/dev/null
+python3 - "$REPO_ROOT" "$fixture_root" "$phase_name" <<'PY'
 import importlib.util
 import json
 from pathlib import Path
@@ -105,14 +83,18 @@ import sys
 
 repo = Path(sys.argv[1])
 fixture = Path(sys.argv[2])
-grader_path = repo / ".evals/ultra-canonical-routing/scripts/grade-run.py"
+phase = sys.argv[3]
+grader_path = repo / "tests/evals/ultra-canonical-routing/grade-run.py"
 spec = importlib.util.spec_from_file_location("canonical_routing_grader", grader_path)
 grader = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(grader)
 
 manifest = json.loads((fixture / "contract-manifest.json").read_text(encoding="utf-8"))
-for scenario_id, expected in grader.EXPECTED.items():
+expected_by_id = dict(grader.COMMON_EXPECTED)
+if phase == "expand":
+    expected_by_id["07-legacy-bridge"] = grader.LEGACY_BRIDGE_EXPECTED
+for scenario_id, expected in expected_by_id.items():
     decision = {key: value for key, value in expected.items() if key != "evidence"}
     decision["contract_sha256"] = manifest["contract_sha256"]
     decision["evidence"] = [expected["evidence"]]
@@ -142,8 +124,9 @@ assert subprocess.run(command, check=False, **quiet).returncode == 0, "valid rou
 scenarios_path = fixture / "scenarios.json"
 original_scenarios = scenarios_path.read_text(encoding="utf-8")
 scenarios = json.loads(original_scenarios)
+removed_scenario = "07-legacy-bridge" if phase == "expand" else "06-human-owned-choice"
 scenarios_path.write_text(
-    json.dumps([scenario for scenario in scenarios if scenario["id"] != "07-legacy-bridge"], indent=2)
+    json.dumps([scenario for scenario in scenarios if scenario["id"] != removed_scenario], indent=2)
     + "\n",
     encoding="utf-8",
 )

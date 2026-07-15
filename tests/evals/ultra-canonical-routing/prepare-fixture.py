@@ -10,7 +10,7 @@ from pathlib import Path
 import shutil
 
 
-SCENARIOS = [
+COMMON_SCENARIOS = [
     {
         "id": "01-to-spec-bounded",
         "target": "to-spec",
@@ -43,12 +43,13 @@ SCENARIOS = [
         "target": "to-tickets",
         "task": "The approved Spec leaves the release-owner decision unresolved. Preserve the artifact surface and escalate that human-owned choice instead of inventing a blocker edge.",
     },
-    {
-        "id": "07-legacy-bridge",
-        "target": "to-prd",
-        "task": "Use the still-promoted legacy wrapper route for a bounded internal rename. It has no external or high-risk condition.",
-    },
 ]
+
+LEGACY_BRIDGE_SCENARIO = {
+    "id": "07-legacy-bridge",
+    "target": "to-prd",
+    "task": "Use the still-promoted legacy wrapper route for a bounded internal rename. It has no external or high-risk condition.",
+}
 
 
 def write(path: Path, text: str) -> None:
@@ -64,6 +65,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--phase", choices=("expand", "contract"), default="contract")
     args = parser.parse_args()
     output = args.output.resolve()
     source = args.source.resolve()
@@ -85,11 +87,22 @@ def main() -> None:
     contract_sha256 = sha256(json.dumps(contract_inputs, sort_keys=True))
     write(
         output / "contract-manifest.json",
-        json.dumps({"inputs": contract_inputs, "contract_sha256": contract_sha256}, indent=2) + "\n",
+        json.dumps(
+            {
+                "inputs": contract_inputs,
+                "contract_sha256": contract_sha256,
+                "phase": args.phase,
+            },
+            indent=2,
+        )
+        + "\n",
     )
 
-    write(output / "scenarios.json", json.dumps(SCENARIOS, indent=2) + "\n")
-    for scenario in SCENARIOS:
+    scenarios = list(COMMON_SCENARIOS)
+    if args.phase == "expand":
+        scenarios.append(LEGACY_BRIDGE_SCENARIO)
+    write(output / "scenarios.json", json.dumps(scenarios, indent=2) + "\n")
+    for scenario in scenarios:
         root = output / "scenarios" / scenario["id"]
         root.mkdir(parents=True)
         write(root / "TASK.md", f"# {scenario['id']}\n\nRequested route: `/{'ultra ' + scenario['target']}`\n\n{scenario['task']}\n")

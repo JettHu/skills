@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-PREPARE="$ROOT/.evals/ultra-solve-expand-contract/scripts/prepare-fixture.py"
-GRADER="$ROOT/.evals/ultra-solve-expand-contract/scripts/grade-run.py"
+PREPARE="$ROOT/tests/evals/ultra-solve-expand-contract/prepare-fixture.py"
+GRADER="$ROOT/tests/evals/ultra-solve-expand-contract/grade-run.py"
 TMPDIR_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_ROOT"' EXIT
 

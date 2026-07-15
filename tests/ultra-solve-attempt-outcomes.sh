@@ -19,7 +19,7 @@ readme = (root / "README.md").read_text(encoding="utf-8")
 ultra_meta = (root / "skills/engineering/ultra/agents/openai.yaml").read_text(encoding="utf-8")
 wrapper = (root / "skills/engineering/ultra-solve/SKILL.md").read_text(encoding="utf-8")
 wrapper_meta = (root / "skills/engineering/ultra-solve/agents/openai.yaml").read_text(encoding="utf-8")
-eval_record = (root / ".evals/ultra-solve-afk-safe-planning/20260713-attempt-outcomes-model-adherence.md").read_text(encoding="utf-8")
+eval_fixture = root / "tests/evals/solve-records-outcomes/model-adherence-fixture.py"
 
 assert "### 8.5 Outcome Finalization" in solve
 assert "Every Attempt that stops or hands off routes through this decision once." in solve
@@ -50,13 +50,7 @@ for text in (agents, readme, ultra_meta, wrapper, wrapper_meta):
     assert "outcome" in text.lower()
 assert "Claim itself creates no receipt" in agents
 assert "Claim itself creates no receipt" in wrapper_meta
-for scenario in ("Candidate success", "Retained failed Attempt", "Same-context resume"):
-    assert scenario in eval_record
-assert "Treatment ref: `cd717cbbe77aab699e784116096e0bdc99bc9edc`" in eval_record
-assert "Model id | `unavailable`" in eval_record
-assert "Reasoning setting | `unavailable`" in eval_record
-assert "Literal output:" in eval_record
-assert eval_record.count('"failed": []') == 3
+assert eval_fixture.is_file(), "reusable outcome eval fixture must remain in the tracked test surface"
 
 tool_path = root / "skills/engineering/solve-records/scripts/solve-records.py"
 spec = importlib.util.spec_from_file_location("ultra_outcome_fixture", tool_path)

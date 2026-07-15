@@ -1,8 +1,0 @@
-{
-  "scenario": "01-derivable-review-fix",
-  "action": "promote",
-  "human_choice": null,
-  "review_iterations": 2,
-  "contract_sha256": "9e82cf83a73ccf2fa55d3aac7acbc926e2c0746f7f750513f164f685606c61e4",
-  "evidence": "Re-run the affected review after each repair; complete only when no fixable finding or unresolved human-owned choice remains."
-}

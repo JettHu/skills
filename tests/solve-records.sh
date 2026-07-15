@@ -2209,7 +2209,7 @@ assert "landing sha" in candidate_gates
 print("solve-records outcome fixture passed")
 PY
 
-MODEL_EVAL_FIXTURE="$REPO_ROOT/.evals/solve-records-outcomes/model-adherence-fixture.py"
+MODEL_EVAL_FIXTURE="$REPO_ROOT/tests/evals/solve-records-outcomes/model-adherence-fixture.py"
 # This is a synthetic local-attestation regression, not a model-adherence run.
 MODEL_EVAL_REPO="$TMPDIR_ROOT/model-attestation-project"
 MODEL_EVAL_SNAPSHOT="$TMPDIR_ROOT/model-attestation-before.json"

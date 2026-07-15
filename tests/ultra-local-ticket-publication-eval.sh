@@ -2,8 +2,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-PREPARE="$REPO_ROOT/.evals/ultra-local-ticket-publication/scripts/prepare-fixture.py"
-GRADER="$REPO_ROOT/.evals/ultra-local-ticket-publication/scripts/grade-run.py"
+PREPARE="$REPO_ROOT/tests/evals/ultra-local-ticket-publication/prepare-fixture.py"
+GRADER="$REPO_ROOT/tests/evals/ultra-local-ticket-publication/grade-run.py"
 TMPDIR_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ultra-local-publication-eval.XXXXXX")"
 trap 'rm -rf "$TMPDIR_ROOT"' EXIT
 

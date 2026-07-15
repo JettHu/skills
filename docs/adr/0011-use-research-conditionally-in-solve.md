@@ -1,3 +1,0 @@
-# Use Research Conditionally in Solve
-
-`/ultra solve` should preserve the original `/ultra` research principle: external research and web search are conditional tools, not a fixed preflight ritual. During the Pre-Implementation Checkpoint, use them when external APIs, frameworks, standards, platform behavior, unfamiliar domains, or explicit user instructions make local ticket and code context insufficient; otherwise prefer the ticket, repository, and project conventions as the primary facts. Research output should be compressed, source-linked, and limited to facts that affect implementation, validation, or risk.

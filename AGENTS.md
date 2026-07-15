@@ -5,9 +5,9 @@ This repository is a skill catalog. Keep skill directories lean, keep reusable v
 ## Source Of Truth
 
 - Installable skills live under `skills/<category>/<skill-name>/`.
-- Repository checks live under `scripts/` and `tests/`.
+- Repository checks live under `scripts/` and `tests/`; reusable model-eval harnesses live under `tests/evals/`.
 - `.scratch/` is local issue and design working state; it is not committed by default.
-- `.evals/` stores durable validation and eval records that should survive beyond a single chat session.
+- `.evals/` stores local model-run evidence that should survive beyond a single chat session without becoming catalog content or a CI dependency.
 
 ## Catalog Buckets And Promotion
 
@@ -40,11 +40,11 @@ Run deterministic tests for ordinary skill edits:
 
 Model evals are heavier adherence checks, not default CI. Run them only when explicitly requested by the user or when a change materially affects model behavior, such as core `ultra` routing, enhancement profiles, multi-agent orchestration, merge safety policy, or solve-record finalization semantics.
 
-For small wrapper wording, README, manifest, deterministic fixture, or eval-record documentation changes, prefer local tests and skip model evals unless the user asks.
+For small wrapper wording, README, manifest, deterministic fixture, eval-harness, or local eval-record documentation changes, prefer local tests and skip model evals unless the user asks.
 
 ## Eval Records
 
-When validation work is substantial, write a short durable record under `.evals/<skill-or-feature>/`.
+When validation work is substantial, write a short local record under `.evals/<skill-or-feature>/`. Keep executable prepare/grade logic under `tests/evals/<skill-or-feature>/` so a fresh clone can validate the harness without historical run output.
 
 Distinguish these evidence types clearly:
 
@@ -52,7 +52,7 @@ Distinguish these evidence types clearly:
 - Model adherence eval: one or more real model runs through realistic prompts, graded by final repo state rather than response prose.
 - Ablation: a comparison showing which guard or instruction is load-bearing.
 
-An eval should be executable by one Agent session end to end: create isolated temporary repos or worktrees, run the skill through realistic prompts, and grade final files, issue state, Git refs, solve records, and cleanup effects. Do not claim a multi-model or multi-thinking eval was run unless there is an accompanying `.evals/` record with the tested models, settings, prompts, and grader results.
+An eval should be executable by one Agent session end to end: create isolated temporary repos or worktrees, run the skill through realistic prompts, and grade final files, issue state, Git refs, solve records, and cleanup effects. CI and deterministic tests must not depend on historical `.evals/` output. Do not claim a multi-model or multi-thinking eval was run unless there is an accompanying local `.evals/` record with the tested models, settings, prompts, and grader results.
 
 ## Ultra And Solve Records
 
@@ -65,4 +65,4 @@ Do not split `skills/engineering/ultra/solve.md` just because it is large. Befor
 - The extracted reference has one clear owning concept, a named read condition, and either multiple consumers or a large conditional section that ordinary runs can skip.
 - `solve.md` remains the coordinator runbook; extracted files do not create a second state machine or alternate merge policy.
 - `$solve-records` and `/ultra solve` still agree on record creation, live verification, merge gates, unavailable-check handling, and cleanup safety.
-- Deterministic fixtures and `scripts/validate-skills.sh` pass after the split. If the split changes model behavior around orchestration, merge policy, or solve-record finalization, add or update an `.evals/` record.
+- Deterministic fixtures and `scripts/validate-skills.sh` pass after the split. If the split changes model behavior around orchestration, merge policy, or solve-record finalization, add or update a local `.evals/` record.
