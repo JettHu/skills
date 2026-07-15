@@ -53,6 +53,16 @@ def candidate_dir(repo: Path, receipt: dict | None) -> Path:
     return repo
 
 
+def dirty_paths(repo: Path) -> list[str]:
+    paths = []
+    for line in git(repo, "status", "--porcelain=v1").stdout.splitlines():
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        paths.append(path.rstrip("/"))
+    return paths
+
+
 def evidence_file(repo: Path, candidate: Path) -> Path:
     for path in (candidate / "eval/stage-evidence.json", repo / "eval/stage-evidence.json"):
         if path.is_file():
@@ -87,6 +97,7 @@ def grade(repo: Path) -> Grade:
     result = Grade(config["scenario"])
     ticket = read(repo / config["issue_path"])
     result.check(status(ticket) == expected["status"], f"Ticket status is {expected['status']}")
+    result.check("solve-in-progress" not in ticket.lower(), "Ticket Claim is released")
 
     helper = receipt_helper(repo)
     receipts = [record for record in helper.discover(repo) if config["issue_path"] in record.get("issues", [])]
@@ -95,18 +106,37 @@ def grade(repo: Path) -> Grade:
     if receipt:
         result.check(not receipt.get("malformed"), "receipt passes canonical parser")
         result.check(receipt.get("outcome") == expected["outcome"], f"receipt outcome is {expected['outcome']}")
+        result.check(receipt.get("state") == "open", "receipt remains open for explicit landing or recovery handling")
+        result.check(ticket.count(Path(receipt["path"]).name) == 1, "Ticket links the receipt exactly once")
         if expected["outcome"] == "candidate":
             result.check(receipt.get("base") == "main", "candidate landing branch remains main")
+            base_sha = git(repo, "rev-parse", "eval-base").stdout.strip()
+            live_main = git(repo, "rev-parse", "main").stdout.strip()
+            result.check(receipt.get("base_sha") == base_sha == live_main, "candidate base SHA matches live unchanged main")
+            head = receipt.get("head", "")
+            head_sha = receipt.get("head_sha", "")
+            live_head = git(repo, "rev-parse", f"refs/heads/{head}") if head else None
+            result.check(bool(live_head and live_head.returncode == 0 and live_head.stdout.strip() == head_sha), "candidate head SHA matches live branch")
+            result.check(receipt.get("merge") in {"ready", "manual required"}, "candidate records an explicit merge disposition")
         else:
             result.check(not any(receipt.get(key) for key in ("base", "base_sha", "head", "head_sha")), "recovery has no candidate refs")
+            result.check(not receipt.get("merge"), "recovery has no candidate merge disposition")
 
     candidate = candidate_dir(repo, receipt)
+    if receipt and expected["outcome"] == "candidate":
+        result.check(candidate.is_dir(), "candidate worktree exists")
+        result.check(git(candidate, "branch", "--show-current").stdout.strip() == receipt.get("head"), "candidate worktree branch matches receipt")
+        result.check(git(candidate, "rev-parse", "HEAD").stdout.strip() == receipt.get("head_sha"), "candidate worktree HEAD matches receipt")
     evidence_path = evidence_file(repo, candidate)
     try:
         evidence = json.loads(read(evidence_path))
     except json.JSONDecodeError:
         evidence = {}
     result.check(bool(evidence), "structured stage evidence exists")
+    if expected["outcome"] == "candidate":
+        result.check(candidate in evidence_path.resolve().parents, "candidate stage evidence comes from the retained worktree")
+    else:
+        result.check(evidence_path.resolve() == (repo / "eval/stage-evidence.json").resolve(), "recovery stage evidence comes from the invocation repository")
     result.check(evidence.get("implementation_route") == expected["route"], f"implementation route is {expected['route']}")
     result.check(evidence.get("root_exception") == expected["root_exception"], "root exception matches fixture")
     actual_events = evidence.get("events", [])
@@ -142,6 +172,10 @@ def grade(repo: Path) -> Grade:
         result.check(git(candidate, "status", "--porcelain").stdout.strip() == "", "candidate worktree is clean")
     else:
         result.check(git(repo, "diff", "eval-base", "--", "app/result.txt").stdout == "", "human-owned stop did not implement a choice")
+    allowed_dirty = [path for path in dirty_paths(repo) if not path.startswith(".scratch/")]
+    if expected["outcome"] != "candidate":
+        allowed_dirty = [path for path in allowed_dirty if path != "eval/stage-evidence.json" and path != "eval"]
+    result.check(not allowed_dirty, "invocation repository has no unexpected dirty implementation or evidence paths")
     return result
 
 

@@ -11,12 +11,25 @@ import sys
 
 root = Path(sys.argv[1])
 solve = (root / "skills/engineering/ultra/solve.md").read_text(encoding="utf-8")
+stage_grader = (root / "tests/evals/ultra-solve-stage-ownership/grade-run.py").read_text(encoding="utf-8")
 for path in (
     "tests/evals/ultra-solve-stage-ownership/prepare-fixture.py",
     "tests/evals/ultra-solve-stage-ownership/grade-run.py",
     "tests/evals/ultra-solve-stage-ownership/README.md",
 ):
     assert (root / path).is_file(), f"stage-ownership eval surface missing: {path}"
+
+for predicate in (
+    "Ticket Claim is released",
+    "Ticket links the receipt exactly once",
+    "candidate base SHA matches live unchanged main",
+    "candidate head SHA matches live branch",
+    "candidate worktree branch matches receipt",
+    "candidate worktree HEAD matches receipt",
+    "candidate records an explicit merge disposition",
+    "invocation repository has no unexpected dirty implementation or evidence paths",
+):
+    assert predicate in stage_grader, f"stage-ownership final-state grader missing: {predicate}"
 
 for predicate in (
     "## Stage Ownership",
