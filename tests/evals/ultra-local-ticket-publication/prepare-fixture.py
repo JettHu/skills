@@ -15,6 +15,7 @@ import sys
 INPUTS = (
     "skills/engineering/ultra/SKILL.md",
     "skills/engineering/ultra/references/ticket-review-publication.md",
+    "skills/engineering/ultra/scripts/ultra_tracker.py",
     "skills/engineering/ultra/scripts/local_ticket_publication.py",
     "skills/engineering/ultra/scripts/local_ticket_surface.py",
 )
@@ -124,9 +125,12 @@ and its linked Ticket Review Publication reference, then process both scenarios
 in `scenarios.json` independently. Do not read or run the grader.
 
 For each scenario, read `TASK.md`, approved inputs, and the exact formal
-`.scratch/feature/tickets.md`. Use the supplied copied adapter to re-register an
-intentional review-fix membership change and to promote only when the contract
-allows it. Write `run-decision.json` with keys `scenario`, `action`,
+`.scratch/feature/tickets.md`. Prefer the supplied copied `ultra_tracker.py`
+facade for every Local Markdown publication or Ticket operation. If that facade
+is unavailable before an operation begins, make one direct-helper handoff and
+never retry a completed operation through the other route. Re-register an
+intentional review-fix membership change and promote only when the contract
+allows it. Write `run-decision.json` with keys `scenario`, `action`, `route`,
 `human_choice`, `review_iterations`, `contract_sha256`, and `evidence` (an exact
 contract excerpt). Set `evidence` exactly to `Manual fallback is prohibited for every operation.`
 Do not ask the parent user ordinary split/blocker questions.

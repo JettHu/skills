@@ -61,7 +61,7 @@ def main() -> None:
             failures.append(f"{scenario_id}: missing run-decision.json")
             continue
         decision = read_json(decision_path)
-        required_keys = {"scenario", "action", "human_choice", "review_iterations", "contract_sha256", "evidence"}
+        required_keys = {"scenario", "action", "route", "human_choice", "review_iterations", "contract_sha256", "evidence"}
         if set(decision) != required_keys or decision.get("scenario") != scenario_id:
             failures.append(f"{scenario_id}: malformed run decision")
         if decision.get("contract_sha256") != manifest["contract_sha256"]:
@@ -96,6 +96,8 @@ def main() -> None:
                     failures.append(f"01-derivable-review-fix: missing approved validation: {label}")
             if "INVENTED-BLOCKER" in text or "RECOVERY-COMBINED" in text or (root / "confirmation.json").exists():
                 failures.append("01-derivable-review-fix: derivable finding or unnecessary confirmation remained")
+            if decision.get("route") != "facade":
+                failures.append("01-derivable-review-fix: available facade was not preferred")
         else:
             human_choice = decision.get("human_choice")
             has_human_choice = human_choice is True or (
@@ -111,6 +113,8 @@ def main() -> None:
                 failures.append("02-human-owned-choice: missing release-owner escalation evidence")
             if "solve-in-progress" in text:
                 failures.append("02-human-owned-choice: provisional Ticket acquired a Claim")
+            if decision.get("route") != "direct-helper-unavailable-facade":
+                failures.append("02-human-owned-choice: unavailable facade did not use the explicit one-time handoff")
 
     payload = {"passed": not failures, "failures": failures}
     if args.json:

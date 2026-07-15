@@ -19,6 +19,7 @@ import sys
 run = Path(sys.argv[1])
 manifest = json.loads((run / "contract-manifest.json").read_text(encoding="utf-8"))
 adapter = run / "skill-input/skills/engineering/ultra/scripts/local_ticket_publication.py"
+facade = run / "skill-input/skills/engineering/ultra/scripts/ultra_tracker.py"
 root = run / "scenarios/01-derivable-review-fix"
 repo = root / "repo"
 (repo / ".scratch/feature/tickets.md").write_text("""# Formal Tickets
@@ -49,12 +50,12 @@ Frontend recovery UI component test coverage.
 Validation: pnpm test -- recovery-ui
 <!-- ultra-ticket:end -->
 """, encoding="utf-8")
-base = [sys.executable, str(adapter), "--repo", str(repo), "--representation", "tickets-file", "--location", ".scratch/feature/tickets.md", "--run-id", "derivable-run"]
-subprocess.run([sys.executable, str(adapter), "register", "--repo", str(repo), "--representation", "tickets-file", "--location", ".scratch/feature/tickets.md", "--run-id", "derivable-run", "--allow-membership-change"], check=True, stdout=subprocess.DEVNULL)
-subprocess.run([sys.executable, str(adapter), "promote", "--repo", str(repo), "--representation", "tickets-file", "--location", ".scratch/feature/tickets.md", "--run-id", "derivable-run"], check=True, stdout=subprocess.DEVNULL)
+subprocess.run([sys.executable, str(facade), "publication", "register", "--repo", str(repo), "--location", ".scratch/feature/tickets.md", "--run-id", "derivable-run", "--allow-membership-change"], check=True, stdout=subprocess.DEVNULL)
+subprocess.run([sys.executable, str(facade), "publication", "promote", "--repo", str(repo), "--location", ".scratch/feature/tickets.md", "--run-id", "derivable-run"], check=True, stdout=subprocess.DEVNULL)
 (root / "run-decision.json").write_text(json.dumps({
     "scenario": "01-derivable-review-fix",
     "action": "fixed-and-promoted",
+    "route": "facade",
     "human_choice": False,
     "review_iterations": 2,
     "contract_sha256": manifest["contract_sha256"],
@@ -65,6 +66,7 @@ second = run / "scenarios/02-human-owned-choice"
 (second / "run-decision.json").write_text(json.dumps({
     "scenario": "02-human-owned-choice",
     "action": "stopped-for-human",
+    "route": "direct-helper-unavailable-facade",
     "human_choice": True,
     "review_iterations": 1,
     "contract_sha256": manifest["contract_sha256"],

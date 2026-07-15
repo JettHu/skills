@@ -97,6 +97,11 @@ assert direct == actual
 refusal = run(sys.executable, str(facade), "publication", "cleanup", "--repo", str(pub_facade), "--location", ".scratch/feature/issues", "--run-id", "run-1", check=False)
 assert refusal.returncode == 3
 assert json.loads(refusal.stdout)["error"]["code"] == "not-allowed"
+missing_contract = root / "missing-contract"
+missing_contract.mkdir()
+malformed_contract = run(sys.executable, str(facade), "publication", "register", "--repo", str(missing_contract), "--run-id", "run-1", check=False)
+assert malformed_contract.returncode == 4
+assert json.loads(malformed_contract.stdout)["error"]["code"] == "invalid-input-or-state"
 
 # Frontier snapshots and Claim assignments are delegated unchanged on separate identical repositories.
 frontier_direct = fixture("frontier-direct", "ready-for-agent")
@@ -110,6 +115,11 @@ facade_claim = facade_data(run(sys.executable, str(facade), "ticket", "claim", "
 assert {key: value for key, value in direct_claim.items() if key not in {"snapshot", "previous_snapshot"}} == {key: value for key, value in facade_claim.items() if key not in {"snapshot", "previous_snapshot"}}
 stale = run(sys.executable, str(facade), "ticket", "claim", "--repo", str(frontier_facade), "--expected-snapshot", actual_frontier["snapshot"], *claim_args, check=False)
 assert stale.returncode == 3 and json.loads(stale.stdout)["error"]["code"] == "not-allowed"
+invalid_claim = run(sys.executable, str(facade), "ticket", "claim", "--repo", str(frontier_facade), "--ticket-id", "A", "--expected-snapshot", "snapshot", "--branch", "solve/a", check=False)
+assert invalid_claim.returncode == 4
+invalid_claim_payload = json.loads(invalid_claim.stdout)
+assert invalid_claim_payload["operation"] == "parse"
+assert invalid_claim_payload["error"]["code"] == "invalid-input-or-state"
 
 # Solve Record inspection remains the standalone helper's data, including an empty dashboard.
 records = fixture("records", "ready-for-agent")
@@ -118,6 +128,24 @@ facade_dashboard = facade_data(run(sys.executable, str(facade), "solve-record", 
 assert direct_dashboard == facade_dashboard
 malformed = run(sys.executable, str(facade), "solve-record", "merge-gate", "--repo", str(records), "--record", "missing", check=False)
 assert malformed.returncode == 4 and json.loads(malformed.stdout)["error"]["code"] == "invalid-input-or-state"
+
+# A successful helper process can still return a non-eligible gate; preserve
+# that non-allowed outcome in the facade's exit and envelope contract.
+layout = root / "facade-layout/skills/engineering"
+layout.joinpath("ultra/scripts").mkdir(parents=True)
+layout.joinpath("solve-records/scripts").mkdir(parents=True)
+shutil.copy2(facade, layout / "ultra/scripts/ultra_tracker.py")
+(layout / "solve-records/scripts/solve-records.py").write_text(
+    "import json\nprint(json.dumps({'eligible': False, 'reasons': ['manual gate']}))\n",
+    encoding="utf-8",
+)
+ineligible_gate = run(
+    sys.executable, str(layout / "ultra/scripts/ultra_tracker.py"),
+    "solve-record", "merge-gate", "--repo", str(records), "--record", "fixture", check=False,
+)
+assert ineligible_gate.returncode == 3
+ineligible_payload = json.loads(ineligible_gate.stdout)
+assert ineligible_payload["error"]["code"] == "not-allowed"
 
 # Missing bundled helpers are explicit unavailability, not copied behavior.
 isolated = root / "isolated/scripts"

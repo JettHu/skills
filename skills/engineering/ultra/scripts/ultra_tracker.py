@@ -24,6 +24,15 @@ class FacadeError(RuntimeError):
     """A facade input or configured route is unavailable or invalid."""
 
 
+class FacadeArgumentError(FacadeError):
+    """The facade command shape is invalid before delegation begins."""
+
+
+class FacadeArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise FacadeArgumentError(message)
+
+
 def envelope(operation: str, *, data: Any = None, error: dict[str, str] | None = None) -> None:
     result: dict[str, Any] = {"schema": SCHEMA, "operation": operation, "ok": error is None}
     if error is None:
@@ -87,6 +96,14 @@ def refusal(detail: str) -> bool:
     )
 
 
+def payload_refusal(helper: str, payload: Any) -> bool:
+    if helper != "solve-record" or not isinstance(payload, dict):
+        return False
+    if payload.get("eligible") is False:
+        return True
+    return payload.get("status") in {"blocked", "needs_landing_construction", "not_applicable"}
+
+
 def delegate(operation: str, helper: str, args: list[str]) -> int:
     path = helper_path(helper)
     if not path.is_file():
@@ -111,18 +128,26 @@ def delegate(operation: str, helper: str, args: list[str]) -> int:
     except json.JSONDecodeError:
         error(operation, "invalid-delegated-result", "delegated helper did not emit a JSON result")
         return INVALID
+    if payload_refusal(helper, payload):
+        detail = json.dumps(payload.get("reasons") or payload.get("reason") or payload, sort_keys=True)
+        error(operation, "not-allowed", detail)
+        return REFUSED
     envelope(operation, data=payload)
     return SUCCESS
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
+    parser = FacadeArgumentParser(
         description="Bundled Ultra Tracker facade for Ticket publication, Claim, Attempt, and Solve Record helpers."
     )
-    groups = parser.add_subparsers(dest="group", required=True, title="command groups")
+    groups = parser.add_subparsers(
+        dest="group", required=True, title="command groups", parser_class=FacadeArgumentParser
+    )
 
     publication = groups.add_parser("publication", help="Local Markdown Ticket publication lifecycle")
-    publication_actions = publication.add_subparsers(dest="action", required=True, title="publication operations")
+    publication_actions = publication.add_subparsers(
+        dest="action", required=True, title="publication operations", parser_class=FacadeArgumentParser
+    )
     for action in ("register", "inspect", "promote", "cleanup"):
         child = publication_actions.add_parser(action, help=f"delegate Ticket publication {action}")
         child.add_argument("--repo", default=".", help="repository containing the configured Tracker contract")
@@ -137,7 +162,9 @@ def parse_args() -> argparse.Namespace:
             child.add_argument("--explicit", action="store_true")
 
     ticket = groups.add_parser("ticket", help="Ticket frontier discovery and conflict-detecting Claim")
-    ticket_actions = ticket.add_subparsers(dest="action", required=True, title="Ticket operations")
+    ticket_actions = ticket.add_subparsers(
+        dest="action", required=True, title="Ticket operations", parser_class=FacadeArgumentParser
+    )
     frontier = ticket_actions.add_parser("frontier", help="discover claimable Tickets")
     frontier.add_argument("--repo", default=".")
     frontier.add_argument("--ticket-id", action="append", default=[], help="exact Ticket identity; repeatable")
@@ -149,7 +176,9 @@ def parse_args() -> argparse.Namespace:
     claim.add_argument("--worktree", required=True, help="configured Ticket coordination worktree assignment")
 
     records = groups.add_parser("solve-record", help="read-only Attempt and Solve Record inspection and gates")
-    record_actions = records.add_subparsers(dest="action", required=True, title="Solve Record operations")
+    record_actions = records.add_subparsers(
+        dest="action", required=True, title="Solve Record operations", parser_class=FacadeArgumentParser
+    )
     for action in ("dashboard", "list", "select", "merge-gate", "landing-plan", "cleanup-plan"):
         child = record_actions.add_parser(action, help=f"delegate Solve Record {action}")
         child.add_argument("--repo", default=".")
@@ -163,10 +192,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    args = parse_args()
-    operation = f"{args.group}.{args.action}"
-    repo = Path(args.repo).resolve()
     try:
+        args = parse_args()
+        operation = f"{args.group}.{args.action}"
+        repo = Path(args.repo).resolve()
         if args.group == "publication":
             representation, configured_location = publication_config(repo)
             if "<feature>" in configured_location and not args.location:
@@ -197,6 +226,7 @@ def main() -> int:
             delegated.extend(["--landing-sha", args.landing_sha])
         return delegate(operation, "solve-record", delegated)
     except FacadeError as exc:
+        operation = locals().get("operation", "parse")
         error(operation, "invalid-input-or-state", str(exc))
         return INVALID
 
