@@ -28,7 +28,7 @@ SCENARIOS = {
         "target": "improve-codebase-architecture",
         "task": "Review the hot order-routing module and produce one evidence-backed deepening candidate without changing production code.",
         "native": "Unconditionally scope the hot spot, read the glossary and ADR, and perform exactly one repository exploration pass before producing the report. Native exploration owns candidate discovery and uses Explore delegation when available, otherwise a serial equivalent.",
-        "events": ["target-native-explore", "target-artifact", "ultra-post-review", "validation"],
+        "events": ["target-native-explore", "target-native-candidate", "ultra-post-review", "validation"],
         "forbidden": ["ultra-code-explore", "ultra-research"],
         "artifact": "artifacts/architecture-report.md",
         "tokens": ["Order Router", "route_order", "ADR-0001", "validation: python3 scripts/check.py"],
@@ -209,7 +209,7 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
 
             Read `skill-input/skills/engineering/ultra/SKILL.md`, `skill-input/skills/engineering/ultra/PROFILES.md`, `TARGET_SKILL.md`, and repository evidence. Treat those as the complete portable contracts. Do not read `EVAL_EXPECTATIONS.json`.
 
-            Perform the real file changes required by the task. Keep `.scratch/eval/issues/01-order-routing.md` at the workflow state justified by the task. Run `python3 scripts/check.py` as the final validation.
+            Perform the real file changes required by the task. Write the primary result to `{scenario['artifact']}`; that path is part of the public task contract, not a hidden grader expectation. Keep `.scratch/eval/issues/01-order-routing.md` at the workflow state justified by the task. Run `python3 scripts/check.py` as the final validation.
 
             As durable execution evidence, write `artifacts/stage-evidence.json` with an `events` array. Append one object per stage in actual order, each with exactly `name`, `owner`, `goal`, and `evidence`. Use stable stage names that describe the contract (for example `target-native-explore`, `ultra-post-review`, or `validation`). Record a covered-but-skipped additive goal as `covered-additive-code`; never record model response prose as evidence.
 

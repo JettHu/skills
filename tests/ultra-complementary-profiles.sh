@@ -125,7 +125,7 @@ artifact.parent.mkdir(parents=True, exist_ok=True)
 artifact.write_text("Order Router route_order ADR-0001\nvalidation: python3 scripts/check.py\n")
 events = [
     {"name": "target-native-explore", "owner": "target", "goal": "discover-candidates", "evidence": "app/router.py"},
-    {"name": "target-artifact", "owner": "target", "goal": "produce-report", "evidence": "artifacts/architecture-report.md"},
+    {"name": "target-native-candidate", "owner": "target", "goal": "produce-report", "evidence": "artifacts/architecture-report.md"},
     {"name": "ultra-post-review", "owner": "ultra", "goal": "risk-and-adr-review", "evidence": "docs/adr/ADR-0001.md"},
     {"name": "validation", "owner": "root", "goal": "validate-repository", "evidence": "python3 scripts/check.py"},
 ]
