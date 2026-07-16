@@ -7,11 +7,15 @@ scenarios it also grades the runtime JSONL trace, so a model-authored stage ledg
 cannot substitute for an actual target-native subagent call. Model response prose is
 not a scoring input.
 
-Every mechanically exact fixture requirement is repeated in `EVAL_PROMPT.md`: the
-artifact path and literal coverage terms, exact tracker status, ordered stage names,
-accepted semantic stage aliases, and validation command. The grader normalizes only
-the published aliases. Validation is proved by a successful runtime command plus a
-fresh external rerun; the primary artifact does not need a hidden validation literal.
+Every mechanically exact task outcome is repeated in the shared `EVAL_PROMPT.md`: the
+artifact path and literal coverage terms, exact tracker status, validation command and
+success condition, plus the `stage-evidence.json` schema and stable stage vocabulary.
+The prompt is byte-identical for treatment and ablation. It does not publish a
+treatment-owned stage sequence, ownership decision, or duplicate-stage conclusion.
+The ledger records completed stages in their actual runtime order; raw runtime trace,
+not a model-authored ledger, is authoritative for duplicate exploration. Validation is
+proved by a successful runtime command plus a fresh external rerun; the primary
+artifact does not need a hidden validation literal.
 
 Prepare all reusable scenarios without a model run:
 
@@ -86,10 +90,12 @@ exact argument vector, shell rendering, raw stdout/stderr, timeout or exit state
 literal grader output, runtime version, resolved treatment/ablation SHAs, observed
 delegation calls/models, and a recovery command description.
 
-Delegation-sensitive prompts carry a stable target-owned marker (for example,
-`[target-native:architecture-candidate-discovery]`). The trace grader accepts only
-calls whose outer runtime status and every reported child Agent terminal state are
-completed, rejects missing/failed/extra calls with that marker, and
+Delegation-sensitive `TARGET_SKILL.md` native contracts carry a stable target-owned
+marker (for example, `[target-native:architecture-candidate-discovery]`) and require
+the target's native delegation to supply it. The shared eval prompt does not mention
+the marker. The trace grader accepts only calls whose outer runtime status and every
+reported child Agent terminal state are completed, rejects missing/failed/extra calls
+with that marker, and
 records primary-runtime delegated model identity as `unknown/unavailable` when the
 Codex JSONL protocol does not expose it.
 

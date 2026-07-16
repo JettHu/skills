@@ -181,13 +181,28 @@ root = Path(sys.argv[2])
 grader = repo / "tests/evals/ultra-complementary-profiles/grade-run.py"
 fixtures = sorted(root.glob("*/*/attempt-001/repo"))
 assert len(fixtures) == 14
+for scenario_root in sorted(path for path in root.iterdir() if path.is_dir()):
+    treatment_prompt = (
+        scenario_root / "treatment/attempt-001/repo/EVAL_PROMPT.md"
+    ).read_text(encoding="utf-8")
+    ablation_prompt = (
+        scenario_root / "ablation/attempt-001/repo/EVAL_PROMPT.md"
+    ).read_text(encoding="utf-8")
+    assert treatment_prompt == ablation_prompt, (
+        f"treatment and ablation prompts differ: {scenario_root.name}"
+    )
 for fixture in fixtures:
     expected = json.loads((fixture / "EVAL_EXPECTATIONS.json").read_text(encoding="utf-8"))
     prompt = (fixture / "EVAL_PROMPT.md").read_text(encoding="utf-8")
     assert f"exact status `{expected['expected_tracker_status']}`" in prompt
     assert f"`{expected['artifact']}`" in prompt
-    for name in expected["required_events"]:
+    for name in expected["stage_vocabulary"]:
         assert f"`{name}`" in prompt
+    assert "required stages exactly once" not in prompt
+    assert "Record these required stages" not in prompt
+    assert "Extra stages are allowed only" not in prompt
+    assert "[target-native:" not in prompt
+    assert " -> " not in prompt
     assert subprocess.run(
         [sys.executable, str(grader), str(fixture)], capture_output=True
     ).returncode != 0, f"untouched fixture unexpectedly passed: {fixture}"
@@ -215,10 +230,21 @@ t_manifest = json.loads((treatment.parent / "fixture-manifest.json").read_text()
 a_manifest = json.loads((ablation.parent / "fixture-manifest.json").read_text())
 assert t_manifest["common_hashes"] == a_manifest["common_hashes"], "pair fixtures are not equivalent"
 prompt = (treatment / "EVAL_PROMPT.md").read_text(encoding="utf-8")
+ablation_prompt = (ablation / "EVAL_PROMPT.md").read_text(encoding="utf-8")
+assert prompt == ablation_prompt, "treatment and ablation must receive the same eval prompt"
 assert "exact status `ready-for-agent`" in prompt
-assert "`target-native-report` = `target-native-candidate`" in prompt
 assert "Runtime execution and live repository state are graded" in prompt
 assert "the primary artifact does not need to repeat the command" in prompt
+assert "[target-native:architecture-candidate-discovery]" not in prompt
+assert "target-native-explore` -> `target-native-candidate" not in prompt
+assert "required stages exactly once" not in prompt
+assert "Record these required stages" not in prompt
+assert "Extra stages are allowed only" not in prompt
+assert "do not repeat a required goal" not in prompt
+target_contract = (treatment / "TARGET_SKILL.md").read_text(encoding="utf-8")
+assert target_contract == (ablation / "TARGET_SKILL.md").read_text(encoding="utf-8")
+assert "[target-native:architecture-candidate-discovery]" in target_contract
+assert "the target skill, not its caller, supplies this marker" in target_contract
 assert subprocess.run([sys.executable, str(grader), str(treatment)], capture_output=True).returncode != 0
 
 artifact = treatment / "artifacts/architecture-report.md"
@@ -301,7 +327,7 @@ extra_result = subprocess.run(
 )
 assert extra_result.returncode != 0, "trace grader must reject an extra Ultra exploration call"
 extra_grade = json.loads(extra_result.stdout)[0]
-assert "extra_exploration_call" in extra_grade["trace_grade"]["failure_codes"]
+assert extra_grade["trace_grade"]["failure_codes"] == ["extra_exploration_call"]
 
 codex_trace = treatment.parent / "codex-collab-trace.jsonl"
 codex_trace.write_text("\n".join(json.dumps(event) for event in (
@@ -363,12 +389,39 @@ tracker.write_text(tracker.read_text(encoding="utf-8").replace("Status: done", "
 artifact = ablation / "artifacts/architecture-report.md"
 artifact.parent.mkdir(parents=True, exist_ok=True)
 artifact.write_text("Order Router route_order ADR-0001\n", encoding="utf-8")
-events.insert(0, {"name": "ultra-code-explore", "owner": "ultra", "goal": "duplicate-discovery", "evidence": "app/router.py"})
-(ablation / "artifacts/stage-evidence.json").write_text(json.dumps({"events": events}, indent=2) + "\n")
-assert subprocess.run(
-    [sys.executable, str(grader), str(ablation), "--trace", str(valid_trace)],
+ablation_events = events + [{
+    "name": "ultra-code-explore",
+    "owner": "ultra",
+    "goal": "second-candidate-discovery",
+    "evidence": "completed Agent call agent-2",
+}]
+(ablation / "artifacts/stage-evidence.json").write_text(
+    json.dumps({"events": ablation_events}, indent=2) + "\n"
+)
+
+# A ledger-only declaration is descriptive evidence, not proof of an attributable
+# duplicate. With one real Explore call the ablation remains profile-correct.
+ledger_only_result = subprocess.run(
+    [sys.executable, str(grader), str(ablation), "--trace", str(valid_trace), "--json"],
     capture_output=True,
-).returncode != 0
+    text=True,
+)
+assert ledger_only_result.returncode == 0, ledger_only_result.stdout + ledger_only_result.stderr
+
+# With a second completed Explore in the raw trace, the same valid repository and
+# truthful actual-stage ledger fail solely on the attributable ownership delta.
+ablation_extra_result = subprocess.run(
+    [sys.executable, str(grader), str(ablation), "--trace", str(extra_trace), "--json"],
+    capture_output=True,
+    text=True,
+)
+assert ablation_extra_result.returncode != 0
+ablation_extra_grade = json.loads(ablation_extra_result.stdout)[0]
+assert ablation_extra_grade["repository_grade"]["passed"] is True
+assert ablation_extra_grade["repository_grade"]["failure_codes"] == []
+assert ablation_extra_grade["final_state_grade"]["passed"] is True
+assert ablation_extra_grade["profile_grade"]["failure_codes"] == ["extra_exploration_call"]
+assert ablation_extra_grade["trace_grade"]["failure_codes"] == ["extra_exploration_call"]
 
 runner_path = repo / "tests/evals/ultra-complementary-profiles/run-eval.py"
 runner_spec = importlib.util.spec_from_file_location("complementary_runner", runner_path)
@@ -376,10 +429,6 @@ runner_module = importlib.util.module_from_spec(runner_spec)
 assert runner_spec.loader is not None
 runner_spec.loader.exec_module(runner_module)
 clean_grade = {"repository_grade": {"passed": True}, "profile_grade": {"passed": True, "failure_codes": []}}
-duplicate_grade = {
-    "repository_grade": {"passed": True},
-    "profile_grade": {"passed": False, "failure_codes": ["extra_exploration_call"]},
-}
 bad_tracker_grade = {
     "repository_grade": {"passed": False, "failure_codes": ["tracker_status"]},
     "profile_grade": {"passed": True, "failure_codes": []},
@@ -387,8 +436,8 @@ bad_tracker_grade = {
 run_ok = {"result": {"run_exit_code": 0}, "grade": clean_grade}
 attributable = runner_module.classify_canary(
     run_ok,
-    {"result": {"run_exit_code": 0}, "grade": duplicate_grade},
-    ["forbidden_events_absent", "extra_exploration_call"],
+    {"result": {"run_exit_code": 0}, "grade": ablation_extra_grade},
+    ["extra_exploration_call"],
     ["extra_exploration_call"],
 )
 assert attributable["matrix_gate_passed"] is True
@@ -402,7 +451,7 @@ ledger_only_grade = {
 ledger_only = runner_module.classify_canary(
     run_ok,
     {"result": {"run_exit_code": 0}, "grade": ledger_only_grade},
-    ["forbidden_events_absent", "extra_exploration_call"],
+    ["extra_exploration_call"],
     ["extra_exploration_call"],
 )
 assert ledger_only["conclusion"] == "ablation-non-attributable-profile-failure"

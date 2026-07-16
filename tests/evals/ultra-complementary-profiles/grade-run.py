@@ -64,32 +64,51 @@ def grade(repo: Path, trace: Optional[Path] = None) -> dict:
     aliases = expected.get("event_aliases", {})
     raw_names = [event.get("name") for event in events if isinstance(event, dict)]
     names = [normalize_event_name(name, aliases) for name in raw_names]
-    required = expected["required_events"]
-    check_profile(
-        all(names.count(name) == 1 for name in required),
-        "each required evidence goal runs exactly once",
-        "required_events_once",
-    )
-    cursor = 0
-    ordered = True
-    for name in required:
-        try:
-            cursor = names.index(name, cursor) + 1
-        except ValueError:
-            ordered = False
-            break
-    check_profile(ordered, "required stage order is preserved", "required_stage_order")
-    check_profile(
-        not set(names) & set(expected["forbidden_events"]),
-        "forbidden or duplicate-ownership stages are absent",
-        "forbidden_events_absent",
-    )
-    goals = [event.get("goal") for event in events if isinstance(event, dict)]
-    check_profile(
-        len(goals) == len(set(goals)),
-        "evidence goals have a single owner and execution",
-        "unique_evidence_goals",
-    )
+    stage_vocabulary = expected.get("stage_vocabulary")
+    if stage_vocabulary is not None:
+        normalized_vocabulary = {
+            normalize_event_name(name, aliases) for name in stage_vocabulary
+        }
+        check_profile(
+            all(name in normalized_vocabulary for name in names),
+            "recorded stages use the published stable vocabulary",
+            "stage_vocabulary",
+        )
+        for name in expected.get("required_recorded_events", []):
+            check_profile(
+                names.count(name) == 1,
+                f"completed public stage is recorded exactly once: {name}",
+                f"recorded_event:{name}",
+            )
+    else:
+        # Historical fixtures predate actual-stage ledgers. Preserve their literal
+        # regrade behavior without imposing that treatment sequence on new runs.
+        required = expected["required_events"]
+        check_profile(
+            all(names.count(name) == 1 for name in required),
+            "each required evidence goal runs exactly once",
+            "required_events_once",
+        )
+        cursor = 0
+        ordered = True
+        for name in required:
+            try:
+                cursor = names.index(name, cursor) + 1
+            except ValueError:
+                ordered = False
+                break
+        check_profile(ordered, "required stage order is preserved", "required_stage_order")
+        check_profile(
+            not set(names) & set(expected["forbidden_events"]),
+            "forbidden or duplicate-ownership stages are absent",
+            "forbidden_events_absent",
+        )
+        goals = [event.get("goal") for event in events if isinstance(event, dict)]
+        check_profile(
+            len(goals) == len(set(goals)),
+            "evidence goals have a single owner and execution",
+            "unique_evidence_goals",
+        )
 
     artifact = repo / expected["artifact"]
     artifact_text = artifact.read_text(encoding="utf-8") if artifact.is_file() else ""

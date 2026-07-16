@@ -27,7 +27,14 @@ SCENARIOS = {
     "architecture-native-ownership": {
         "target": "improve-codebase-architecture",
         "task": "Review the hot order-routing module and produce one evidence-backed deepening candidate without changing production code.",
-        "native": "Unconditionally scope the hot spot, read the glossary and ADR, and perform exactly one repository exploration pass before producing the report. Native exploration owns candidate discovery and uses Explore delegation when available, otherwise a serial equivalent.",
+        "native": (
+            "Unconditionally scope the hot spot, read the glossary and ADR, and perform exactly one "
+            "repository exploration pass before producing the report. Native exploration owns candidate "
+            "discovery and uses Explore delegation when available, otherwise a serial equivalent. When "
+            "Explore delegation is available, the target-native candidate-discovery prompt must contain "
+            "the literal marker `[target-native:architecture-candidate-discovery]`; the target skill, not "
+            "its caller, supplies this marker to its native delegate."
+        ),
         "events": ["target-native-explore", "target-native-candidate", "ultra-post-review", "validation"],
         "forbidden": ["ultra-code-explore", "ultra-research"],
         "artifact": "artifacts/architecture-report.md",
@@ -35,7 +42,7 @@ SCENARIOS = {
         "result": "unchanged",
         "tracker": "ready-for-agent",
         "event_aliases": {"target-native-report": "target-native-candidate"},
-        "ablation_attributable_failure_codes": ["forbidden_events_absent", "extra_exploration_call"],
+        "ablation_attributable_failure_codes": ["extra_exploration_call"],
         "ablation_required_difference_codes": ["extra_exploration_call"],
         "delegation_marker": "[target-native:architecture-candidate-discovery]",
         "trace_expectations": {
@@ -128,6 +135,17 @@ SCENARIOS = {
 }
 
 
+STAGE_VOCABULARY = sorted({
+    name
+    for scenario in SCENARIOS.values()
+    for name in (
+        *scenario["events"],
+        *scenario["forbidden"],
+        *scenario.get("event_aliases", {}),
+    )
+})
+
+
 def run(args: list[str], cwd: Path) -> str:
     result = subprocess.run(args, cwd=cwd, text=True, capture_output=True)
     if result.returncode:
@@ -209,8 +227,8 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
         "scenario": scenario_id,
         "variant": variant,
         "contract_ref": ref,
-        "required_events": scenario["events"],
-        "forbidden_events": scenario["forbidden"],
+        "stage_vocabulary": STAGE_VOCABULARY,
+        "required_recorded_events": ["validation"],
         "artifact": scenario["artifact"],
         "artifact_tokens": scenario["tokens"],
         "expected_result": scenario["result"],
@@ -222,20 +240,8 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
         "ablation_required_difference_codes": scenario.get("ablation_required_difference_codes", []),
     }
     write(repo / "EVAL_EXPECTATIONS.json", json.dumps(expectations, indent=2) + "\n")
-    delegation_instruction = ""
-    if scenario.get("delegation_marker"):
-        delegation_instruction = (
-            "The target-native Explore delegation prompt must contain the literal ownership marker "
-            f"`{scenario['delegation_marker']}`. Use that marker only for the target-owned candidate-discovery pass."
-        )
-    required_stages = " -> ".join(f"`{name}`" for name in scenario["events"])
-    aliases = scenario.get("event_aliases", {})
-    alias_instruction = ""
-    if aliases:
-        alias_instruction = " Accepted semantic stage aliases: " + ", ".join(
-            f"`{alias}` = `{canonical}`" for alias, canonical in aliases.items()
-        ) + "."
     artifact_tokens = ", ".join(f"`{token}`" for token in scenario["tokens"])
+    stage_vocabulary = ", ".join(f"`{name}`" for name in STAGE_VOCABULARY)
     if scenario.get("trace_expectations", {}).get("command_calls"):
         validation_instruction = (
             "Execute `python3 scripts/check.py` exactly once and require a successful exit. "
@@ -259,15 +265,13 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
 
             Read `skill-input/skills/engineering/ultra/SKILL.md`, `skill-input/skills/engineering/ultra/PROFILES.md`, `TARGET_SKILL.md`, and repository evidence. Treat those as the complete portable contracts. Do not read `EVAL_EXPECTATIONS.json`.
 
-            {delegation_instruction}
-
             Perform the real file changes required by the task. Write the primary result to `{scenario['artifact']}`; that path is part of the public task contract, not a hidden grader expectation. The artifact must include these case-insensitive mechanical coverage terms: {artifact_tokens}.
 
-            Mechanical final-state contract: keep `.scratch/eval/issues/01-order-routing.md` at exact status `{scenario['tracker']}`. Record these required stages exactly once and in this order: {required_stages}.{alias_instruction} Extra stages are allowed only when they do not repeat a required goal or use a forbidden owner/stage from the portable contracts.
+            Mechanical final-state contract: keep `.scratch/eval/issues/01-order-routing.md` at exact status `{scenario['tracker']}`.
 
             {validation_instruction}
 
-            As durable execution evidence, write `artifacts/stage-evidence.json` with an `events` array. Append one object per stage in actual order, each with exactly `name`, `owner`, `goal`, and `evidence`. Use stable stage names that describe the contract (for example `target-native-explore`, `ultra-post-review`, or `validation`). Record a covered-but-skipped additive goal as `covered-additive-code`; never record model response prose as evidence.
+            As durable execution evidence, write `artifacts/stage-evidence.json` with an `events` array. Append one object per completed stage in actual execution order, each with exactly `name`, `owner`, `goal`, and `evidence`; do not add anticipated or expected stages. Use the applicable names from this stable vocabulary: {stage_vocabulary}. Record the successful validation as `validation`. Record a covered-but-skipped additive goal as `covered-additive-code`; never record model response prose as evidence.
 
             Do not run any external grader and do not edit this prompt, `EVAL_EXPECTATIONS.json`, or the supplied skill inputs.
             """
