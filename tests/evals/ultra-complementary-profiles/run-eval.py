@@ -6,10 +6,13 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
+import shutil
 import shlex
 import subprocess
 import sys
+import tempfile
 
 
 HERE = Path(__file__).resolve().parent
@@ -143,17 +146,28 @@ def main() -> None:
         subprocess.run(prepare, check=True)
         attempt_root = variant_root / f"attempt-{attempt:03d}"
         repo = attempt_root / "repo"
+        control_snapshot = json.loads((attempt_root / "control.json").read_text(encoding="utf-8"))
         prompt = (repo / "EVAL_PROMPT.md").read_text(encoding="utf-8")
+        runtime_config = Path(tempfile.mkdtemp(prefix="ultra-eval-runtime-"))
+        runtime_env = os.environ.copy()
         if args.runtime == "qoder":
             command = [
                 args.qoder_bin, "-p", "--output-format", "stream-json", "--permission-mode",
                 "bypass_permissions", "--cwd", str(repo), "--model", args.model,
                 "--context-window", str(args.context_window),
+                "--config-dir", str(runtime_config), "--setting-sources", "project",
+                "--disable-builtin-skills",
             ]
             if args.reasoning_effort:
                 command.extend(["--reasoning-effort", args.reasoning_effort])
             runtime_version = command_output([args.qoder_bin, "--version"])
         else:
+            ambient_codex_home = Path(runtime_env.get("CODEX_HOME", Path.home() / ".codex"))
+            ambient_auth = ambient_codex_home / "auth.json"
+            if ambient_auth.is_file():
+                (runtime_config / "auth.json").symlink_to(ambient_auth)
+            runtime_env["CODEX_HOME"] = str(runtime_config)
+            runtime_env["HOME"] = str(runtime_config)
             command = [
                 args.primary_bin, "--ask-for-approval", "never", "exec", "--json", "--ephemeral",
                 "--sandbox", "workspace-write",
@@ -177,6 +191,23 @@ def main() -> None:
             "context_window": args.context_window,
             "reasoning_effort": args.reasoning_effort or "default",
             "timeout_seconds": args.timeout,
+            "runtime_isolation": {
+                "contract_only_prompt": True,
+                "slash_and_skill_invocation_forbidden": True,
+                "global_skill_use_trace_graded": True,
+                "ephemeral_user_config": True,
+                "user_and_local_setting_sources_disabled": args.runtime == "qoder",
+                "builtin_skills_disabled": args.runtime == "qoder",
+                "ambient_home_isolated": args.runtime == "primary",
+            },
+            "authority": {
+                "baseline_commit": control_snapshot["baseline_commit"],
+                "expectations_sha256": control_snapshot["expectations_sha256"],
+                "workspace_expectations_sha256": control_snapshot[
+                    "workspace_expectations_sha256"
+                ],
+                "snapshotted_before_model_run": True,
+            },
             "refs": {
                 "treatment": {"requested": args.treatment_ref, "sha": ref_shas["treatment"]},
                 "ablation": {"requested": args.ablation_ref, "sha": ref_shas["ablation"]},
@@ -187,7 +218,10 @@ def main() -> None:
         write(attempt_root / "invocation.json", json.dumps(invocation, indent=2) + "\n")
         timed_out = False
         try:
-            result = subprocess.run(command, cwd=repo, text=True, capture_output=True, timeout=args.timeout)
+            result = subprocess.run(
+                command, cwd=repo, env=runtime_env, text=True, capture_output=True,
+                timeout=args.timeout,
+            )
             run_exit = result.returncode
             stdout, stderr = result.stdout, result.stderr
         except subprocess.TimeoutExpired as exc:
@@ -195,10 +229,18 @@ def main() -> None:
             run_exit = 124
             stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
             stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        finally:
+            shutil.rmtree(runtime_config, ignore_errors=True)
         write(attempt_root / "raw-stdout.log", stdout)
         write(attempt_root / "raw-stderr.log", stderr)
+        grader_control = attempt_root / "grader-control.json"
+        write(grader_control, json.dumps(control_snapshot, indent=2) + "\n")
         grade = subprocess.run(
-            [sys.executable, str(GRADER), str(repo), "--trace", str(attempt_root / "raw-stdout.log"), "--json"],
+            [
+                sys.executable, str(GRADER), str(repo),
+                "--control", str(grader_control),
+                "--trace", str(attempt_root / "raw-stdout.log"), "--json",
+            ],
             text=True,
             capture_output=True,
         )
@@ -232,11 +274,12 @@ def main() -> None:
         pair_results[variant] = {"result": result_record, "grade": grade_result}
         failed = failed or not result_record["passed"]
     if args.canary_gate:
-        treatment_repo = (
+        treatment_attempt_root = (
             output / args.run_id / args.scenario / "treatment"
-            / f"attempt-{pair_results['treatment']['result']['attempt']:03d}" / "repo"
+            / f"attempt-{pair_results['treatment']['result']['attempt']:03d}"
         )
-        expectations = json.loads((treatment_repo / "EVAL_EXPECTATIONS.json").read_text(encoding="utf-8"))
+        control = json.loads((treatment_attempt_root / "grader-control.json").read_text(encoding="utf-8"))
+        expectations = control["expectations"]
         verdict = classify_canary(
             pair_results["treatment"],
             pair_results["ablation"],

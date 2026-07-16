@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import shlex
 from typing import Any, Optional
 
 
@@ -16,12 +17,38 @@ SUCCESSFUL_AGENT_STATES = {"completed"}
 
 def stage_markers(*values: object) -> list[str]:
     text = " ".join(str(value or "") for value in values)
-    return re.findall(r"\[[a-z0-9-]+:[a-z0-9-]+\]", text, flags=re.IGNORECASE)
+    return list(dict.fromkeys(
+        re.findall(r"\[[a-z0-9-]+:[a-z0-9-]+\]", text, flags=re.IGNORECASE)
+    ))
+
+
+def command_segments(command: object) -> list[str]:
+    if not isinstance(command, str):
+        return []
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|(){}\n")
+        lexer.whitespace = " \t\r"
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return []
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        if token and set(token) <= {";", "&", "|", "(", ")", "{", "}", "\n"}:
+            if segments[-1]:
+                segments.append([])
+        else:
+            segments[-1].append(token)
+    return [shlex.join(segment) for segment in segments if segment]
 
 
 def json_lines(path: Path) -> list[dict[str, Any]]:
     events = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return events
+    for line in lines:
         try:
             value = json.loads(line)
         except json.JSONDecodeError:
@@ -99,6 +126,7 @@ def summarize(path: Path) -> dict[str, Any]:
     agents: list[str] = []
     calls: list[dict[str, Any]] = []
     command_calls: list[dict[str, Any]] = []
+    tools_used: list[str] = []
 
     for event in events:
         if event.get("type") == "system" and event.get("subtype") == "init":
@@ -110,6 +138,7 @@ def summarize(path: Path) -> dict[str, Any]:
             runtime = "primary"
 
         for use in qoder_tool_uses(event):
+            tools_used.append(str(use.get("name") or ""))
             if use.get("name") in COMMAND_NAMES:
                 input_value = use.get("input") if isinstance(use.get("input"), dict) else {}
                 command_calls.append(
@@ -141,6 +170,7 @@ def summarize(path: Path) -> dict[str, Any]:
             )
         use = codex_tool_use(event)
         if use:
+            tools_used.append(str(use.get("name") or "spawn_agent"))
             input_value = use["input"]
             agent_role = input_value.get("subagent_type") or input_value.get("agent_type")
             task_name = input_value.get("task_name")
@@ -173,6 +203,7 @@ def summarize(path: Path) -> dict[str, Any]:
                     "exit_code": exit_code,
                 }
             )
+            tools_used.append("command_execution")
 
     unique_by_id: dict[str, dict[str, Any]] = {}
     unique_without_id = []
@@ -229,12 +260,8 @@ def summarize(path: Path) -> dict[str, Any]:
     if runtime == "primary" and calls:
         tools = sorted(set(tools) | {"spawn_agent", "Agent"})
         agents = sorted(set(agents) | {str(call["role"]) for call in successful_calls if call.get("role")})
-        if any(
-            str(call.get("role", "")).casefold() == "explore"
-            or any("candidate-discovery" in marker.casefold() for marker in call.get("stage_markers", []))
-            for call in successful_calls
-        ):
-            agents = sorted(set(agents) | {"Explore"})
+    for call in command_calls:
+        call["segments"] = command_segments(call.get("command"))
     return {
         "runtime": runtime,
         "root_model": root_model,
@@ -244,6 +271,7 @@ def summarize(path: Path) -> dict[str, Any]:
         "attempted_agent_calls": calls,
         "rejected_agent_call_count": len(calls) - len(successful_calls),
         "command_calls": command_calls,
+        "tools_used": sorted(set(tools_used)),
         "delegated_models": sorted(
             {model for call in successful_calls for model in call.get("delegated_models", [])}
         ),
@@ -266,46 +294,36 @@ def grade(summary: dict[str, Any], expected: dict[str, Any]) -> tuple[list[str],
         check(tool in capabilities["tools"], f"runtime exposes delegation tool: {tool}", "delegation_tool_available")
     for agent in expected.get("capability_agents", []):
         check(agent in capabilities["agents"], f"runtime exposes delegation role: {agent}", "delegation_role_available")
+    tools_used = {tool.casefold() for tool in summary.get("tools_used", [])}
+    for tool in expected.get("forbidden_tools", []):
+        check(
+            tool.casefold() not in tools_used,
+            f"runtime does not invoke global tool: {tool}",
+            "forbidden_runtime_tool",
+        )
     calls = summary["agent_calls"]
-    for requirement in expected.get("agent_calls", []):
-        role = requirement.get("role", "").casefold()
-        marker = requirement.get("marker", "")
-        matching = [
-            call for call in calls
-            if (
-                not role
-                or str(call.get("role", "")).casefold() == role
-                or (not call.get("role") and marker in call.get("stage_markers", []))
-            )
-            and (not marker or marker in f"{call.get('description', '')} {call.get('prompt', '')}")
-        ]
-        minimum = requirement.get("min", 0)
-        maximum = requirement.get("max")
-        label = requirement.get("marker") or requirement.get("role") or "Agent"
-        check(len(matching) >= minimum, f"real {label} delegation count is at least {minimum}", "agent_calls_minimum")
-        if maximum is not None:
-            check(len(matching) <= maximum, f"real {label} delegation count is at most {maximum}", "agent_calls_maximum")
+    known_markers = expected.get("known_stage_markers", {})
+    known_marker_values = set(known_markers.values())
+    if expected.get("require_marker_for_agent_calls"):
+        marker_shape_ok = all(
+            len([marker for marker in call.get("stage_markers", []) if marker in known_marker_values]) == 1
+            and len(call.get("stage_markers", [])) == 1
+            for call in calls
+        )
+        check(marker_shape_ok, "every completed Agent call has exactly one known stage marker", "delegated_stage_marker_missing")
+    for event_name in expected.get("required_marker_events", []):
+        marker = known_markers.get(event_name)
+        matching = [call for call in calls if marker in call.get("stage_markers", [])]
+        check(len(matching) == 1, f"completed delegation is observed for stage: {event_name}", "required_stage_call")
     maximum_total = expected.get("max_total_agent_calls")
     if maximum_total is not None:
         check(len(calls) <= maximum_total, f"no extra Ultra exploration beyond {maximum_total} Agent call(s)", "agent_calls_max_total")
     extra_exploration = expected.get("extra_exploration_calls")
     if extra_exploration:
-        exploration_markers = {
-            marker.casefold() for marker in extra_exploration.get("exploration_markers", [])
-        }
-
-        def is_exploration(call: dict[str, Any]) -> bool:
-            role = str(call.get("role", "")).casefold().strip()
-            if role == "explore":
-                return True
-            if call.get("role_source") == "agent_type":
-                return False
-            markers = {marker.casefold() for marker in call.get("stage_markers", [])}
-            return bool(markers & exploration_markers)
-
-        exploration_calls = [call for call in calls if is_exploration(call)]
-        allowed_native_calls = extra_exploration.get("allowed_native_calls", 0)
-        extra_count = max(0, len(exploration_calls) - allowed_native_calls)
+        extra_markers = set(extra_exploration.get("extra_markers", []))
+        extra_count = sum(
+            1 for call in calls if set(call.get("stage_markers", [])) & extra_markers
+        )
         maximum = extra_exploration.get("max")
         if maximum is not None:
             check(
@@ -319,12 +337,41 @@ def grade(summary: dict[str, Any], expected: dict[str, Any]) -> tuple[list[str],
         command = requirement["command"]
         matching = [
             call for call in summary.get("command_calls", [])
-            if str(call.get("command", "")).strip() == command
+            for segment in call.get("segments", [])
+            if segment == command
         ]
         successful = [call for call in matching if call.get("status") == "completed"]
         minimum = requirement.get("min", 0)
         maximum = requirement.get("max")
-        check(len(successful) >= minimum, f"successful `{command}` execution count is at least {minimum}", "validation_command_minimum")
+        minimum_successful = requirement.get("min_successful")
+        if minimum_successful is None:
+            check(len(successful) >= minimum, f"successful `{command}` execution count is at least {minimum}", "validation_command_minimum")
+        else:
+            check(len(matching) >= minimum, f"`{command}` execution count is at least {minimum}", "validation_command_minimum")
+            check(
+                len(successful) >= minimum_successful,
+                f"successful `{command}` execution count is at least {minimum_successful}",
+                "validation_command_success",
+            )
         if maximum is not None:
             check(len(matching) <= maximum, f"`{command}` execution count is at most {maximum}", "validation_command_maximum")
+    sequence = expected.get("command_sequence", [])
+    if sequence:
+        observed = [
+            {"command": segment, "status": call.get("status")}
+            for call in summary.get("command_calls", [])
+            for segment in call.get("segments", [])
+        ]
+        cursor = 0
+        ordered = True
+        for wanted in sequence:
+            try:
+                cursor = next(
+                    index + 1 for index in range(cursor, len(observed))
+                    if observed[index] == wanted
+                )
+            except StopIteration:
+                ordered = False
+                break
+        check(ordered, "required command outcomes occur in order", "command_sequence")
     return checks, failures, failure_codes

@@ -17,7 +17,10 @@ CONTRACT_PATHS = (
     "skills/engineering/ultra/SKILL.md",
     "skills/engineering/ultra/PROFILES.md",
 )
-ARCHITECTURE_NATIVE_MARKER = "[target-native:architecture-candidate-discovery]"
+
+
+def stage_marker(name: str) -> str:
+    return f"[eval-stage:{name}]"
 
 
 def clean(value: str) -> str:
@@ -31,10 +34,7 @@ SCENARIOS = {
         "native": (
             "Unconditionally scope the hot spot, read the glossary and ADR, and perform exactly one "
             "repository exploration pass before producing the report. Native exploration owns candidate "
-            "discovery and uses Explore delegation when available, otherwise a serial equivalent. When "
-            "Explore delegation is available, the target-native candidate-discovery prompt must contain "
-            f"the literal marker `{ARCHITECTURE_NATIVE_MARKER}`; the target skill, not "
-            "its caller, supplies this marker to its native delegate."
+            "discovery and uses Explore delegation when available, otherwise a serial equivalent."
         ),
         "events": ["target-native-explore", "target-native-candidate", "ultra-post-review", "validation"],
         "recordable_extra_events": ["ultra-code-explore"],
@@ -46,23 +46,6 @@ SCENARIOS = {
         "event_aliases": {"target-native-report": "target-native-candidate"},
         "ablation_attributable_failure_codes": ["extra_exploration_call"],
         "ablation_required_difference_codes": ["extra_exploration_call"],
-        "trace_expectations": {
-            "capability_tools": ["Agent"],
-            "capability_agents": ["Explore"],
-            "agent_calls": [{
-                "role": "Explore",
-                "marker": ARCHITECTURE_NATIVE_MARKER,
-                "min": 1,
-                "max": 1,
-            }],
-            "extra_exploration_calls": {
-                "allowed_native_calls": 1,
-                "exploration_markers": [ARCHITECTURE_NATIVE_MARKER],
-                "max": 0,
-            },
-            "require_delegated_model": True,
-            "command_calls": [{"command": "python3 scripts/check.py", "min": 1, "max": 1}],
-        },
     },
     "diagnosis-feedback-loop-first": {
         "target": "diagnosing-bugs",
@@ -136,6 +119,58 @@ SCENARIOS = {
 }
 
 
+SCENARIO_AUTHORITY = {
+    "architecture-native-ownership": {
+        "artifact_sections": ["Candidate", "Source Evidence", "ADR and Risk Review"],
+        "artifact_sources": ["app/router.py", "docs/adr/ADR-0001.md"],
+        "trace_required_events": ["target-native-explore"],
+        "trace_reconcile_events": ["target-native-explore", "ultra-code-explore"],
+    },
+    "diagnosis-feedback-loop-first": {
+        "artifact_sections": ["Reproduction", "Root Cause", "Fix", "Validation"],
+        "artifact_sources": ["app/router.py", "scripts/check.py"],
+        "trace_required_events": ["ultra-code-review"],
+        "trace_reconcile_events": ["ultra-code-review"],
+        "allowed_changes": ["app/router.py", "app/result.txt"],
+        "validation_runs": {"count": 2, "statuses": ["failed", "completed"]},
+    },
+    "spec-independent-code-trigger": {
+        "artifact_sections": ["Scope", "Security Risks", "Validation Plan"],
+        "artifact_sources": ["app/router.py", "docs/adr/ADR-0001.md"],
+        "trace_required_events": ["target-native-explore", "ultra-independent-code", "ultra-fresh-review"],
+        "trace_reconcile_events": ["target-native-explore", "ultra-independent-code", "ultra-fresh-review"],
+    },
+    "tickets-review-publication": {
+        "artifact_sections": ["Ticket 01", "Blockers", "Review and Publication Evidence"],
+        "artifact_sources": ["CONTEXT.md", ".scratch/eval/issues/01-order-routing.md"],
+        "trace_required_events": ["target-native-explore", "ultra-complete-set-review"],
+        "trace_reconcile_events": ["target-native-explore", "ultra-complete-set-review"],
+        "allowed_changes": [
+            ".scratch/eval/issues/01-order-routing.md",
+            "artifacts/publication-receipt.json",
+        ],
+        "publication_command": "python3 scripts/publish.py",
+    },
+    "short-evidence-complete": {
+        "artifact_sections": ["Scope", "Current Evidence", "Validation Plan"],
+        "artifact_sources": ["APPROVED_EVIDENCE.md", "app/router.py"],
+        "max_agent_calls": 0,
+    },
+    "long-stale-context": {
+        "artifact_sections": ["Scope", "Current Code Evidence", "Fresh Review", "Validation Plan"],
+        "artifact_sources": ["HISTORY.md", "app/router.py", "docs/adr/ADR-0001.md"],
+        "trace_required_events": ["target-native-explore", "ultra-independent-code", "ultra-fresh-review"],
+        "trace_reconcile_events": ["target-native-explore", "ultra-independent-code", "ultra-fresh-review"],
+    },
+    "triage-native-exploration": {
+        "artifact_sections": ["Claim", "Repository Evidence", "Triage Decision"],
+        "artifact_sources": ["app/router.py", "docs/adr/ADR-0001.md"],
+        "trace_required_events": ["target-native-explore"],
+        "trace_reconcile_events": ["target-native-explore"],
+    },
+}
+
+
 def stage_vocabulary(scenario: dict) -> list[str]:
     """Return names this scenario may truthfully record, not historical forbiddens."""
     return sorted({
@@ -143,6 +178,55 @@ def stage_vocabulary(scenario: dict) -> list[str]:
         *scenario.get("event_aliases", {}),
         *scenario.get("recordable_extra_events", []),
     })
+
+
+def event_owner(name: str) -> str:
+    if name.startswith("target-"):
+        return "target"
+    if name.startswith("ultra-"):
+        return "ultra"
+    return "root"
+
+
+def trace_expectations(scenario_id: str, scenario: dict) -> dict:
+    authority = SCENARIO_AUTHORITY[scenario_id]
+    vocabulary = stage_vocabulary(scenario)
+    required_trace_events = authority.get("trace_required_events", [])
+    command_calls = [{
+        "command": "python3 scripts/check.py",
+        "min": authority.get("validation_runs", {}).get("count", 1),
+        "max": authority.get("validation_runs", {}).get("count", 1),
+        "min_successful": 1,
+    }]
+    if authority.get("publication_command"):
+        command_calls.append({
+            "command": authority["publication_command"], "min": 1, "max": 1,
+            "min_successful": 1,
+        })
+    result = {
+        "capability_tools": ["Agent"],
+        "forbidden_tools": ["Skill"],
+        "known_stage_markers": {name: stage_marker(name) for name in vocabulary},
+        "require_marker_for_agent_calls": True,
+        "required_marker_events": required_trace_events,
+        "reconcile_events": authority.get("trace_reconcile_events", []),
+        "max_total_agent_calls": authority.get("max_agent_calls"),
+        "require_delegated_model": bool(required_trace_events),
+        "command_calls": command_calls,
+    }
+    statuses = authority.get("validation_runs", {}).get("statuses")
+    if statuses:
+        result["command_sequence"] = [
+            {"command": "python3 scripts/check.py", "status": status}
+            for status in statuses
+        ]
+    if scenario_id == "architecture-native-ownership":
+        result["extra_exploration_calls"] = {
+            "native_markers": [stage_marker("target-native-explore")],
+            "extra_markers": [stage_marker("ultra-code-explore")],
+            "max": 0,
+        }
+    return result
 
 
 def run(args: list[str], cwd: Path) -> str:
@@ -169,6 +253,7 @@ def sha256(path: Path) -> str:
 
 def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
     scenario = SCENARIOS[scenario_id]
+    authority = SCENARIO_AUTHORITY[scenario_id]
     if repo.exists():
         raise SystemExit(f"refusing to overwrite existing fixture: {repo}")
     repo.mkdir(parents=True)
@@ -190,6 +275,14 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
                 "    raise SystemExit('priority order still follows the legacy route')",
             ]
         )
+    native_marker_events = [
+        name for name in authority.get("trace_required_events", [])
+        if name.startswith("target-")
+    ]
+    native_marker_contract = "\n".join(
+        f"When delegating native stage `{name}`, include literal marker `{stage_marker(name)}` in its prompt."
+        for name in native_marker_events
+    )
     common = {
         "AGENTS.md": "# Eval fixture\n\nFollow EVAL_PROMPT.md. Do not read files outside this repository.\n",
         "CONTEXT.md": "# Domain\n\nOrder Router selects a route. Audit Writer records the decision.\n",
@@ -205,10 +298,24 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
 
             {scenario['native']}
 
+            {native_marker_contract}
+
             Write the requested artifact, but do not perform a stage owned by Ultra.
             """
         ),
     }
+    if authority.get("publication_command"):
+        common["scripts/publish.py"] = clean(
+            """
+            import json
+            from pathlib import Path
+
+            receipt = {"adapter": "local-publication", "status": "promoted"}
+            path = Path("artifacts/publication-receipt.json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
+            """
+        )
     if "evidence" in scenario:
         common["APPROVED_EVIDENCE.md"] = scenario["evidence"] + "\n"
     if "history" in scenario:
@@ -222,43 +329,79 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
         write(repo / "skill-input" / relative, value)
         contract_hashes[relative] = hashlib.sha256(value.encode()).hexdigest()
 
+    vocabulary = stage_vocabulary(scenario)
+    aliases = scenario.get("event_aliases", {})
+    event_owners = {
+        aliases.get(name, name): event_owner(aliases.get(name, name))
+        for name in vocabulary
+    }
+    allowed_changes = {
+        scenario["artifact"],
+        "artifacts/stage-evidence.json",
+        *authority.get("allowed_changes", []),
+    }
     expectations = {
+        "schema_version": 2,
         "scenario": scenario_id,
         "variant": variant,
         "contract_ref": ref,
-        "stage_vocabulary": stage_vocabulary(scenario),
+        "stage_vocabulary": vocabulary,
         "required_events": scenario["events"],
         "recordable_extra_events": scenario.get("recordable_extra_events", []),
-        "historical_forbidden_events": scenario["forbidden"],
+        "event_owners": event_owners,
         "artifact": scenario["artifact"],
         "artifact_tokens": scenario["tokens"],
+        "artifact_sections": authority["artifact_sections"],
+        "artifact_sources": authority["artifact_sources"],
         "expected_result": scenario["result"],
         "expected_tracker_status": scenario["tracker"],
+        "allowed_changes": sorted(allowed_changes),
         "contract_hashes": contract_hashes,
-        "trace_expectations": scenario.get("trace_expectations"),
-        "event_aliases": scenario.get("event_aliases", {}),
+        "trace_expectations": trace_expectations(scenario_id, scenario),
+        "event_aliases": aliases,
         "ablation_attributable_failure_codes": scenario.get("ablation_attributable_failure_codes", []),
         "ablation_required_difference_codes": scenario.get("ablation_required_difference_codes", []),
     }
-    write(repo / "EVAL_EXPECTATIONS.json", json.dumps(expectations, indent=2) + "\n")
+    expectations_text = json.dumps(expectations, indent=2) + "\n"
+    public_expectations = {
+        key: expectations[key]
+        for key in (
+            "schema_version", "scenario", "variant", "contract_ref",
+            "stage_vocabulary", "recordable_extra_events", "artifact",
+            "artifact_tokens", "artifact_sections", "artifact_sources",
+            "expected_result", "expected_tracker_status", "contract_hashes",
+            "event_aliases",
+        )
+    }
+    public_expectations_text = json.dumps(public_expectations, indent=2) + "\n"
+    write(repo / "EVAL_EXPECTATIONS.json", public_expectations_text)
     artifact_tokens = ", ".join(f"`{token}`" for token in scenario["tokens"])
-    public_stage_vocabulary = stage_vocabulary(scenario)
+    public_stage_vocabulary = vocabulary
     stage_vocabulary_text = ", ".join(f"`{name}`" for name in public_stage_vocabulary)
+    artifact_sections = ", ".join(f"`## {name}`" for name in authority["artifact_sections"])
+    artifact_sources = ", ".join(f"`{name}`" for name in authority["artifact_sources"])
     covered_additive_instruction = (
         " Record a covered-but-skipped additive goal as `covered-additive-code`."
         if "covered-additive-code" in public_stage_vocabulary
         else ""
     )
-    if scenario.get("trace_expectations", {}).get("command_calls"):
+    if scenario_id == "diagnosis-feedback-loop-first":
+        validation_instruction = (
+            "Run `python3 scripts/check.py` before the fix and require a failing exit, then run the exact "
+            "command once after the fix and require success. Record the red and green executions in their "
+            "actual stages. Runtime command order and immutable final validation are graded."
+        )
+    else:
         validation_instruction = (
             "Execute `python3 scripts/check.py` exactly once and require a successful exit. "
             "Record that command in the `validation` event evidence. Runtime execution and live repository state are graded; "
             "the primary artifact does not need to repeat the command."
         )
-    else:
-        validation_instruction = (
-            "Run `python3 scripts/check.py` as the final validation, require a successful exit, and record the exact "
-            "command in the `validation` event evidence. The primary artifact does not need to repeat the command."
+    publication_instruction = ""
+    if authority.get("publication_command"):
+        publication_instruction = (
+            f"Run the supplied publication adapter `{authority['publication_command']}` exactly once and require success. "
+            "Its receipt is part of the externally graded final state."
         )
     write(
         repo / "EVAL_PROMPT.md",
@@ -266,19 +409,21 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
             f"""
             # End-to-end Ultra profile task
 
-            Execute `/ultra {scenario['target']}` for this task:
+            Execute the contract-only `{scenario['target']}` workflow for this task:
 
             {scenario['task']}
 
-            Read `skill-input/skills/engineering/ultra/SKILL.md`, `skill-input/skills/engineering/ultra/PROFILES.md`, `TARGET_SKILL.md`, and repository evidence. Treat those as the complete portable contracts. Do not read `EVAL_EXPECTATIONS.json`.
+            Read `skill-input/skills/engineering/ultra/SKILL.md`, `skill-input/skills/engineering/ultra/PROFILES.md`, `TARGET_SKILL.md`, and repository evidence. Treat only those supplied files as the workflow contracts. Do not invoke any slash command or Skill tool, do not use installed/global skills, and do not read `EVAL_EXPECTATIONS.json` or files outside this repository.
 
-            Perform the real file changes required by the task. Write the primary result to `{scenario['artifact']}`; that path is part of the public task contract, not a hidden grader expectation. The artifact must include these case-insensitive mechanical coverage terms: {artifact_tokens}.
+            Perform the real file changes required by the task. Write the primary result to `{scenario['artifact']}`; that path is part of the public task contract, not a hidden grader expectation. The artifact must include these case-insensitive mechanical coverage terms: {artifact_tokens}. It must contain substantive Markdown sections {artifact_sections}, with repository evidence cited from these existing paths: {artifact_sources}.
 
             Mechanical final-state contract: keep `.scratch/eval/issues/01-order-routing.md` at exact status `{scenario['tracker']}`.
 
             {validation_instruction}
 
-            As durable execution evidence, write `artifacts/stage-evidence.json` with an `events` array. Append one object per completed stage in actual execution order, each with exactly `name`, `owner`, `goal`, and `evidence`; do not add anticipated or expected stages. Use the applicable names from this scenario-specific stable vocabulary: {stage_vocabulary_text}. Record the successful validation as `validation`.{covered_additive_instruction} Never record model response prose as evidence.
+            {publication_instruction}
+
+            As durable execution evidence, write `artifacts/stage-evidence.json` with an `events` array. Append one object per completed stage in actual execution order, each with exactly `name`, `owner`, `goal`, and `evidence`; do not add anticipated or expected stages. Use the applicable names from this scenario-specific stable vocabulary: {stage_vocabulary_text}. When delegating any stage, include exactly one neutral `[eval-stage:<stage-name>]` marker from that vocabulary in the Agent prompt and record the same stage in the ledger. Record the successful validation as `validation`.{covered_additive_instruction} Never record model response prose as evidence.
 
             Do not run any external grader and do not edit this prompt, `EVAL_EXPECTATIONS.json`, or the supplied skill inputs.
             """
@@ -289,10 +434,24 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
     run(["git", "config", "user.email", "ultra-eval@example.invalid"], repo)
     run(["git", "add", "."], repo)
     run(["git", "commit", "-qm", "prepare equivalent eval fixture"], repo)
+    baseline_commit = run(["git", "rev-parse", "HEAD"], repo).strip()
+    control = {
+        "control_schema_version": 1,
+        "baseline_commit": baseline_commit,
+        "expectations_sha256": hashlib.sha256(expectations_text.encode()).hexdigest(),
+        "workspace_expectations_sha256": hashlib.sha256(
+            public_expectations_text.encode()
+        ).hexdigest(),
+        "expectations": expectations,
+    }
+    control_path = repo.parent / "control.json"
+    write(control_path, json.dumps(control, indent=2) + "\n")
     manifest = {
         "scenario": scenario_id,
         "variant": variant,
         "contract_ref": ref,
+        "baseline_commit": baseline_commit,
+        "control_sha256": sha256(control_path),
         "common_hashes": {
             relative: sha256(repo / relative)
             for relative in sorted(common | {"EVAL_PROMPT.md": "", "TARGET_SKILL.md": ""})
