@@ -38,13 +38,14 @@ SCENARIOS = {
         ),
         "events": ["target-native-explore", "target-native-candidate", "ultra-post-review", "validation"],
         "recordable_extra_events": ["ultra-code-explore"],
-        "forbidden": ["ultra-code-explore", "ultra-research"],
         "artifact": "artifacts/architecture-report.md",
         "tokens": ["Order Router", "route_order", "ADR-0001"],
         "result": "unchanged",
         "tracker": "ready-for-agent",
         "event_aliases": {"target-native-report": "target-native-candidate"},
-        "ablation_attributable_failure_codes": ["extra_exploration_call"],
+        "ablation_attributable_failure_codes": [
+            "extra_exploration_call", "duplicate_evidence_goal",
+        ],
         "ablation_required_difference_codes": ["extra_exploration_call"],
     },
     "diagnosis-feedback-loop-first": {
@@ -52,7 +53,6 @@ SCENARIOS = {
         "task": "Diagnose and fix the deterministic order-routing bug. Local evidence is sufficient; no external research is needed.",
         "native": "Build and run the red-capable feedback loop before hypotheses, exploration toward a theory, or research. Then reproduce, fix, rerun, and record the diagnosis.",
         "events": ["target-feedback-loop-red", "target-fix", "target-feedback-loop-green", "ultra-code-review", "validation"],
-        "forbidden": ["ultra-code-explore", "ultra-research-before-loop"],
         "artifact": "artifacts/diagnosis.md",
         "tokens": ["red", "green"],
         "result": "fixed",
@@ -63,7 +63,6 @@ SCENARIOS = {
         "task": "Produce a Spec for a security-sensitive change spanning the order router and audit writer. Current local evidence settles external facts.",
         "native": "Explore the repository only if current codebase understanding is absent, then write the Spec through the target workflow.",
         "events": ["target-native-explore", "ultra-independent-code", "target-artifact", "ultra-fresh-review", "validation"],
-        "forbidden": ["ultra-research", "duplicate-architecture-goal"],
         "artifact": "artifacts/spec.md",
         "tokens": ["Order Router", "Audit Writer", "security"],
         "result": "unchanged",
@@ -74,7 +73,6 @@ SCENARIOS = {
         "task": "Turn the approved local Spec into a complete Ticket set, review and repair it, then promote it through the local publication adapter.",
         "native": "Gather the source, optionally explore when understanding is absent, and own drafting plus blocker assignment.",
         "events": ["target-native-explore", "target-draft", "ultra-complete-set-review", "ultra-publication", "validation"],
-        "forbidden": ["ultra-research", "duplicate-drafting-goal"],
         "artifact": "artifacts/tickets.md",
         "tokens": ["Ticket 01", "Blocked by"],
         "result": "unchanged",
@@ -86,7 +84,6 @@ SCENARIOS = {
         "task": "Produce a bounded Spec. APPROVED_EVIDENCE.md is short and currently covers every additive dependency-and-validation goal.",
         "native": "Use current repository understanding and produce the Spec. Do not infer that short context is insufficient.",
         "events": ["covered-additive-code", "target-artifact", "validation"],
-        "forbidden": ["ultra-independent-code", "ultra-research"],
         "artifact": "artifacts/spec.md",
         "tokens": ["Order Router"],
         "result": "unchanged",
@@ -98,7 +95,6 @@ SCENARIOS = {
         "task": "Produce a cross-system Spec. HISTORY.md is long but predates ADR-0001 and lacks a current validation path.",
         "native": "Explore when current understanding is absent, then produce the Spec.",
         "events": ["target-native-explore", "ultra-independent-code", "target-artifact", "ultra-fresh-review", "validation"],
-        "forbidden": ["covered-additive-code", "ultra-research"],
         "artifact": "artifacts/spec.md",
         "tokens": ["Order Router", "Audit Writer"],
         "result": "unchanged",
@@ -110,7 +106,6 @@ SCENARIOS = {
         "task": "Triage the reported order-routing regression and verify the claim using the repository fixture.",
         "native": "Gather the report, explore the repository, check redundancy and prior rejection, and verify the claim. These stages are unconditional and target-owned.",
         "events": ["target-native-explore", "target-claim-verification", "target-artifact", "validation"],
-        "forbidden": ["ultra-code-explore", "ultra-post-review"],
         "artifact": "artifacts/triage.md",
         "tokens": ["Order Router", "confirmed"],
         "result": "unchanged",
@@ -123,8 +118,11 @@ SCENARIO_AUTHORITY = {
     "architecture-native-ownership": {
         "artifact_sections": ["Candidate", "Source Evidence", "ADR and Risk Review"],
         "artifact_sources": ["app/router.py", "docs/adr/ADR-0001.md"],
-        "trace_required_events": ["target-native-explore"],
-        "trace_reconcile_events": ["target-native-explore", "ultra-code-explore"],
+        "trace_required_events": ["target-native-explore", "ultra-post-review"],
+        "trace_reconcile_events": [
+            "target-native-explore", "ultra-post-review", "ultra-code-explore",
+        ],
+        "trace_marker_sequence": ["target-native-explore", "ultra-post-review"],
     },
     "diagnosis-feedback-loop-first": {
         "artifact_sections": ["Reproduction", "Root Cause", "Fix", "Validation"],
@@ -171,6 +169,19 @@ SCENARIO_AUTHORITY = {
 }
 
 
+def goal_identities(scenario: dict) -> dict[str, str]:
+    """Evaluator-owned stable goal identity; model-authored prose is not identity."""
+    identities = {
+        name: f"stage-goal:{scenario.get('event_aliases', {}).get(name, name)}"
+        for name in stage_vocabulary(scenario)
+    }
+    if "target-native-explore" in identities:
+        identities["target-native-explore"] = "evidence-goal:candidate-discovery"
+    if "ultra-code-explore" in identities:
+        identities["ultra-code-explore"] = "evidence-goal:candidate-discovery"
+    return identities
+
+
 def stage_vocabulary(scenario: dict) -> list[str]:
     """Return names this scenario may truthfully record, not historical forbiddens."""
     return sorted({
@@ -210,6 +221,7 @@ def trace_expectations(scenario_id: str, scenario: dict) -> dict:
         "require_marker_for_agent_calls": True,
         "required_marker_events": required_trace_events,
         "reconcile_events": authority.get("trace_reconcile_events", []),
+        "marker_sequence": authority.get("trace_marker_sequence", []),
         "max_total_agent_calls": authority.get("max_agent_calls"),
         "require_delegated_model": bool(required_trace_events),
         "command_calls": command_calls,
@@ -221,6 +233,10 @@ def trace_expectations(scenario_id: str, scenario: dict) -> dict:
             for status in statuses
         ]
     if scenario_id == "architecture-native-ownership":
+        result["marker_roles"] = {
+            "target-native-explore": ["Explore"],
+            "ultra-code-explore": ["Explore"],
+        }
         result["extra_exploration_calls"] = {
             "native_markers": [stage_marker("target-native-explore")],
             "extra_markers": [stage_marker("ultra-code-explore")],
@@ -341,14 +357,14 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
         *authority.get("allowed_changes", []),
     }
     expectations = {
-        "schema_version": 2,
+        "schema_version": 3,
         "scenario": scenario_id,
         "variant": variant,
-        "contract_ref": ref,
         "stage_vocabulary": vocabulary,
         "required_events": scenario["events"],
         "recordable_extra_events": scenario.get("recordable_extra_events", []),
         "event_owners": event_owners,
+        "event_goal_identities": goal_identities(scenario),
         "artifact": scenario["artifact"],
         "artifact_tokens": scenario["tokens"],
         "artifact_sections": authority["artifact_sections"],
@@ -366,10 +382,10 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
     public_expectations = {
         key: expectations[key]
         for key in (
-            "schema_version", "scenario", "variant", "contract_ref",
+            "schema_version", "scenario",
             "stage_vocabulary", "recordable_extra_events", "artifact",
             "artifact_tokens", "artifact_sections", "artifact_sources",
-            "expected_result", "expected_tracker_status", "contract_hashes",
+            "expected_result", "expected_tracker_status",
             "event_aliases",
         )
     }
@@ -423,7 +439,7 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
 
             {publication_instruction}
 
-            As durable execution evidence, write `artifacts/stage-evidence.json` with an `events` array. Append one object per completed stage in actual execution order, each with exactly `name`, `owner`, `goal`, and `evidence`; do not add anticipated or expected stages. Use the applicable names from this scenario-specific stable vocabulary: {stage_vocabulary_text}. When delegating any stage, include exactly one neutral `[eval-stage:<stage-name>]` marker from that vocabulary in the Agent prompt and record the same stage in the ledger. Record the successful validation as `validation`.{covered_additive_instruction} Never record model response prose as evidence.
+            As durable execution evidence, write `artifacts/stage-evidence.json` with an `events` array. Append one object per completed stage in actual execution order, each with exactly `name`, `owner`, and `evidence`; do not add anticipated or expected stages. Use the applicable names from this scenario-specific stable vocabulary: {stage_vocabulary_text}. When delegating any stage, include exactly one neutral `[eval-stage:<stage-name>]` marker from that vocabulary in the Agent prompt and record the same stage in the ledger. Record the successful validation as `validation`.{covered_additive_instruction} Never record model response prose as evidence.
 
             Do not run any external grader and do not edit this prompt, `EVAL_EXPECTATIONS.json`, or the supplied skill inputs.
             """

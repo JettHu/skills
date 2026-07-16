@@ -39,7 +39,7 @@ def git_output(repo: Path, args: list[str]) -> tuple[str, bool]:
 
 def load_authority(
     repo: Path, control_path: Optional[Path]
-) -> tuple[dict, str, str, str, list[str]]:
+) -> tuple[dict, str, str, list[str]]:
     """Load model-invisible authority, falling back to the fixture's root commit."""
     errors: list[str] = []
     control = control_path or repo.parent / "control.json"
@@ -60,10 +60,10 @@ def load_authority(
             canonical = json.dumps(expected, indent=2) + "\n"
             if hashlib.sha256(canonical.encode()).hexdigest() != digest:
                 raise ValueError("control digest mismatch")
-            return expected, baseline, digest, workspace_digest, errors
+            return expected, baseline, workspace_digest, errors
         except (KeyError, ValueError, json.JSONDecodeError, OSError, UnicodeDecodeError):
             errors.append("authoritative control record is missing or malformed")
-            return {}, "", "", "", errors
+            return {}, "", "", errors
 
     roots, ok = git_output(repo, ["rev-list", "--max-parents=0", "HEAD"])
     baseline = roots.splitlines()[0].strip() if ok and roots.splitlines() else ""
@@ -74,14 +74,14 @@ def load_authority(
     )
     if not ok:
         errors.append("authoritative expectations are unavailable")
-        return {}, baseline, "", "", errors
+        return {}, baseline, "", errors
     try:
         expected = json.loads(raw)
     except json.JSONDecodeError:
         errors.append("authoritative expectations are malformed")
-        return {}, baseline, "", "", errors
+        return {}, baseline, "", errors
     digest = hashlib.sha256(raw.encode()).hexdigest()
-    return expected, baseline, digest, digest, errors
+    return expected, baseline, digest, errors
 
 
 def status(text: str) -> str:
@@ -115,7 +115,9 @@ def check_required_sequence(
 
 
 def changed_paths(repo: Path, baseline: str) -> tuple[set[str], bool]:
-    tracked, tracked_ok = git_output(repo, ["diff", "--name-only", baseline, "--"])
+    tracked, tracked_ok = git_output(
+        repo, ["-c", "core.safecrlf=false", "diff", "--no-ext-diff", "--name-only", baseline, "--"]
+    )
     # Do not honor model-writable ignore configuration when enforcing the write set.
     untracked, untracked_ok = git_output(repo, ["ls-files", "--others"])
     return set(tracked.splitlines()) | set(untracked.splitlines()), tracked_ok and untracked_ok
@@ -160,7 +162,6 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
     (
         expected,
         baseline,
-        expected_digest,
         workspace_expected_digest,
         authority_errors,
     ) = load_authority(repo, control)
@@ -218,24 +219,28 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
     if not isinstance(evidence, dict):
         evidence = {}
     events = evidence.get("events", [])
+    event_keys = {"name", "owner", "evidence"} if expected.get("schema_version") == 3 else {
+        "name", "owner", "goal", "evidence"
+    }
     valid_events = (
         evidence_path.is_file()
         and not evidence_path.is_symlink()
         and isinstance(events, list)
         and all(
             isinstance(event, dict)
-            and set(event) == {"name", "owner", "goal", "evidence"}
+            and set(event) == event_keys
             and all(isinstance(event[key], str) and event[key].strip() for key in event)
             for event in events
         )
     )
     check_profile(valid_events, "stage evidence has the required final-state schema", "stage_schema")
+    grading_events = events if valid_events else []
     aliases = expected.get("event_aliases", {}) if isinstance(expected.get("event_aliases", {}), dict) else {}
-    raw_names = [event.get("name") for event in events if isinstance(event, dict)]
+    raw_names = [event["name"] for event in grading_events]
     names = [normalize_event_name(name, aliases) for name in raw_names]
     stage_vocabulary = expected.get("stage_vocabulary")
     schema_version = expected.get("schema_version")
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         normalized_vocabulary = {
             normalize_event_name(name, aliases) for name in (stage_vocabulary or [])
         }
@@ -255,15 +260,29 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
         owners = expected.get("event_owners", {})
         owner_ok = all(
             owners.get(normalize_event_name(event.get("name"), aliases)) == event.get("owner")
-            for event in events if isinstance(event, dict)
+            for event in grading_events
         )
         check_profile(owner_ok, "recorded stage owners match the hidden ownership contract", "stage_owner")
-        goals = [event.get("goal") for event in events if isinstance(event, dict)]
-        check_profile(
-            len(goals) == len(set(goals)),
-            "completed stages have distinct evidence goals",
-            "unique_evidence_goals",
-        )
+        if schema_version == 3:
+            goal_identities = expected.get("event_goal_identities", {})
+            stable_goal_ids = [goal_identities.get(name) for name in names]
+            check_profile(
+                all(isinstance(goal_id, str) and goal_id for goal_id in stable_goal_ids),
+                "completed stages resolve to evaluator-owned stable goal identities",
+                "stable_goal_identity",
+            )
+            check_profile(
+                len(stable_goal_ids) == len(set(stable_goal_ids)),
+                "completed stages have distinct stable evidence-goal identities",
+                "duplicate_evidence_goal",
+            )
+        else:
+            goals = [event.get("goal") for event in grading_events]
+            check_profile(
+                len(goals) == len(set(goals)),
+                "completed stages have distinct evidence goals",
+                "unique_evidence_goals",
+            )
     elif stage_vocabulary is not None:
         normalized_vocabulary = {normalize_event_name(name, aliases) for name in stage_vocabulary}
         check_profile(
@@ -301,7 +320,7 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
             "forbidden or duplicate-ownership stages are absent",
             "forbidden_events_absent",
         )
-        goals = [event.get("goal") for event in events if isinstance(event, dict)]
+        goals = [event.get("goal") for event in grading_events]
         check_profile(
             len(goals) == len(set(goals)),
             "evidence goals have a single owner and execution",
@@ -363,7 +382,7 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
     )
 
     unexpected_paths: list[str] = []
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         paths, paths_ok = changed_paths(repo, baseline)
         unexpected_paths = sorted(paths - set(expected.get("allowed_changes", [])))
         check_repository(paths_ok, "initial fixture baseline is available", "baseline_unavailable")
@@ -392,7 +411,7 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
         except OSError:
             supplied_digest = ""
         check_repository(
-            supplied.is_file() and supplied_digest == digest,
+            supplied.is_file() and not supplied.is_symlink() and supplied_digest == digest,
             f"supplied contract remains unchanged: {relative}",
             f"supplied_contract:{relative}",
         )
@@ -421,13 +440,17 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
                 for marker in call.get("stage_markers", [])
                 if marker in marker_to_event
             ]
+            reconciled = set(trace_expected.get("reconcile_events", []))
+            ledger_sequence = [name for name in names if name in reconciled]
+            trace_sequence = [name for name in traced_names if name in reconciled]
             mismatched = [
                 name for name in trace_expected.get("reconcile_events", [])
                 if names.count(name) != traced_names.count(name)
             ]
-            if mismatched:
+            if mismatched or ledger_sequence != trace_sequence:
+                detail = ", ".join(mismatched) if mismatched else "relative order"
                 trace_failures.append(
-                    "stage ledger and completed runtime calls agree for: " + ", ".join(mismatched)
+                    "stage ledger and completed runtime calls do not agree for: " + detail
                 )
                 trace_failure_codes.append("stage_trace_mismatch")
             else:

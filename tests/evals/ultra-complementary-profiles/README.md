@@ -1,5 +1,39 @@
 # Ultra Complementary Profiles Eval Harness
 
+## Practical threat model and authority boundary
+
+This harness evaluates a cooperative-but-fallible Agent. The Agent may inspect files
+visible from its working directory, invoke ordinary shell wrappers, and produce
+malformed output or an inaccurate stage ledger. The evaluator therefore does not use
+model prose or the ledger alone to prove delegation, execution order, validation, or
+final state. Those claims require evaluator-owned repository checks and runtime trace
+evidence.
+
+This is not an adversarial-isolation or security-sandbox claim. Deliberate Git
+metadata attacks such as `git replace` or `skip-worktree`, guessing evaluator-owned
+absolute host paths, and intentional reads outside the supplied workspace are
+out-of-scope defense-in-depth. The canary remains blocked on the practical boundary
+described here, not on hardening against an actively hostile Agent.
+
+Public task mechanics belong in the byte-identical treatment/ablation prompt and
+public metadata. Hidden grading policy belongs only to evaluator authority. Before a
+model starts, the runner snapshots `control.json` in memory and removes it from disk;
+only after the runtime exits does it materialize `grader-control.json`. The model runs
+from a neutral opaque directory name, while variant/ref mappings remain in external
+invocation evidence. `EVAL_EXPECTATIONS.json` intentionally omits arm identity and
+contract refs. Only the supplied skill/profile content differs between arms.
+
+The practical runtime boundary is preflighted without a model request. Qoder receives
+an isolated `HOME` and a temporary config root containing only a bridge to
+`~/.qoder/.auth`; settings, skills, plugins, and other ambient Qoder state are not
+copied. A real `qodercli status --output json` check runs in that isolation before
+execution. Evidence records only whether authentication was available, never account
+identity or authentication contents. Binary lookup, version, preflight, execution,
+and timeout failures all produce attempt-local invocation/result/error evidence, and
+temporary runtime directories are removed on every path.
+
+## Public contract and external observability
+
 This harness compares revised profile contracts with an ablation ref in equivalent,
 isolated Git repositories. It grades final repository, artifact, live validation,
 tracker, supplied-contract, and structured stage state. For delegation-sensitive
@@ -20,8 +54,17 @@ not a model-authored ledger, is authoritative for duplicate exploration. Validat
 proved by a successful runtime command plus a fresh external rerun; the primary
 artifact does not need a hidden validation literal.
 
-The attempt-local `control.json`, outside the model repository, is the authoritative
-expectation record and pins the initial fixture commit. The repository's
+New fixtures use schema version 3. Ledger events contain only `name`, `owner`, and
+`evidence`; the unused free-text `goal` field is gone. The evaluator maps stable stage
+identities to evaluator-owned evidence-goal identities, so a second exploration maps
+to the same candidate-discovery goal instead of passing merely because the Agent chose
+different prose. This mapping stays out of the shared prompt; attributable ablation
+still requires the matching real trace call.
+
+The prepare-only attempt-local `control.json`, outside the model repository, is the
+authoritative expectation record and pins the initial fixture commit. The runner
+snapshots and removes it before model execution, then recreates its contents only as
+`grader-control.json` after runtime exit. The repository's
 `EVAL_EXPECTATIONS.json` contains only public fixture metadata and has its own hash in
 that control record; hidden required stages, owners, trace rules, and write sets exist
 only in the external authority. The grader requires each hidden scenario stage exactly
@@ -74,10 +117,11 @@ a commit SHA.
 
 The generated prompt is contract-only: it does not contain a slash invocation and
 forbids the runtime `Skill` tool and installed/global skill contracts. The runner also
-uses an ephemeral user configuration root. Qoder is started with only the project
-setting source and with built-in skills disabled; Primary receives an isolated
-`HOME`/`CODEX_HOME` containing only an auth link. The temporary configuration root is removed
-after execution. Runtime traces independently fail any observed `Skill` invocation, so
+uses an ephemeral user configuration root and isolated `HOME`. Qoder starts with only
+the ambient `.qoder/.auth` bridge, project-only settings, and disabled built-in
+skills; it does not copy settings, skills, or plugins. Primary receives an isolated
+`HOME`/`CODEX_HOME` containing only an auth link. Temporary runtime state is removed
+after every outcome. Runtime traces independently fail any observed `Skill` invocation, so
 the supplied treatment/ablation contracts are the only admissible workflow inputs.
 
 Run a treatment/ablation pair through Qoder:
@@ -107,10 +151,17 @@ validation state on either side also stops the matrix and cannot be counted as a
 ablation difference. For the architecture canary, a ledger-only ownership claim is
 insufficient: the raw trace must produce the dedicated `extra_exploration_call`
 failure for a completed delegated stage marked `[eval-stage:ultra-code-explore]`.
+The same recorded stage may also produce `duplicate_evidence_goal` through the hidden
+stable goal mapping; that code is allowable but never substitutes for the required
+external trace delta.
 Every completed Agent call must carry exactly one known neutral stage-intent marker;
-role names and free text are never classifiers. Marker counts are reconciled with the
-stage ledger in both directions, so a ledger-only claim or an unrecorded trace call
-produces non-attributable `stage_trace_mismatch`. Re-running the same run id
+an explicit runtime role constrains Explore intent when exposed, while free text is
+never a classifier. Marker identities and their real
+trace order are reconciled with the stage ledger in both directions, so a ledger-only
+claim, an unrecorded trace call, or false ledger ordering produces non-attributable
+`stage_trace_mismatch`. Architecture treatment additionally requires one real
+target-native Explore call followed by a distinct delegated Ultra post-review; a
+ledger-only post-review cannot pass. Re-running the same run id
 preserves every pair verdict under its treatment/ablation attempt numbers.
 
 Omit `--reasoning-effort` to preserve a model's default. Each rerun creates a new
@@ -123,9 +174,10 @@ Delegation-sensitive `TARGET_SKILL.md` native contracts carry neutral markers su
 `[eval-stage:target-native-explore]`; the shared prompt publishes only the generic
 `[eval-stage:<stage-name>]` annotation rule and scenario vocabulary, not the hidden
 required sequence. The trace grader accepts only calls whose outer runtime status and
-every reported child Agent terminal state are completed. It parses shell command
-segments, so an exact validation followed by a composite second invocation counts as
-two executions. Every behavior-sensitive scenario has external evidence through
+every reported child Agent terminal state are completed. It observes shell command
+events, including validation launched through ordinary `sh -c`, `bash -lc`, and
+command-substitution wrappers, so repeated executions cannot hide behind those common
+forms. Every behavior-sensitive scenario has external evidence through
 stage markers, red/green command order, immutable file changes, publication adapter
 receipt, or a no-delegation cap. The grader also
 records primary-runtime delegated model identity as `unknown/unavailable` when the

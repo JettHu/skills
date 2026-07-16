@@ -13,6 +13,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import uuid
 
 
 HERE = Path(__file__).resolve().parent
@@ -31,9 +32,16 @@ def next_attempt(root: Path) -> int:
     return max(found, default=0) + 1
 
 
-def command_output(args: list[str]) -> str:
-    result = subprocess.run(args, text=True, capture_output=True)
-    return (result.stdout or result.stderr).strip()
+def probe(args: list[str], env: dict[str, str]) -> tuple[int, str, str]:
+    try:
+        result = subprocess.run(args, env=env, text=True, capture_output=True, timeout=30)
+        return result.returncode, result.stdout, result.stderr
+    except FileNotFoundError:
+        return 127, "", "runtime binary not found"
+    except OSError as exc:
+        return 126, "", f"runtime probe failed: {exc.__class__.__name__}"
+    except subprocess.TimeoutExpired:
+        return 124, "", "runtime probe timed out"
 
 
 def resolve_ref(ref: str) -> str:
@@ -146,45 +154,64 @@ def main() -> None:
         subprocess.run(prepare, check=True)
         attempt_root = variant_root / f"attempt-{attempt:03d}"
         repo = attempt_root / "repo"
-        control_snapshot = json.loads((attempt_root / "control.json").read_text(encoding="utf-8"))
+        control_path = attempt_root / "control.json"
+        control_snapshot = json.loads(control_path.read_text(encoding="utf-8"))
+        control_path.unlink()
         prompt = (repo / "EVAL_PROMPT.md").read_text(encoding="utf-8")
-        runtime_config = Path(tempfile.mkdtemp(prefix="ultra-eval-runtime-"))
+        runtime_root = Path(tempfile.mkdtemp(prefix="ultra-eval-runtime-"))
+        runtime_config = runtime_root / "config"
+        runtime_home = runtime_root / "home"
+        runtime_config.mkdir()
+        runtime_home.mkdir()
+        workspace_root = Path(tempfile.mkdtemp(prefix="agent-workspace-"))
+        runtime_repo = workspace_root / f"workspace-{uuid.uuid4().hex[:12]}"
+        shutil.move(str(repo), runtime_repo)
         runtime_env = os.environ.copy()
+        runtime_env["HOME"] = str(runtime_home)
+        runtime_errors: list[dict[str, object]] = []
+        qoder_auth = Path.home() / ".qoder" / ".auth"
         if args.runtime == "qoder":
+            if qoder_auth.is_dir():
+                (runtime_config / ".auth").symlink_to(qoder_auth, target_is_directory=True)
             command = [
                 args.qoder_bin, "-p", "--output-format", "stream-json", "--permission-mode",
-                "bypass_permissions", "--cwd", str(repo), "--model", args.model,
+                "bypass_permissions", "--cwd", str(runtime_repo), "--model", args.model,
                 "--context-window", str(args.context_window),
                 "--config-dir", str(runtime_config), "--setting-sources", "project",
                 "--disable-builtin-skills",
             ]
             if args.reasoning_effort:
                 command.extend(["--reasoning-effort", args.reasoning_effort])
-            runtime_version = command_output([args.qoder_bin, "--version"])
+            version_command = [args.qoder_bin, "--version"]
+            preflight_command = [
+                args.qoder_bin, "--config-dir", str(runtime_config),
+                "status", "--output", "json",
+            ]
         else:
-            ambient_codex_home = Path(runtime_env.get("CODEX_HOME", Path.home() / ".codex"))
+            ambient_codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
             ambient_auth = ambient_codex_home / "auth.json"
             if ambient_auth.is_file():
                 (runtime_config / "auth.json").symlink_to(ambient_auth)
             runtime_env["CODEX_HOME"] = str(runtime_config)
-            runtime_env["HOME"] = str(runtime_config)
             command = [
                 args.primary_bin, "--ask-for-approval", "never", "exec", "--json", "--ephemeral",
                 "--sandbox", "workspace-write",
-                "-C", str(repo),
+                "-C", str(runtime_repo),
                 "--model", args.model,
             ]
             if args.reasoning_effort:
                 command.extend(["-c", f'model_reasoning_effort="{args.reasoning_effort}"'])
-            runtime_version = command_output([args.primary_bin, "--version"])
+            version_command = [args.primary_bin, "--version"]
+            preflight_command = version_command
         command.append(prompt)
         contract_ref = args.treatment_ref if variant == "treatment" else args.ablation_ref
         invocation = {
             "argv": command,
             "shell": shlex.join(command),
-            "cwd": str(repo),
+            "cwd": str(runtime_repo),
+            "evidence_repo": str(repo),
             "runtime": args.runtime,
-            "runtime_version": runtime_version,
+            "runtime_version": None,
             "scenario": args.scenario,
             "variant": variant,
             "model": args.model,
@@ -198,7 +225,11 @@ def main() -> None:
                 "ephemeral_user_config": True,
                 "user_and_local_setting_sources_disabled": args.runtime == "qoder",
                 "builtin_skills_disabled": args.runtime == "qoder",
-                "ambient_home_isolated": args.runtime == "primary",
+                "ambient_home_isolated": True,
+                "qoder_auth_bridge_only": args.runtime == "qoder",
+                "qoder_auth_bridge_present": args.runtime == "qoder" and (runtime_config / ".auth").is_symlink(),
+                "initial_runtime_config_entries": sorted(path.name for path in runtime_config.iterdir()),
+                "neutral_opaque_cwd": True,
             },
             "authority": {
                 "baseline_commit": control_snapshot["baseline_commit"],
@@ -214,25 +245,60 @@ def main() -> None:
                 "selected_contract": {"requested": contract_ref, "sha": ref_shas[variant]},
             },
             "started_at": datetime.now(timezone.utc).isoformat(),
+            "preflight": {"authentication_available": None, "exit_code": None},
+            "errors": runtime_errors,
         }
         write(attempt_root / "invocation.json", json.dumps(invocation, indent=2) + "\n")
         timed_out = False
+        run_exit = 125
+        stdout = ""
+        stderr = ""
         try:
-            result = subprocess.run(
-                command, cwd=repo, env=runtime_env, text=True, capture_output=True,
-                timeout=args.timeout,
-            )
-            run_exit = result.returncode
-            stdout, stderr = result.stdout, result.stderr
+            version_exit, version_stdout, version_stderr = probe(version_command, runtime_env)
+            version_text = (version_stdout or version_stderr).strip()
+            if version_exit == 0 and version_text:
+                invocation["runtime_version"] = version_text.splitlines()[0]
+            else:
+                runtime_errors.append({"phase": "version", "code": "runtime_version_failed", "exit_code": version_exit})
+            if not runtime_errors:
+                preflight_exit, _, _ = probe(preflight_command, runtime_env)
+                invocation["preflight"] = {
+                    "authentication_available": preflight_exit == 0 if args.runtime == "qoder" else None,
+                    "exit_code": preflight_exit,
+                }
+                if preflight_exit != 0:
+                    runtime_errors.append({"phase": "preflight", "code": "runtime_preflight_failed", "exit_code": preflight_exit})
+            if not runtime_errors:
+                result = subprocess.run(
+                    command, cwd=runtime_repo, env=runtime_env, text=True, capture_output=True,
+                    timeout=args.timeout,
+                )
+                run_exit = result.returncode
+                stdout, stderr = result.stdout, result.stderr
+                if run_exit != 0:
+                    runtime_errors.append({"phase": "execution", "code": "runtime_exit_nonzero", "exit_code": run_exit})
         except subprocess.TimeoutExpired as exc:
             timed_out = True
             run_exit = 124
             stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
             stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+            runtime_errors.append({"phase": "execution", "code": "runtime_timeout", "exit_code": 124})
+        except (FileNotFoundError, OSError) as exc:
+            run_exit = 127 if isinstance(exc, FileNotFoundError) else 126
+            runtime_errors.append({"phase": "execution", "code": "runtime_binary_unavailable", "exit_code": run_exit})
         finally:
-            shutil.rmtree(runtime_config, ignore_errors=True)
+            try:
+                if runtime_repo.exists() or runtime_repo.is_symlink():
+                    shutil.move(str(runtime_repo), repo)
+            except OSError:
+                runtime_errors.append({"phase": "cleanup", "code": "runtime_workspace_restore_failed"})
+                repo.mkdir(parents=True, exist_ok=True)
+            shutil.rmtree(runtime_root, ignore_errors=True)
+            shutil.rmtree(workspace_root, ignore_errors=True)
         write(attempt_root / "raw-stdout.log", stdout)
         write(attempt_root / "raw-stderr.log", stderr)
+        if runtime_errors:
+            write(attempt_root / "error.json", json.dumps({"errors": runtime_errors}, indent=2) + "\n")
         grader_control = attempt_root / "grader-control.json"
         write(grader_control, json.dumps(control_snapshot, indent=2) + "\n")
         grade = subprocess.run(
@@ -260,12 +326,13 @@ def main() -> None:
             "attempt": attempt,
             "run_exit_code": run_exit,
             "timed_out": timed_out,
+            "error_codes": [str(error["code"]) for error in runtime_errors],
             "grader_exit_code": grade.returncode,
             "final_state_passed": grade_result.get("final_state_grade", {}).get("passed", False),
             "repository_passed": grade_result.get("repository_grade", {}).get("passed", False),
             "profile_passed": grade_result.get("profile_grade", {}).get("passed", False),
             "trace_passed": grade_result.get("trace_grade", {}).get("passed", False),
-            "passed": run_exit == 0 and grade.returncode == 0,
+            "passed": not runtime_errors and run_exit == 0 and grade.returncode == 0,
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "recovery": f"rerun the same command; a new attempt directory will be created after attempt-{attempt:03d}",
         }

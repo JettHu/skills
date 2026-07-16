@@ -42,6 +42,34 @@ def command_segments(command: object) -> list[str]:
     return [shlex.join(segment) for segment in segments if segment]
 
 
+def observable_commands(command: object, depth: int = 0) -> list[str]:
+    """Expose commands executed through common cooperative shell wrappers."""
+    if not isinstance(command, str) or depth > 4:
+        return []
+    observed: list[str] = []
+    substitutions = re.findall(r"\$\(([^()]*)\)", command)
+    for nested in substitutions:
+        observed.extend(observable_commands(nested, depth + 1))
+    for segment in command_segments(command):
+        observed.append(segment)
+        try:
+            tokens = shlex.split(segment)
+        except ValueError:
+            continue
+        if not tokens:
+            continue
+        shell = Path(tokens[0]).name
+        if shell not in {"sh", "bash", "zsh"}:
+            continue
+        command_index = next(
+            (index + 1 for index, token in enumerate(tokens[:-1]) if token in {"-c", "-lc"}),
+            None,
+        )
+        if command_index is not None:
+            observed.extend(observable_commands(tokens[command_index], depth + 1))
+    return observed
+
+
 def json_lines(path: Path) -> list[dict[str, Any]]:
     events = []
     try:
@@ -261,7 +289,7 @@ def summarize(path: Path) -> dict[str, Any]:
         tools = sorted(set(tools) | {"spawn_agent", "Agent"})
         agents = sorted(set(agents) | {str(call["role"]) for call in successful_calls if call.get("role")})
     for call in command_calls:
-        call["segments"] = command_segments(call.get("command"))
+        call["segments"] = observable_commands(call.get("command"))
     return {
         "runtime": runtime,
         "root_model": root_model,
@@ -315,6 +343,32 @@ def grade(summary: dict[str, Any], expected: dict[str, Any]) -> tuple[list[str],
         marker = known_markers.get(event_name)
         matching = [call for call in calls if marker in call.get("stage_markers", [])]
         check(len(matching) == 1, f"completed delegation is observed for stage: {event_name}", "required_stage_call")
+    for event_name, allowed_roles in expected.get("marker_roles", {}).items():
+        marker = known_markers.get(event_name)
+        matching = [call for call in calls if marker in call.get("stage_markers", [])]
+        roles = [str(call["role"]).casefold() for call in matching if call.get("role")]
+        check(
+            not roles or all(role in {str(value).casefold() for value in allowed_roles} for role in roles),
+            f"delegated runtime role matches stage intent: {event_name}",
+            "delegated_stage_role",
+        )
+    marker_sequence = expected.get("marker_sequence", [])
+    if marker_sequence:
+        observed_markers = [
+            name
+            for call in calls
+            for name, marker in known_markers.items()
+            if marker in call.get("stage_markers", [])
+        ]
+        cursor = 0
+        ordered = True
+        for wanted in marker_sequence:
+            try:
+                cursor = observed_markers.index(wanted, cursor) + 1
+            except ValueError:
+                ordered = False
+                break
+        check(ordered, "required completed delegation stages occur in runtime order", "delegated_stage_order")
     maximum_total = expected.get("max_total_agent_calls")
     if maximum_total is not None:
         check(len(calls) <= maximum_total, f"no extra Ultra exploration beyond {maximum_total} Agent call(s)", "agent_calls_max_total")

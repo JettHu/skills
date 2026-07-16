@@ -95,10 +95,9 @@ for repo in sorted(root.glob("*/treatment/attempt-001/repo")):
         {
             "name": name,
             "owner": expected["event_owners"][name],
-            "goal": f"goal-{index}-{name}",
             "evidence": expected["artifact"],
         }
-        for index, name in enumerate(expected["required_events"])
+        for name in expected["required_events"]
     ]
     (repo / "artifacts/stage-evidence.json").write_text(
         json.dumps({"events": events}, indent=2) + "\n", encoding="utf-8"
@@ -127,7 +126,10 @@ for repo in sorted(root.glob("*/treatment/attempt-001/repo")):
         trace_events.extend((
             {"type": "assistant", "message": {"content": [{
                 "type": "tool_use", "id": call_id, "name": "Agent",
-                "input": {"subagent_type": "general-purpose", "prompt": f"Do stage {marker}"},
+                "input": {
+                    "subagent_type": "Explore" if name in {"target-native-explore", "ultra-code-explore"} else "general-purpose",
+                    "prompt": f"Do stage {marker}",
+                },
             }]}},
             {"type": "assistant", "parent_tool_use_id": call_id, "message": {"model": "delegated", "content": []}},
             {"type": "user", "message": {"content": [{
@@ -184,10 +186,20 @@ import sys
 path = Path(sys.argv[1])
 path.write_text(
     "#!/usr/bin/env python3\n"
-    "import pathlib, sys\n"
+    "import json, os, pathlib, sys\n"
+    "if '--version' in sys.argv:\n"
+    "    print('fake-qoder 1.0')\n"
+    "    raise SystemExit(0)\n"
+    "if 'status' in sys.argv:\n"
+    "    config = pathlib.Path(sys.argv[sys.argv.index('--config-dir') + 1])\n"
+    "    assert {entry.name for entry in config.iterdir()} <= {'.auth'}\n"
+    "    assert pathlib.Path(os.environ['HOME']) != pathlib.Path.home().parent\n"
+    "    print(json.dumps({'authenticated': True, 'account': 'must-not-be-recorded'}))\n"
+    "    raise SystemExit(0)\n"
     "if '--cwd' in sys.argv:\n"
     "    repo = pathlib.Path(sys.argv[sys.argv.index('--cwd') + 1])\n"
-    "    (repo.parent / 'control.json').write_text('{}\\n', encoding='utf-8')\n"
+    "    assert not (repo.parent / 'control.json').exists()\n"
+    "    assert '/treatment/' not in str(repo) and '/ablation/' not in str(repo)\n"
     "raise SystemExit(9)\n",
     encoding="utf-8",
 )
@@ -214,7 +226,7 @@ import json
 from pathlib import Path
 import sys
 root = Path(sys.argv[1])
-assert json.loads((root / "control.json").read_text()) == {}
+assert not (root / "control.json").exists()
 snapshot = json.loads((root / "grader-control.json").read_text())
 assert snapshot["expectations"]["required_events"]
 invocation = json.loads((root / "invocation.json").read_text())
@@ -230,8 +242,16 @@ assert invocation["runtime_isolation"] == {
     "ephemeral_user_config": True,
     "user_and_local_setting_sources_disabled": True,
     "builtin_skills_disabled": True,
-    "ambient_home_isolated": False,
+    "ambient_home_isolated": True,
+    "qoder_auth_bridge_only": True,
+    "qoder_auth_bridge_present": invocation["runtime_isolation"]["qoder_auth_bridge_present"],
+    "initial_runtime_config_entries": invocation["runtime_isolation"]["initial_runtime_config_entries"],
+    "neutral_opaque_cwd": True,
 }
+assert set(invocation["runtime_isolation"]["initial_runtime_config_entries"]) <= {".auth"}
+assert invocation["preflight"] == {"authentication_available": True, "exit_code": 0}
+assert "must-not-be-recorded" not in json.dumps(invocation)
+assert not Path(invocation["cwd"]).exists()
 PY
 
 canary_runner=(python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py"
@@ -289,8 +309,8 @@ assert "--dangerously-bypass-approvals-and-sandbox" not in invocation["argv"]
 assert ["--sandbox", "workspace-write"] == invocation["argv"][6:8]
 assert invocation["context_window"] is None
 assert len(invocation["refs"]["treatment"]["sha"]) == 40
-expectations = json.loads((Path(invocation["cwd"]) / "EVAL_EXPECTATIONS.json").read_text(encoding="utf-8"))
-assert expectations["contract_ref"] == invocation["refs"]["selected_contract"]["sha"]
+expectations = json.loads((Path(invocation["evidence_repo"]) / "EVAL_EXPECTATIONS.json").read_text(encoding="utf-8"))
+assert "contract_ref" not in expectations and "variant" not in expectations
 assert invocation["refs"]["selected_contract"]["requested"] == "HEAD"
 assert invocation["scenario"] == "architecture-native-ownership"
 assert invocation["variant"] == "treatment"
@@ -298,6 +318,7 @@ assert invocation["runtime_isolation"]["contract_only_prompt"] is True
 assert invocation["runtime_isolation"]["ephemeral_user_config"] is True
 assert invocation["runtime_isolation"]["user_and_local_setting_sources_disabled"] is False
 assert invocation["runtime_isolation"]["ambient_home_isolated"] is True
+assert invocation["runtime_isolation"]["neutral_opaque_cwd"] is True
 assert invocation["authority"]["snapshotted_before_model_run"] is True
 assert len(invocation["authority"]["baseline_commit"]) == 40
 prompt = invocation["argv"][-1]
@@ -309,7 +330,17 @@ python3 - "$TMP/sleep-qoder" <<'PY'
 from pathlib import Path
 import sys
 path = Path(sys.argv[1])
-path.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(5)\n", encoding="utf-8")
+path.write_text(
+    "#!/usr/bin/env python3\n"
+    "import sys, time\n"
+    "if '--version' in sys.argv:\n"
+    "    print('sleep-qoder 1.0')\n"
+    "elif 'status' in sys.argv:\n"
+    "    print('{}')\n"
+    "else:\n"
+    "    time.sleep(5)\n",
+    encoding="utf-8",
+)
 path.chmod(0o755)
 PY
 if python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py" \
@@ -325,7 +356,59 @@ from pathlib import Path
 import sys
 result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 assert result["timed_out"] is True and result["run_exit_code"] == 124
+assert result["error_codes"] == ["runtime_timeout"]
 PY
+
+python3 - "$TMP/version-fail-qoder" "$TMP/preflight-fail-qoder" <<'PY'
+from pathlib import Path
+import sys
+
+version_fail, preflight_fail = map(Path, sys.argv[1:])
+version_fail.write_text("#!/usr/bin/env python3\nraise SystemExit(7)\n", encoding="utf-8")
+preflight_fail.write_text(
+    "#!/usr/bin/env python3\n"
+    "import sys\n"
+    "if '--version' in sys.argv:\n"
+    "    print('preflight-fail 1.0')\n"
+    "    raise SystemExit(0)\n"
+    "raise SystemExit(8)\n",
+    encoding="utf-8",
+)
+version_fail.chmod(0o755)
+preflight_fail.chmod(0o755)
+PY
+
+for failure_case in missing-binary version-failure preflight-failure; do
+  case "$failure_case" in
+    missing-binary) runtime_bin="$TMP/does-not-exist"; expected_code="runtime_version_failed" ;;
+    version-failure) runtime_bin="$TMP/version-fail-qoder"; expected_code="runtime_version_failed" ;;
+    preflight-failure) runtime_bin="$TMP/preflight-fail-qoder"; expected_code="runtime_preflight_failed" ;;
+  esac
+  if python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py" \
+    --output "$TMP/runner" --run-id "$failure_case" --scenario architecture-native-ownership \
+    --treatment-ref HEAD --ablation-ref HEAD --model fake --context-window 1000000 \
+    --timeout 2 --qoder-bin "$runtime_bin" --variant treatment >/dev/null 2>&1; then
+    echo "runner unexpectedly passed $failure_case" >&2
+    exit 1
+  fi
+  python3 - "$TMP/runner/$failure_case/architecture-native-ownership/treatment/attempt-001" "$expected_code" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root, expected_code = Path(sys.argv[1]), sys.argv[2]
+for name in ("invocation.json", "result.json", "error.json", "raw-stdout.log", "raw-stderr.log"):
+    assert (root / name).is_file(), f"missing {name}"
+invocation = json.loads((root / "invocation.json").read_text(encoding="utf-8"))
+result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+error = json.loads((root / "error.json").read_text(encoding="utf-8"))
+assert expected_code in result["error_codes"]
+assert expected_code in [item["code"] for item in error["errors"]]
+assert not Path(invocation["cwd"]).exists()
+config = Path(invocation["argv"][invocation["argv"].index("--config-dir") + 1])
+assert not config.exists()
+PY
+done
 
 python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/prepare-fixture.py" \
   --output "$TMP" --run-id all-fixtures --scenario all \
@@ -349,8 +432,17 @@ for scenario_root in sorted(path for path in root.iterdir() if path.is_dir()):
     ablation_prompt = (
         scenario_root / "ablation/attempt-001/repo/EVAL_PROMPT.md"
     ).read_text(encoding="utf-8")
+    treatment_public = (
+        scenario_root / "treatment/attempt-001/repo/EVAL_EXPECTATIONS.json"
+    ).read_bytes()
+    ablation_public = (
+        scenario_root / "ablation/attempt-001/repo/EVAL_EXPECTATIONS.json"
+    ).read_bytes()
     assert treatment_prompt == ablation_prompt, (
         f"treatment and ablation prompts differ: {scenario_root.name}"
+    )
+    assert treatment_public == ablation_public, (
+        f"treatment and ablation public expectations differ: {scenario_root.name}"
     )
 for fixture in fixtures:
     public = json.loads((fixture / "EVAL_EXPECTATIONS.json").read_text(encoding="utf-8"))
@@ -375,12 +467,15 @@ for fixture in fixtures:
     assert " -> " not in prompt
     assert "Execute `/ultra" not in prompt
     assert "Do not invoke any slash command or Skill tool" in prompt
-    assert expected["schema_version"] == 2
+    assert expected["schema_version"] == 3
     assert expected["trace_expectations"] is not None
     assert "required_events" not in public
     assert "event_owners" not in public
     assert "trace_expectations" not in public
     assert "allowed_changes" not in public
+    assert "contract_hashes" not in public
+    assert "variant" not in public
+    assert "contract_ref" not in public
     assert (fixture.parent / "control.json").is_file()
     if expected["scenario"] == "architecture-native-ownership":
         assert expected_vocabulary == {
@@ -398,6 +493,13 @@ for fixture in fixtures:
             {"command": "python3 scripts/check.py", "status": "completed"},
         ]
         assert observability["required_marker_events"] == ["ultra-code-review"]
+    elif scenario == "architecture-native-ownership":
+        assert observability["required_marker_events"] == [
+            "target-native-explore", "ultra-post-review",
+        ]
+        assert observability["marker_sequence"] == [
+            "target-native-explore", "ultra-post-review",
+        ]
     elif scenario == "tickets-review-publication":
         assert any(
             item["command"] == "python3 scripts/publish.py"
@@ -499,10 +601,10 @@ The ordering rule in docs/adr/ADR-0001.md creates an audit sequencing risk to pr
     encoding="utf-8",
 )
 events = [
-    {"name": "target-native-explore", "owner": "target", "goal": "discover-candidates", "evidence": "app/router.py"},
-    {"name": "target-native-report", "owner": "target", "goal": "produce-report", "evidence": "artifacts/architecture-report.md"},
-    {"name": "ultra-post-review", "owner": "ultra", "goal": "risk-and-adr-review", "evidence": "docs/adr/ADR-0001.md"},
-    {"name": "validation", "owner": "root", "goal": "validate-repository", "evidence": "python3 scripts/check.py"},
+    {"name": "target-native-explore", "owner": "target", "evidence": "app/router.py"},
+    {"name": "target-native-report", "owner": "target", "evidence": "artifacts/architecture-report.md"},
+    {"name": "ultra-post-review", "owner": "ultra", "evidence": "docs/adr/ADR-0001.md"},
+    {"name": "validation", "owner": "root", "evidence": "python3 scripts/check.py"},
 ]
 (treatment / "artifacts/stage-evidence.json").write_text(json.dumps({"events": events}, indent=2) + "\n")
 missing_delegation = treatment.parent / "missing-delegation.jsonl"
@@ -518,9 +620,12 @@ assert subprocess.run(
 valid_trace = treatment.parent / "valid-trace.jsonl"
 valid_trace.write_text("\n".join(json.dumps(event) for event in (
     {"type": "system", "subtype": "init", "tools": ["Agent"], "agents": ["Explore"], "model": "root-model"},
-    {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "agent-1", "name": "Agent", "input": {"subagent_type": "general-purpose", "description": "target-native explore", "prompt": "Explore repository [eval-stage:target-native-explore]"}}]}},
+    {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "agent-1", "name": "Agent", "input": {"subagent_type": "Explore", "description": "target-native explore", "prompt": "Explore repository [eval-stage:target-native-explore]"}}]}},
     {"type": "assistant", "parent_tool_use_id": "agent-1", "message": {"model": "delegated-model", "content": []}},
     {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "agent-1", "is_error": False}]}, "tool_use_result": {"state": "completed"}},
+    {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "agent-review", "name": "Agent", "input": {"subagent_type": "general-purpose", "description": "independent post-artifact review", "prompt": "Review artifact risks [eval-stage:ultra-post-review]"}}]}},
+    {"type": "assistant", "parent_tool_use_id": "agent-review", "message": {"model": "delegated-review-model", "content": []}},
+    {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "agent-review", "is_error": False}]}, "tool_use_result": {"state": "completed"}},
     {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "bash-1", "name": "Bash", "input": {"command": "python3 scripts/check.py"}}]}},
     {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "bash-1", "is_error": False}]}, "tool_use_result": {"stdout": "", "stderr": "", "interrupted": False}},
 )) + "\n")
@@ -548,12 +653,19 @@ assert any(
 )
 artifact.write_text(artifact_original, encoding="utf-8")
 
+artifact.unlink()
+artifact.symlink_to("../app/router.py")
+artifact_symlink_result, artifact_symlink_grade = grade_json()
+assert artifact_symlink_result.returncode != 0
+assert "artifact_exists" in artifact_symlink_grade["repository_grade"]["failure_codes"]
+artifact.unlink()
+artifact.write_text(artifact_original, encoding="utf-8")
+
 # Workspace expectations are untrusted; the external control remains authoritative.
 expectations_path = treatment / "EVAL_EXPECTATIONS.json"
 expectations_original = expectations_path.read_text(encoding="utf-8")
 tampered = json.loads(expectations_original)
 tampered["stage_vocabulary"] = []
-tampered["contract_hashes"] = {}
 expectations_path.write_text(json.dumps(tampered, indent=2) + "\n", encoding="utf-8")
 tampered_result, tampered_grade = grade_json()
 assert tampered_result.returncode != 0
@@ -565,7 +677,7 @@ checker = treatment / "scripts/check.py"
 checker_original = checker.read_text(encoding="utf-8")
 checker.write_text("raise SystemExit(0)\n", encoding="utf-8")
 checker_result, checker_grade = grade_json()
-assert checker_result.returncode != 0
+assert checker_result.returncode != 0, checker_grade
 assert "scenario_write_set" in checker_grade["repository_grade"]["failure_codes"]
 checker.write_text(checker_original, encoding="utf-8")
 
@@ -576,6 +688,31 @@ router_result, router_grade = grade_json()
 assert router_result.returncode != 0
 assert "scenario_write_set" in router_grade["repository_grade"]["failure_codes"]
 router.write_text(router_original, encoding="utf-8")
+
+# The write set observes committed changes, untracked files, and symlinks too.
+router.write_text(router_original + "# committed unauthorized edit\n", encoding="utf-8")
+subprocess.run(["git", "add", "app/router.py"], cwd=treatment, check=True)
+subprocess.run(["git", "commit", "-qm", "unauthorized committed edit"], cwd=treatment, check=True)
+committed_result, committed_grade = grade_json()
+assert committed_result.returncode != 0
+assert "scenario_write_set" in committed_grade["repository_grade"]["failure_codes"]
+router.write_text(router_original, encoding="utf-8")
+subprocess.run(["git", "add", "app/router.py"], cwd=treatment, check=True)
+subprocess.run(["git", "commit", "-qm", "restore fixture source"], cwd=treatment, check=True)
+
+untracked = treatment / "unexpected-untracked.txt"
+untracked.write_text("unexpected\n", encoding="utf-8")
+untracked_result, untracked_grade = grade_json()
+assert untracked_result.returncode != 0
+assert "scenario_write_set" in untracked_grade["repository_grade"]["failure_codes"]
+untracked.unlink()
+
+unexpected_link = treatment / "unexpected-link"
+unexpected_link.symlink_to("app/router.py")
+symlink_result, symlink_grade = grade_json()
+assert symlink_result.returncode != 0
+assert "scenario_write_set" in symlink_grade["repository_grade"]["failure_codes"]
+unexpected_link.unlink()
 
 # Missing/malformed model-writable state yields stable JSON failures, not crashes.
 tracker_path = treatment / ".scratch/eval/issues/01-order-routing.md"
@@ -629,7 +766,9 @@ def assert_required_stage_failure(missing_name):
     assert result.returncode != 0
     grade = json.loads(result.stdout)[0]
     assert grade["repository_grade"]["passed"] is True
-    assert grade["trace_grade"]["passed"] is True
+    assert grade["trace_grade"]["passed"] is (missing_name != "ultra-post-review")
+    if missing_name == "ultra-post-review":
+        assert "stage_trace_mismatch" in grade["trace_grade"]["failure_codes"]
     assert grade["final_state_grade"]["passed"] is False
     assert "required_events_once" in grade["profile_grade"]["failure_codes"]
 
@@ -650,16 +789,18 @@ wrong_owner_result = subprocess.run(
 assert wrong_owner_result.returncode != 0
 assert "stage_owner" in json.loads(wrong_owner_result.stdout)[0]["profile_grade"]["failure_codes"]
 
-duplicate_goal_events = [{**event, "goal": "same-goal"} for event in events]
+malformed_type_events = [dict(event) for event in events]
+malformed_type_events[0]["name"] = ["not", "a", "string"]
 (treatment / "artifacts/stage-evidence.json").write_text(
-    json.dumps({"events": duplicate_goal_events}, indent=2) + "\n"
+    json.dumps({"events": malformed_type_events}, indent=2) + "\n"
 )
-duplicate_goal_result = subprocess.run(
+malformed_type_result = subprocess.run(
     [sys.executable, str(grader), str(treatment), "--trace", str(valid_trace), "--json"],
     capture_output=True, text=True,
 )
-assert duplicate_goal_result.returncode != 0
-assert "unique_evidence_goals" in json.loads(duplicate_goal_result.stdout)[0]["profile_grade"]["failure_codes"]
+assert malformed_type_result.returncode != 0
+malformed_type_grade = json.loads(malformed_type_result.stdout)[0]
+assert "stage_schema" in malformed_type_grade["profile_grade"]["failure_codes"]
 
 misordered_events = [events[1], events[0], *events[2:]]
 (treatment / "artifacts/stage-evidence.json").write_text(
@@ -679,41 +820,26 @@ assert misordered_grade["profile_grade"]["failure_codes"] == ["required_stage_or
     json.dumps({"events": events}, indent=2) + "\n"
 )
 
-post_review_trace = treatment.parent / "post-review-trace.jsonl"
-post_review_trace.write_text(valid_trace.read_text() + json.dumps({
-    "type": "assistant", "message": {"content": [{
-        "type": "tool_use", "id": "agent-review", "name": "Agent",
-        "input": {
-            "subagent_type": "general-purpose",
-            "description": "independent post-artifact review",
-            "prompt": (
-                "Review and summarize the target-native exploration and candidate-discovery report; "
-                "audit artifacts/architecture-report.md for ADR alignment and risk exclusions "
-                "[eval-stage:ultra-post-review]"
-            ),
-        },
-    }]},
-}) + "\n" + json.dumps({
-    "type": "user", "message": {"content": [{
-        "type": "tool_result", "tool_use_id": "agent-review", "is_error": False,
-    }]},
-    "tool_use_result": {"state": "completed"},
-}) + "\n")
-post_review_result = subprocess.run(
-    [sys.executable, str(grader), str(treatment), "--trace", str(post_review_trace), "--json"],
+ledger_only_review_trace = treatment.parent / "ledger-only-review-trace.jsonl"
+ledger_only_review_trace.write_text("\n".join(
+    line for line in valid_trace.read_text().splitlines()
+    if "agent-review" not in line and "delegated-review-model" not in line
+) + "\n")
+ledger_only_review_result = subprocess.run(
+    [sys.executable, str(grader), str(treatment), "--trace", str(ledger_only_review_trace), "--json"],
     capture_output=True,
     text=True,
 )
-assert post_review_result.returncode == 0, (
-    "a legal delegated post-review must not count as duplicate exploration: "
-    + post_review_result.stdout + post_review_result.stderr
-)
+assert ledger_only_review_result.returncode != 0
+ledger_only_review_grade = json.loads(ledger_only_review_result.stdout)[0]
+assert "required_stage_call" in ledger_only_review_grade["trace_grade"]["failure_codes"]
+assert "stage_trace_mismatch" in ledger_only_review_grade["trace_grade"]["failure_codes"]
 
 extra_trace = treatment.parent / "extra-trace.jsonl"
 extra_trace.write_text(valid_trace.read_text() + json.dumps({
     "type": "assistant", "message": {"content": [{
         "type": "tool_use", "id": "agent-2", "name": "Agent",
-        "input": {"subagent_type": "general-purpose", "description": "extra Ultra exploration", "prompt": "Explore [eval-stage:ultra-code-explore]"},
+        "input": {"subagent_type": "Explore", "description": "extra Ultra exploration", "prompt": "Explore [eval-stage:ultra-code-explore]"},
     }]},
 }) + "\n" + json.dumps({
     "type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "agent-2", "is_error": False}]},
@@ -759,6 +885,36 @@ newline_validation_trace.write_text(valid_trace.read_text() + json.dumps({
 newline_result, newline_grade = grade_json(trace_path=newline_validation_trace)
 assert newline_result.returncode != 0
 assert "validation_command_maximum" in newline_grade["trace_grade"]["failure_codes"]
+
+for wrapper_id, wrapper_command in (
+    ("sh-wrapper", "sh -c 'python3 scripts/check.py'"),
+    ("bash-wrapper", "bash -lc 'python3 scripts/check.py'"),
+    ("command-substitution", "echo $(python3 scripts/check.py)"),
+):
+    wrapper_trace = treatment.parent / f"{wrapper_id}.jsonl"
+    wrapper_trace.write_text(valid_trace.read_text() + "\n".join(json.dumps(event) for event in (
+        {"type": "assistant", "message": {"content": [{
+            "type": "tool_use", "id": wrapper_id, "name": "Bash",
+            "input": {"command": wrapper_command},
+        }]}},
+        {"type": "user", "message": {"content": [{
+            "type": "tool_result", "tool_use_id": wrapper_id, "is_error": False,
+        }]}, "tool_use_result": {"state": "completed", "exit_code": 0}},
+    )) + "\n")
+    wrapper_result, wrapper_grade = grade_json(trace_path=wrapper_trace)
+    assert wrapper_result.returncode != 0, wrapper_id
+    assert "validation_command_maximum" in wrapper_grade["trace_grade"]["failure_codes"]
+
+ordered_events = [json.loads(line) for line in valid_trace.read_text().splitlines()]
+misordered_trace = treatment.parent / "misordered-runtime-stages.jsonl"
+misordered_trace.write_text("\n".join(json.dumps(event) for event in (
+    [ordered_events[0], *ordered_events[4:7], *ordered_events[1:4], *ordered_events[7:]]
+)) + "\n")
+misordered_trace_result, misordered_trace_grade = grade_json(trace_path=misordered_trace)
+assert misordered_trace_result.returncode != 0
+assert "delegated_stage_order" in misordered_trace_grade["trace_grade"]["failure_codes"]
+assert "stage_trace_mismatch" in misordered_trace_grade["trace_grade"]["failure_codes"]
+assert any("do not agree" in message for message in misordered_trace_grade["trace_grade"]["failures"])
 
 codex_trace = treatment.parent / "codex-collab-trace.jsonl"
 codex_trace.write_text("\n".join(json.dumps(event) for event in (
@@ -824,6 +980,15 @@ unmarked_result, unmarked_grade = grade_json(trace_path=primary_unmarked_trace)
 assert unmarked_result.returncode != 0
 assert "delegated_stage_marker_missing" in unmarked_grade["trace_grade"]["failure_codes"]
 
+wrong_role_trace = treatment.parent / "wrong-native-role.jsonl"
+wrong_role_trace.write_text(
+    valid_trace.read_text().replace('"subagent_type": "Explore"', '"subagent_type": "general-purpose"', 1),
+    encoding="utf-8",
+)
+wrong_role_result, wrong_role_grade = grade_json(trace_path=wrong_role_trace)
+assert wrong_role_result.returncode != 0
+assert "delegated_stage_role" in wrong_role_grade["trace_grade"]["failure_codes"]
+
 # The real canary failure shape is locked down: a semantic stage alias and a
 # genuinely executed validation pass succeed, but an invalid tracker status does not.
 tracker = treatment / ".scratch/eval/issues/01-order-routing.md"
@@ -847,7 +1012,6 @@ artifact.write_text((treatment / "artifacts/architecture-report.md").read_text()
 ablation_events = events + [{
     "name": "ultra-code-explore",
     "owner": "ultra",
-    "goal": "second-candidate-discovery",
     "evidence": "completed Agent call agent-2",
 }]
 (ablation / "artifacts/stage-evidence.json").write_text(
@@ -876,8 +1040,10 @@ assert ablation_extra_result.returncode != 0
 ablation_extra_grade = json.loads(ablation_extra_result.stdout)[0]
 assert ablation_extra_grade["repository_grade"]["passed"] is True
 assert ablation_extra_grade["repository_grade"]["failure_codes"] == []
-assert ablation_extra_grade["final_state_grade"]["passed"] is True
-assert ablation_extra_grade["profile_grade"]["failure_codes"] == ["extra_exploration_call"]
+assert ablation_extra_grade["final_state_grade"]["passed"] is False
+assert ablation_extra_grade["profile_grade"]["failure_codes"] == [
+    "duplicate_evidence_goal", "extra_exploration_call",
+]
 assert ablation_extra_grade["trace_grade"]["failure_codes"] == ["extra_exploration_call"]
 
 runner_path = repo / "tests/evals/ultra-complementary-profiles/run-eval.py"
@@ -894,7 +1060,7 @@ run_ok = {"result": {"run_exit_code": 0}, "grade": clean_grade}
 attributable = runner_module.classify_canary(
     run_ok,
     {"result": {"run_exit_code": 0}, "grade": ablation_extra_grade},
-    ["extra_exploration_call"],
+    ["extra_exploration_call", "duplicate_evidence_goal"],
     ["extra_exploration_call"],
 )
 assert attributable["matrix_gate_passed"] is True
