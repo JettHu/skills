@@ -34,10 +34,16 @@ SCENARIOS = {
         "tokens": ["Order Router", "route_order", "ADR-0001", "validation: python3 scripts/check.py"],
         "result": "unchanged",
         "tracker": "ready-for-agent",
+        "delegation_marker": "[target-native:architecture-candidate-discovery]",
         "trace_expectations": {
             "capability_tools": ["Agent"],
             "capability_agents": ["Explore"],
-            "agent_calls": [{"role": "Explore", "min": 1, "max": 1}],
+            "agent_calls": [{
+                "role": "Explore",
+                "marker": "[target-native:architecture-candidate-discovery]",
+                "min": 1,
+                "max": 1,
+            }],
             "max_total_agent_calls": 1,
             "require_delegated_model": True,
         },
@@ -205,6 +211,12 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
         "trace_expectations": scenario.get("trace_expectations"),
     }
     write(repo / "EVAL_EXPECTATIONS.json", json.dumps(expectations, indent=2) + "\n")
+    delegation_instruction = ""
+    if scenario.get("delegation_marker"):
+        delegation_instruction = (
+            "The target-native Explore delegation prompt must contain the literal ownership marker "
+            f"`{scenario['delegation_marker']}`. Use that marker only for the target-owned candidate-discovery pass."
+        )
     write(
         repo / "EVAL_PROMPT.md",
         clean(
@@ -216,6 +228,8 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
             {scenario['task']}
 
             Read `skill-input/skills/engineering/ultra/SKILL.md`, `skill-input/skills/engineering/ultra/PROFILES.md`, `TARGET_SKILL.md`, and repository evidence. Treat those as the complete portable contracts. Do not read `EVAL_EXPECTATIONS.json`.
+
+            {delegation_instruction}
 
             Perform the real file changes required by the task. Write the primary result to `{scenario['artifact']}`; that path is part of the public task contract, not a hidden grader expectation. Keep `.scratch/eval/issues/01-order-routing.md` at the workflow state justified by the task. Run `python3 scripts/check.py` as the final validation.
 

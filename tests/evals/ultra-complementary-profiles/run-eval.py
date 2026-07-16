@@ -34,7 +34,12 @@ def command_output(args: list[str]) -> str:
 
 
 def resolve_ref(ref: str) -> str:
-    value = "HEAD" if ref == "working-tree" else ref
+    if ref == "working-tree":
+        raise SystemExit(
+            "model eval runs require committed treatment/ablation refs; "
+            "working-tree is prepare-fixture-only"
+        )
+    value = ref
     result = subprocess.run(
         ["git", "rev-parse", "--verify", f"{value}^{{commit}}"],
         cwd=ROOT,
@@ -96,7 +101,8 @@ def main() -> None:
         else:
             command = [
                 args.primary_bin, "exec", "--json", "--ephemeral",
-                "--dangerously-bypass-approvals-and-sandbox", "-C", str(repo),
+                "--sandbox", "workspace-write", "--ask-for-approval", "never",
+                "-C", str(repo),
                 "--model", args.model,
             ]
             if args.reasoning_effort:

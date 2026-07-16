@@ -69,7 +69,7 @@ PY
 
 runner=(python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py"
   --output "$TMP/runner" --run-id failure-record --scenario architecture-native-ownership
-  --treatment-ref working-tree --ablation-ref HEAD --model fake --context-window 1000000
+  --treatment-ref HEAD --ablation-ref HEAD --model fake --context-window 1000000
   --timeout 5 --qoder-bin "$TMP/fake-qoder" --variant treatment)
 if "${runner[@]}" >/dev/null 2>&1; then
   echo "runner unexpectedly passed a failed model run" >&2
@@ -81,6 +81,15 @@ if "${runner[@]}" >/dev/null 2>&1; then
 fi
 test -f "$TMP/runner/failure-record/architecture-native-ownership/treatment/attempt-001/result.json"
 test -f "$TMP/runner/failure-record/architecture-native-ownership/treatment/attempt-002/result.json"
+
+if python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py" \
+  --output "$TMP/runner" --run-id uncommitted-ref --scenario architecture-native-ownership \
+  --treatment-ref working-tree --ablation-ref HEAD --model fake --context-window 1000000 \
+  --timeout 5 --qoder-bin "$TMP/fake-qoder" --variant treatment >/dev/null 2>&1; then
+  echo "model runner accepted an uncommitted working-tree contract" >&2
+  exit 1
+fi
+test ! -e "$TMP/runner/uncommitted-ref"
 
 if python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py" \
   --output "$TMP/runner" --run-id primary-entry --scenario architecture-native-ownership \
@@ -96,6 +105,9 @@ import sys
 invocation = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 assert invocation["runtime"] == "primary"
 assert invocation["argv"][1:4] == ["exec", "--json", "--ephemeral"]
+assert "--dangerously-bypass-approvals-and-sandbox" not in invocation["argv"]
+assert ["--sandbox", "workspace-write"] == invocation["argv"][4:6]
+assert "--ask-for-approval" in invocation["argv"] and "never" in invocation["argv"]
 assert invocation["context_window"] is None
 assert len(invocation["refs"]["treatment"]["sha"]) == 40
 assert invocation["scenario"] == "architecture-native-ownership"
@@ -111,7 +123,7 @@ path.chmod(0o755)
 PY
 if python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py" \
   --output "$TMP/runner" --run-id timeout-record --scenario architecture-native-ownership \
-  --treatment-ref working-tree --ablation-ref HEAD --model fake --context-window 1000000 \
+  --treatment-ref HEAD --ablation-ref HEAD --model fake --context-window 1000000 \
   --timeout 1 --qoder-bin "$TMP/sleep-qoder" --variant ablation >/dev/null 2>&1; then
   echo "runner unexpectedly passed a timed-out model run" >&2
   exit 1
@@ -169,8 +181,9 @@ assert subprocess.run(
 valid_trace = treatment.parent / "valid-trace.jsonl"
 valid_trace.write_text("\n".join(json.dumps(event) for event in (
     {"type": "system", "subtype": "init", "tools": ["Agent"], "agents": ["Explore"], "model": "root-model"},
-    {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "agent-1", "name": "Agent", "input": {"subagent_type": "Explore", "description": "target-native explore"}}]}},
+    {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "agent-1", "name": "Agent", "input": {"subagent_type": "Explore", "description": "target-native explore", "prompt": "Explore repository [target-native:architecture-candidate-discovery]"}}]}},
     {"type": "assistant", "parent_tool_use_id": "agent-1", "message": {"model": "delegated-model", "content": []}},
+    {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "agent-1", "is_error": False}]}, "tool_use_result": {"state": "completed"}},
 )) + "\n")
 assert subprocess.run(
     [sys.executable, str(grader), str(treatment), "--trace", str(valid_trace)],
@@ -181,13 +194,42 @@ extra_trace = treatment.parent / "extra-trace.jsonl"
 extra_trace.write_text(valid_trace.read_text() + json.dumps({
     "type": "assistant", "message": {"content": [{
         "type": "tool_use", "id": "agent-2", "name": "Agent",
-        "input": {"subagent_type": "Explore", "description": "extra Ultra exploration"},
+        "input": {"subagent_type": "Explore", "description": "extra Ultra exploration", "prompt": "Explore without target marker"},
     }]},
+}) + "\n" + json.dumps({
+    "type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "agent-2", "is_error": False}]},
+    "tool_use_result": {"state": "completed"},
 }) + "\n")
 assert subprocess.run(
     [sys.executable, str(grader), str(treatment), "--trace", str(extra_trace)],
     capture_output=True,
 ).returncode != 0, "trace grader must reject an extra Ultra exploration call"
+
+codex_trace = treatment.parent / "codex-collab-trace.jsonl"
+codex_trace.write_text("\n".join(json.dumps(event) for event in (
+    {"type": "thread.started", "thread_id": "fresh-primary"},
+    {"type": "item.completed", "item": {
+        "id": "collab-ok", "type": "collab_tool_call", "tool": "spawn_agent",
+        "prompt": "Explore repository [target-native:architecture-candidate-discovery]",
+        "agents_states": {"agent-1": {"status": "completed"}}, "status": "completed",
+    }},
+    {"type": "item.completed", "item": {
+        "id": "collab-failed", "type": "collab_tool_call", "tool": "spawn_agent",
+        "prompt": "Explore repository [target-native:architecture-candidate-discovery]",
+        "agents_states": {}, "status": "failed",
+    }},
+)) + "\n")
+completed = subprocess.run(
+    [sys.executable, str(grader), str(treatment), "--trace", str(codex_trace), "--json"],
+    capture_output=True,
+    text=True,
+)
+assert completed.returncode == 0, completed.stdout + completed.stderr
+codex_grade = json.loads(completed.stdout)[0]
+assert codex_grade["trace"]["agent_call_count"] == 1
+assert codex_grade["trace"]["rejected_agent_call_count"] == 1
+assert codex_grade["trace"]["agent_calls"][0]["prompt"].endswith("[target-native:architecture-candidate-discovery]")
+assert codex_grade["trace"]["delegated_model_observation"] == "unknown/unavailable"
 
 artifact = ablation / "artifacts/architecture-report.md"
 artifact.parent.mkdir(parents=True, exist_ok=True)
