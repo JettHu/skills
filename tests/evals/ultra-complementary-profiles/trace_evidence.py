@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Any, Optional
 
 
@@ -262,6 +263,30 @@ def grade(summary: dict[str, Any], expected: dict[str, Any]) -> tuple[list[str],
     maximum_total = expected.get("max_total_agent_calls")
     if maximum_total is not None:
         check(len(calls) <= maximum_total, f"no extra Ultra exploration beyond {maximum_total} Agent call(s)", "agent_calls_max_total")
+    extra_exploration = expected.get("extra_exploration_calls")
+    if extra_exploration:
+        def is_exploration(call: dict[str, Any]) -> bool:
+            role = str(call.get("role", "")).casefold().strip()
+            text = f"{call.get('description', '')} {call.get('prompt', '')}"
+            folded = text.casefold()
+            return (
+                role == "explore"
+                or "candidate-discovery" in folded
+                or "candidate discovery" in folded
+                or "exploration" in folded
+                or re.search(r"\bexplore\b", folded) is not None
+            )
+
+        exploration_calls = [call for call in calls if is_exploration(call)]
+        allowed_native_calls = extra_exploration.get("allowed_native_calls", 0)
+        extra_count = max(0, len(exploration_calls) - allowed_native_calls)
+        maximum = extra_exploration.get("max")
+        if maximum is not None:
+            check(
+                extra_count <= maximum,
+                f"completed extra exploration call count is at most {maximum}",
+                "extra_exploration_call",
+            )
     if expected.get("require_delegated_model") and summary["runtime"] == "qoder":
         check(bool(summary["delegated_models"]), "delegated model is observed in the runtime trace", "delegated_model_observed")
     for requirement in expected.get("command_calls", []):

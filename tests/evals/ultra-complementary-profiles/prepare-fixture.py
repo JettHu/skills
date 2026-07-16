@@ -35,8 +35,8 @@ SCENARIOS = {
         "result": "unchanged",
         "tracker": "ready-for-agent",
         "event_aliases": {"target-native-report": "target-native-candidate"},
-        "ablation_attributable_failure_codes": ["forbidden_events_absent", "agent_calls_max_total"],
-        "ablation_required_difference_codes": ["agent_calls_max_total"],
+        "ablation_attributable_failure_codes": ["forbidden_events_absent", "extra_exploration_call"],
+        "ablation_required_difference_codes": ["extra_exploration_call"],
         "delegation_marker": "[target-native:architecture-candidate-discovery]",
         "trace_expectations": {
             "capability_tools": ["Agent"],
@@ -47,7 +47,10 @@ SCENARIOS = {
                 "min": 1,
                 "max": 1,
             }],
-            "max_total_agent_calls": 1,
+            "extra_exploration_calls": {
+                "allowed_native_calls": 1,
+                "max": 0,
+            },
             "require_delegated_model": True,
             "command_calls": [{"command": "python3 scripts/check.py", "min": 1, "max": 1}],
         },

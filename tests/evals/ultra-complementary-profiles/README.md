@@ -62,15 +62,20 @@ python3 tests/evals/ultra-complementary-profiles/run-eval.py \
   --timeout 1800
 ```
 
-Use `--canary-gate` only for the fail-fast treatment/ablation sentinel. It writes
-`canary-verdict.json` and passes the gate only when treatment is fully correct,
+Use `--canary-gate` only for the fail-fast treatment/ablation sentinel. It writes a
+pair-specific durable verdict such as
+`canary-verdict-treatment-001-ablation-001.json` and passes the gate only when treatment is fully correct,
 ablation has valid repository/artifact/validation/tracker evidence, and the ablation
 fails solely on the scenario's declared ownership delta. If both variants pass, the
 verdict is `no-observed-attributable-difference`; that is an honest negative result
 and stops the matrix rather than claiming incremental value. Invalid tracker or
 validation state on either side also stops the matrix and cannot be counted as an
 ablation difference. For the architecture canary, a ledger-only ownership claim is
-insufficient: the raw trace must show the extra completed exploration call.
+insufficient: the raw trace must produce the dedicated `extra_exploration_call`
+failure for a completed Explore/candidate-discovery call outside the marked native
+pass. Other Agent calls, including a delegated post-artifact review, do not establish
+duplicate exploration. Re-running the same run id preserves every pair verdict under
+its treatment/ablation attempt numbers.
 
 Omit `--reasoning-effort` to preserve a model's default. Each rerun creates a new
 numbered attempt and never overwrites prior evidence. Every attempt preserves the

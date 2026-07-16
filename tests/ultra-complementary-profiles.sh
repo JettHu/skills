@@ -82,6 +82,33 @@ fi
 test -f "$TMP/runner/failure-record/architecture-native-ownership/treatment/attempt-001/result.json"
 test -f "$TMP/runner/failure-record/architecture-native-ownership/treatment/attempt-002/result.json"
 
+canary_runner=(python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py"
+  --output "$TMP/runner" --run-id verdict-history --scenario architecture-native-ownership
+  --treatment-ref HEAD --ablation-ref HEAD --model fake --context-window 1000000
+  --timeout 5 --qoder-bin "$TMP/fake-qoder" --canary-gate)
+if "${canary_runner[@]}" >/dev/null 2>&1; then
+  echo "failed canary unexpectedly passed" >&2
+  exit 1
+fi
+if "${canary_runner[@]}" >/dev/null 2>&1; then
+  echo "failed canary rerun unexpectedly passed" >&2
+  exit 1
+fi
+test -f "$TMP/runner/verdict-history/architecture-native-ownership/canary-verdict-treatment-001-ablation-001.json"
+test -f "$TMP/runner/verdict-history/architecture-native-ownership/canary-verdict-treatment-002-ablation-002.json"
+python3 - "$TMP/runner/verdict-history/architecture-native-ownership" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+first = json.loads((root / "canary-verdict-treatment-001-ablation-001.json").read_text(encoding="utf-8"))
+second = json.loads((root / "canary-verdict-treatment-002-ablation-002.json").read_text(encoding="utf-8"))
+assert (first["treatment_attempt"], first["ablation_attempt"]) == (1, 1)
+assert (second["treatment_attempt"], second["ablation_attempt"]) == (2, 2)
+assert first["verdict_file"] != second["verdict_file"]
+PY
+
 if python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py" \
   --output "$TMP/runner" --run-id uncommitted-ref --scenario architecture-native-ownership \
   --treatment-ref working-tree --ablation-ref HEAD --model fake --context-window 1000000 \
@@ -228,6 +255,32 @@ assert subprocess.run(
     capture_output=True,
 ).returncode == 0
 
+post_review_trace = treatment.parent / "post-review-trace.jsonl"
+post_review_trace.write_text(valid_trace.read_text() + json.dumps({
+    "type": "assistant", "message": {"content": [{
+        "type": "tool_use", "id": "agent-review", "name": "Agent",
+        "input": {
+            "subagent_type": "general-purpose",
+            "description": "independent post-artifact review",
+            "prompt": "Review artifacts/architecture-report.md for ADR alignment and risk exclusions",
+        },
+    }]},
+}) + "\n" + json.dumps({
+    "type": "user", "message": {"content": [{
+        "type": "tool_result", "tool_use_id": "agent-review", "is_error": False,
+    }]},
+    "tool_use_result": {"state": "completed"},
+}) + "\n")
+post_review_result = subprocess.run(
+    [sys.executable, str(grader), str(treatment), "--trace", str(post_review_trace), "--json"],
+    capture_output=True,
+    text=True,
+)
+assert post_review_result.returncode == 0, (
+    "a legal delegated post-review must not count as duplicate exploration: "
+    + post_review_result.stdout + post_review_result.stderr
+)
+
 extra_trace = treatment.parent / "extra-trace.jsonl"
 extra_trace.write_text(valid_trace.read_text() + json.dumps({
     "type": "assistant", "message": {"content": [{
@@ -238,10 +291,14 @@ extra_trace.write_text(valid_trace.read_text() + json.dumps({
     "type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "agent-2", "is_error": False}]},
     "tool_use_result": {"state": "completed"},
 }) + "\n")
-assert subprocess.run(
-    [sys.executable, str(grader), str(treatment), "--trace", str(extra_trace)],
+extra_result = subprocess.run(
+    [sys.executable, str(grader), str(treatment), "--trace", str(extra_trace), "--json"],
     capture_output=True,
-).returncode != 0, "trace grader must reject an extra Ultra exploration call"
+    text=True,
+)
+assert extra_result.returncode != 0, "trace grader must reject an extra Ultra exploration call"
+extra_grade = json.loads(extra_result.stdout)[0]
+assert "extra_exploration_call" in extra_grade["trace_grade"]["failure_codes"]
 
 codex_trace = treatment.parent / "codex-collab-trace.jsonl"
 codex_trace.write_text("\n".join(json.dumps(event) for event in (
@@ -310,7 +367,7 @@ runner_spec.loader.exec_module(runner_module)
 clean_grade = {"repository_grade": {"passed": True}, "profile_grade": {"passed": True, "failure_codes": []}}
 duplicate_grade = {
     "repository_grade": {"passed": True},
-    "profile_grade": {"passed": False, "failure_codes": ["agent_calls_max_total"]},
+    "profile_grade": {"passed": False, "failure_codes": ["extra_exploration_call"]},
 }
 bad_tracker_grade = {
     "repository_grade": {"passed": False, "failure_codes": ["tracker_status"]},
@@ -320,11 +377,11 @@ run_ok = {"result": {"run_exit_code": 0}, "grade": clean_grade}
 attributable = runner_module.classify_canary(
     run_ok,
     {"result": {"run_exit_code": 0}, "grade": duplicate_grade},
-    ["forbidden_events_absent", "agent_calls_max_total"],
-    ["agent_calls_max_total"],
+    ["forbidden_events_absent", "extra_exploration_call"],
+    ["extra_exploration_call"],
 )
 assert attributable["matrix_gate_passed"] is True
-no_delta = runner_module.classify_canary(run_ok, run_ok, ["agent_calls_max_total"], ["agent_calls_max_total"])
+no_delta = runner_module.classify_canary(run_ok, run_ok, ["extra_exploration_call"], ["extra_exploration_call"])
 assert no_delta["conclusion"] == "no-observed-attributable-difference"
 assert no_delta["matrix_gate_passed"] is False
 ledger_only_grade = {
@@ -334,15 +391,15 @@ ledger_only_grade = {
 ledger_only = runner_module.classify_canary(
     run_ok,
     {"result": {"run_exit_code": 0}, "grade": ledger_only_grade},
-    ["forbidden_events_absent", "agent_calls_max_total"],
-    ["agent_calls_max_total"],
+    ["forbidden_events_absent", "extra_exploration_call"],
+    ["extra_exploration_call"],
 )
 assert ledger_only["conclusion"] == "ablation-non-attributable-profile-failure"
 invalid = runner_module.classify_canary(
     run_ok,
     {"result": {"run_exit_code": 0}, "grade": bad_tracker_grade},
-    ["agent_calls_max_total"],
-    ["agent_calls_max_total"],
+    ["extra_exploration_call"],
+    ["extra_exploration_call"],
 )
 assert invalid["conclusion"] == "ablation-evidence-invalid"
 PY

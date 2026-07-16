@@ -250,7 +250,12 @@ def main() -> None:
                 "ablation_attempt": pair_results["ablation"]["result"]["attempt"],
             }
         )
-        write(output / args.run_id / args.scenario / "canary-verdict.json", json.dumps(verdict, indent=2) + "\n")
+        verdict_name = (
+            f"canary-verdict-treatment-{verdict['treatment_attempt']:03d}"
+            f"-ablation-{verdict['ablation_attempt']:03d}.json"
+        )
+        verdict["verdict_file"] = verdict_name
+        write(output / args.run_id / args.scenario / verdict_name, json.dumps(verdict, indent=2) + "\n")
         print(json.dumps(verdict))
         failed = not verdict["matrix_gate_passed"]
     raise SystemExit(1 if failed else 0)
