@@ -74,12 +74,25 @@ def grade(repo: Path, trace: Optional[Path] = None) -> dict:
             "recorded stages use the published stable vocabulary",
             "stage_vocabulary",
         )
-        for name in expected.get("required_recorded_events", []):
-            check_profile(
-                names.count(name) == 1,
-                f"completed public stage is recorded exactly once: {name}",
-                f"recorded_event:{name}",
-            )
+        required = expected["required_events"]
+        check_profile(
+            all(names.count(name) == 1 for name in required),
+            "each scenario-required completed stage is recorded exactly once",
+            "required_events_once",
+        )
+        cursor = 0
+        ordered = True
+        for name in required:
+            try:
+                cursor = names.index(name, cursor) + 1
+            except ValueError:
+                ordered = False
+                break
+        check_profile(
+            ordered,
+            "scenario-required stages preserve their contract-relative order",
+            "required_stage_order",
+        )
     else:
         # Historical fixtures predate actual-stage ledgers. Preserve their literal
         # regrade behavior without imposing that treatment sequence on new runs.

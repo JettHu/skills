@@ -14,10 +14,13 @@ repo = Path(sys.argv[1])
 core = (repo / "skills/engineering/ultra/SKILL.md").read_text(encoding="utf-8")
 profiles = (repo / "skills/engineering/ultra/PROFILES.md").read_text(encoding="utf-8")
 prepare_path = repo / "tests/evals/ultra-complementary-profiles/prepare-fixture.py"
+prepare_source = prepare_path.read_text(encoding="utf-8")
 spec = importlib.util.spec_from_file_location("complementary_prepare", prepare_path)
 prepare = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(prepare)
+assert prepare_source.count("[target-native:architecture-candidate-discovery]") == 1
+assert "delegation_marker" not in prepare.SCENARIOS["architecture-native-ownership"]
 assert set(prepare.SCENARIOS) == {
     "architecture-native-ownership", "diagnosis-feedback-loop-first",
     "spec-independent-code-trigger", "tickets-review-publication",
@@ -196,13 +199,27 @@ for fixture in fixtures:
     prompt = (fixture / "EVAL_PROMPT.md").read_text(encoding="utf-8")
     assert f"exact status `{expected['expected_tracker_status']}`" in prompt
     assert f"`{expected['artifact']}`" in prompt
-    for name in expected["stage_vocabulary"]:
+    expected_vocabulary = {
+        *expected["required_events"],
+        *expected["event_aliases"],
+        *expected["recordable_extra_events"],
+    }
+    assert set(expected["stage_vocabulary"]) == expected_vocabulary
+    for name in expected_vocabulary:
         assert f"`{name}`" in prompt
     assert "required stages exactly once" not in prompt
     assert "Record these required stages" not in prompt
     assert "Extra stages are allowed only" not in prompt
     assert "[target-native:" not in prompt
     assert " -> " not in prompt
+    if expected["scenario"] == "architecture-native-ownership":
+        assert expected_vocabulary == {
+            "target-native-explore", "target-native-candidate", "target-native-report",
+            "ultra-code-explore", "ultra-post-review", "validation",
+        }
+        assert "`ultra-research`" not in prompt
+        assert "`target-feedback-loop-red`" not in prompt
+        assert "`ultra-complete-set-review`" not in prompt
     assert subprocess.run(
         [sys.executable, str(grader), str(fixture)], capture_output=True
     ).returncode != 0, f"untouched fixture unexpectedly passed: {fixture}"
@@ -280,6 +297,48 @@ assert subprocess.run(
     [sys.executable, str(grader), str(treatment), "--trace", str(valid_trace)],
     capture_output=True,
 ).returncode == 0
+
+def assert_required_stage_failure(missing_name):
+    incomplete_events = [
+        event for event in events
+        if event["name"] != missing_name
+        and not (missing_name == "target-native-candidate" and event["name"] == "target-native-report")
+    ]
+    (treatment / "artifacts/stage-evidence.json").write_text(
+        json.dumps({"events": incomplete_events}, indent=2) + "\n"
+    )
+    result = subprocess.run(
+        [sys.executable, str(grader), str(treatment), "--trace", str(valid_trace), "--json"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    grade = json.loads(result.stdout)[0]
+    assert grade["repository_grade"]["passed"] is True
+    assert grade["trace_grade"]["passed"] is True
+    assert grade["final_state_grade"]["passed"] is False
+    assert "required_events_once" in grade["profile_grade"]["failure_codes"]
+
+
+assert_required_stage_failure("target-native-candidate")
+assert_required_stage_failure("ultra-post-review")
+misordered_events = [events[1], events[0], *events[2:]]
+(treatment / "artifacts/stage-evidence.json").write_text(
+    json.dumps({"events": misordered_events}, indent=2) + "\n"
+)
+misordered_result = subprocess.run(
+    [sys.executable, str(grader), str(treatment), "--trace", str(valid_trace), "--json"],
+    capture_output=True,
+    text=True,
+)
+assert misordered_result.returncode != 0
+misordered_grade = json.loads(misordered_result.stdout)[0]
+assert misordered_grade["repository_grade"]["passed"] is True
+assert misordered_grade["trace_grade"]["passed"] is True
+assert misordered_grade["profile_grade"]["failure_codes"] == ["required_stage_order"]
+(treatment / "artifacts/stage-evidence.json").write_text(
+    json.dumps({"events": events}, indent=2) + "\n"
+)
 
 post_review_trace = treatment.parent / "post-review-trace.jsonl"
 post_review_trace.write_text(valid_trace.read_text() + json.dumps({

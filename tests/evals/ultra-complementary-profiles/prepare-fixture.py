@@ -17,6 +17,7 @@ CONTRACT_PATHS = (
     "skills/engineering/ultra/SKILL.md",
     "skills/engineering/ultra/PROFILES.md",
 )
+ARCHITECTURE_NATIVE_MARKER = "[target-native:architecture-candidate-discovery]"
 
 
 def clean(value: str) -> str:
@@ -32,10 +33,11 @@ SCENARIOS = {
             "repository exploration pass before producing the report. Native exploration owns candidate "
             "discovery and uses Explore delegation when available, otherwise a serial equivalent. When "
             "Explore delegation is available, the target-native candidate-discovery prompt must contain "
-            "the literal marker `[target-native:architecture-candidate-discovery]`; the target skill, not "
+            f"the literal marker `{ARCHITECTURE_NATIVE_MARKER}`; the target skill, not "
             "its caller, supplies this marker to its native delegate."
         ),
         "events": ["target-native-explore", "target-native-candidate", "ultra-post-review", "validation"],
+        "recordable_extra_events": ["ultra-code-explore"],
         "forbidden": ["ultra-code-explore", "ultra-research"],
         "artifact": "artifacts/architecture-report.md",
         "tokens": ["Order Router", "route_order", "ADR-0001"],
@@ -44,19 +46,18 @@ SCENARIOS = {
         "event_aliases": {"target-native-report": "target-native-candidate"},
         "ablation_attributable_failure_codes": ["extra_exploration_call"],
         "ablation_required_difference_codes": ["extra_exploration_call"],
-        "delegation_marker": "[target-native:architecture-candidate-discovery]",
         "trace_expectations": {
             "capability_tools": ["Agent"],
             "capability_agents": ["Explore"],
             "agent_calls": [{
                 "role": "Explore",
-                "marker": "[target-native:architecture-candidate-discovery]",
+                "marker": ARCHITECTURE_NATIVE_MARKER,
                 "min": 1,
                 "max": 1,
             }],
             "extra_exploration_calls": {
                 "allowed_native_calls": 1,
-                "exploration_markers": ["[target-native:architecture-candidate-discovery]"],
+                "exploration_markers": [ARCHITECTURE_NATIVE_MARKER],
                 "max": 0,
             },
             "require_delegated_model": True,
@@ -135,15 +136,13 @@ SCENARIOS = {
 }
 
 
-STAGE_VOCABULARY = sorted({
-    name
-    for scenario in SCENARIOS.values()
-    for name in (
+def stage_vocabulary(scenario: dict) -> list[str]:
+    """Return names this scenario may truthfully record, not historical forbiddens."""
+    return sorted({
         *scenario["events"],
-        *scenario["forbidden"],
         *scenario.get("event_aliases", {}),
-    )
-})
+        *scenario.get("recordable_extra_events", []),
+    })
 
 
 def run(args: list[str], cwd: Path) -> str:
@@ -227,8 +226,10 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
         "scenario": scenario_id,
         "variant": variant,
         "contract_ref": ref,
-        "stage_vocabulary": STAGE_VOCABULARY,
-        "required_recorded_events": ["validation"],
+        "stage_vocabulary": stage_vocabulary(scenario),
+        "required_events": scenario["events"],
+        "recordable_extra_events": scenario.get("recordable_extra_events", []),
+        "historical_forbidden_events": scenario["forbidden"],
         "artifact": scenario["artifact"],
         "artifact_tokens": scenario["tokens"],
         "expected_result": scenario["result"],
@@ -241,7 +242,13 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
     }
     write(repo / "EVAL_EXPECTATIONS.json", json.dumps(expectations, indent=2) + "\n")
     artifact_tokens = ", ".join(f"`{token}`" for token in scenario["tokens"])
-    stage_vocabulary = ", ".join(f"`{name}`" for name in STAGE_VOCABULARY)
+    public_stage_vocabulary = stage_vocabulary(scenario)
+    stage_vocabulary_text = ", ".join(f"`{name}`" for name in public_stage_vocabulary)
+    covered_additive_instruction = (
+        " Record a covered-but-skipped additive goal as `covered-additive-code`."
+        if "covered-additive-code" in public_stage_vocabulary
+        else ""
+    )
     if scenario.get("trace_expectations", {}).get("command_calls"):
         validation_instruction = (
             "Execute `python3 scripts/check.py` exactly once and require a successful exit. "
@@ -271,7 +278,7 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
 
             {validation_instruction}
 
-            As durable execution evidence, write `artifacts/stage-evidence.json` with an `events` array. Append one object per completed stage in actual execution order, each with exactly `name`, `owner`, `goal`, and `evidence`; do not add anticipated or expected stages. Use the applicable names from this stable vocabulary: {stage_vocabulary}. Record the successful validation as `validation`. Record a covered-but-skipped additive goal as `covered-additive-code`; never record model response prose as evidence.
+            As durable execution evidence, write `artifacts/stage-evidence.json` with an `events` array. Append one object per completed stage in actual execution order, each with exactly `name`, `owner`, `goal`, and `evidence`; do not add anticipated or expected stages. Use the applicable names from this scenario-specific stable vocabulary: {stage_vocabulary_text}. Record the successful validation as `validation`.{covered_additive_instruction} Never record model response prose as evidence.
 
             Do not run any external grader and do not edit this prompt, `EVAL_EXPECTATIONS.json`, or the supplied skill inputs.
             """

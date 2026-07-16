@@ -9,13 +9,23 @@ not a scoring input.
 
 Every mechanically exact task outcome is repeated in the shared `EVAL_PROMPT.md`: the
 artifact path and literal coverage terms, exact tracker status, validation command and
-success condition, plus the `stage-evidence.json` schema and stable stage vocabulary.
+success condition, plus the `stage-evidence.json` schema and scenario-specific stable
+stage vocabulary. A scenario vocabulary contains required stages, published aliases,
+and any explicitly recordable ablation stage; it is not a global union and does not
+automatically expose historical forbidden-stage names.
 The prompt is byte-identical for treatment and ablation. It does not publish a
 treatment-owned stage sequence, ownership decision, or duplicate-stage conclusion.
 The ledger records completed stages in their actual runtime order; raw runtime trace,
 not a model-authored ledger, is authoritative for duplicate exploration. Validation is
 proved by a successful runtime command plus a fresh external rerun; the primary
 artifact does not need a hidden validation literal.
+
+`EVAL_EXPECTATIONS.json` keeps the model-invisible scenario-required completed stages.
+The grader requires each exactly once and preserves their contract-relative order, so
+removing a required candidate, review, publication, or feedback-loop stage still fails
+even when repository, artifact, tracker, and validation state are correct. Extra
+recorded stages do not themselves prove duplicate exploration; only completed runtime
+trace calls can produce the attributable `extra_exploration_call` delta.
 
 Prepare all reusable scenarios without a model run:
 
