@@ -51,6 +51,12 @@ for text in (
 
 for proxy in ("20+ messages", "completely unfamiliar area", "already traced the code path"):
     assert proxy not in core + profiles, f"proxy heuristic returned: {proxy}"
+assert "`unavailable` = neither the target nor Ultra has a stage for that capability" in profiles
+for contradictory in (
+    "to-spec | Repository exploration is conditional `target-native`; the target runs it when current codebase understanding is absent. Research and code review are `unavailable`",
+    "to-tickets | Context gathering and repository exploration are conditional `target-native`; drafting and blocker assignment are `target-native`. Research and code review are `unavailable`",
+):
+    assert contradictory not in profiles, f"target-native absence is mislabeled unavailable: {contradictory}"
 PY
 
 python3 - "$TMP/fake-qoder" <<'PY'
@@ -75,6 +81,26 @@ if "${runner[@]}" >/dev/null 2>&1; then
 fi
 test -f "$TMP/runner/failure-record/architecture-native-ownership/treatment/attempt-001/result.json"
 test -f "$TMP/runner/failure-record/architecture-native-ownership/treatment/attempt-002/result.json"
+
+if python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py" \
+  --output "$TMP/runner" --run-id primary-entry --scenario architecture-native-ownership \
+  --treatment-ref HEAD --ablation-ref HEAD --runtime primary --model fake-primary \
+  --timeout 5 --primary-bin "$TMP/fake-qoder" --variant treatment >/dev/null 2>&1; then
+  echo "primary runner unexpectedly passed a failed model run" >&2
+  exit 1
+fi
+python3 - "$TMP/runner/primary-entry/architecture-native-ownership/treatment/attempt-001/invocation.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+invocation = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert invocation["runtime"] == "primary"
+assert invocation["argv"][1:4] == ["exec", "--json", "--ephemeral"]
+assert invocation["context_window"] is None
+assert len(invocation["refs"]["treatment"]["sha"]) == 40
+assert invocation["scenario"] == "architecture-native-ownership"
+assert invocation["variant"] == "treatment"
+PY
 
 python3 - "$TMP/sleep-qoder" <<'PY'
 from pathlib import Path
@@ -130,14 +156,48 @@ events = [
     {"name": "validation", "owner": "root", "goal": "validate-repository", "evidence": "python3 scripts/check.py"},
 ]
 (treatment / "artifacts/stage-evidence.json").write_text(json.dumps({"events": events}, indent=2) + "\n")
-assert subprocess.run([sys.executable, str(grader), str(treatment)], capture_output=True).returncode == 0
+missing_delegation = treatment.parent / "missing-delegation.jsonl"
+missing_delegation.write_text(json.dumps({
+    "type": "system", "subtype": "init", "tools": ["Agent"],
+    "agents": ["Explore"], "model": "root-model",
+}) + "\n")
+assert subprocess.run(
+    [sys.executable, str(grader), str(treatment), "--trace", str(missing_delegation)],
+    capture_output=True,
+).returncode != 0, "self-reported target-native exploration must not replace a real delegation call"
+
+valid_trace = treatment.parent / "valid-trace.jsonl"
+valid_trace.write_text("\n".join(json.dumps(event) for event in (
+    {"type": "system", "subtype": "init", "tools": ["Agent"], "agents": ["Explore"], "model": "root-model"},
+    {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "agent-1", "name": "Agent", "input": {"subagent_type": "Explore", "description": "target-native explore"}}]}},
+    {"type": "assistant", "parent_tool_use_id": "agent-1", "message": {"model": "delegated-model", "content": []}},
+)) + "\n")
+assert subprocess.run(
+    [sys.executable, str(grader), str(treatment), "--trace", str(valid_trace)],
+    capture_output=True,
+).returncode == 0
+
+extra_trace = treatment.parent / "extra-trace.jsonl"
+extra_trace.write_text(valid_trace.read_text() + json.dumps({
+    "type": "assistant", "message": {"content": [{
+        "type": "tool_use", "id": "agent-2", "name": "Agent",
+        "input": {"subagent_type": "Explore", "description": "extra Ultra exploration"},
+    }]},
+}) + "\n")
+assert subprocess.run(
+    [sys.executable, str(grader), str(treatment), "--trace", str(extra_trace)],
+    capture_output=True,
+).returncode != 0, "trace grader must reject an extra Ultra exploration call"
 
 artifact = ablation / "artifacts/architecture-report.md"
 artifact.parent.mkdir(parents=True, exist_ok=True)
 artifact.write_text("Order Router route_order ADR-0001\nvalidation: python3 scripts/check.py\n")
 events.insert(0, {"name": "ultra-code-explore", "owner": "ultra", "goal": "duplicate-discovery", "evidence": "app/router.py"})
 (ablation / "artifacts/stage-evidence.json").write_text(json.dumps({"events": events}, indent=2) + "\n")
-assert subprocess.run([sys.executable, str(grader), str(ablation)], capture_output=True).returncode != 0
+assert subprocess.run(
+    [sys.executable, str(grader), str(ablation), "--trace", str(valid_trace)],
+    capture_output=True,
+).returncode != 0
 PY
 
 echo "ultra complementary profiles fixture passed"

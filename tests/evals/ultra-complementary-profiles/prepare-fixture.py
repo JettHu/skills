@@ -34,6 +34,13 @@ SCENARIOS = {
         "tokens": ["Order Router", "route_order", "ADR-0001", "validation: python3 scripts/check.py"],
         "result": "unchanged",
         "tracker": "ready-for-agent",
+        "trace_expectations": {
+            "capability_tools": ["Agent"],
+            "capability_agents": ["Explore"],
+            "agent_calls": [{"role": "Explore", "min": 1, "max": 1}],
+            "max_total_agent_calls": 1,
+            "require_delegated_model": True,
+        },
     },
     "diagnosis-feedback-loop-first": {
         "target": "diagnosing-bugs",
@@ -195,6 +202,7 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
         "expected_result": scenario["result"],
         "expected_tracker_status": scenario["tracker"],
         "contract_hashes": contract_hashes,
+        "trace_expectations": scenario.get("trace_expectations"),
     }
     write(repo / "EVAL_EXPECTATIONS.json", json.dumps(expectations, indent=2) + "\n")
     write(

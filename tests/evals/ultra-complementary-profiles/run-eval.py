@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare, execute, and grade resumable Qoder Ultra profile eval runs."""
+"""Prepare, execute, and grade resumable primary/Qoder Ultra profile eval runs."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import sys
 
 
 HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[2]
 PREPARE = HERE / "prepare-fixture.py"
 GRADER = HERE / "grade-run.py"
 
@@ -27,6 +28,24 @@ def next_attempt(root: Path) -> int:
     return max(found, default=0) + 1
 
 
+def command_output(args: list[str]) -> str:
+    result = subprocess.run(args, text=True, capture_output=True)
+    return (result.stdout or result.stderr).strip()
+
+
+def resolve_ref(ref: str) -> str:
+    value = "HEAD" if ref == "working-tree" else ref
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{value}^{{commit}}"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode:
+        raise SystemExit(f"cannot resolve eval ref {ref}: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -34,15 +53,23 @@ def main() -> None:
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--treatment-ref", required=True)
     parser.add_argument("--ablation-ref", required=True)
+    parser.add_argument("--runtime", choices=("primary", "qoder"), default="qoder")
     parser.add_argument("--model", required=True)
-    parser.add_argument("--context-window", type=int, required=True)
+    parser.add_argument("--context-window", type=int)
     parser.add_argument("--reasoning-effort")
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--qoder-bin", default="qodercli")
+    parser.add_argument("--primary-bin", default="codex")
     parser.add_argument("--variant", choices=("both", "treatment", "ablation"), default="both")
     args = parser.parse_args()
     output = args.output.resolve()
+    if args.runtime == "qoder" and args.context_window is None:
+        parser.error("--context-window is required for the Qoder runtime")
     variants = ("treatment", "ablation") if args.variant == "both" else (args.variant,)
+    ref_shas = {
+        "treatment": resolve_ref(args.treatment_ref),
+        "ablation": resolve_ref(args.ablation_ref),
+    }
 
     failed = False
     for variant in variants:
@@ -57,22 +84,43 @@ def main() -> None:
         attempt_root = variant_root / f"attempt-{attempt:03d}"
         repo = attempt_root / "repo"
         prompt = (repo / "EVAL_PROMPT.md").read_text(encoding="utf-8")
-        command = [
-            args.qoder_bin, "-p", "--output-format", "stream-json", "--permission-mode",
-            "bypass_permissions", "--cwd", str(repo), "--model", args.model,
-            "--context-window", str(args.context_window),
-        ]
-        if args.reasoning_effort:
-            command.extend(["--reasoning-effort", args.reasoning_effort])
+        if args.runtime == "qoder":
+            command = [
+                args.qoder_bin, "-p", "--output-format", "stream-json", "--permission-mode",
+                "bypass_permissions", "--cwd", str(repo), "--model", args.model,
+                "--context-window", str(args.context_window),
+            ]
+            if args.reasoning_effort:
+                command.extend(["--reasoning-effort", args.reasoning_effort])
+            runtime_version = command_output([args.qoder_bin, "--version"])
+        else:
+            command = [
+                args.primary_bin, "exec", "--json", "--ephemeral",
+                "--dangerously-bypass-approvals-and-sandbox", "-C", str(repo),
+                "--model", args.model,
+            ]
+            if args.reasoning_effort:
+                command.extend(["-c", f'model_reasoning_effort="{args.reasoning_effort}"'])
+            runtime_version = command_output([args.primary_bin, "--version"])
         command.append(prompt)
+        contract_ref = args.treatment_ref if variant == "treatment" else args.ablation_ref
         invocation = {
             "argv": command,
             "shell": shlex.join(command),
             "cwd": str(repo),
+            "runtime": args.runtime,
+            "runtime_version": runtime_version,
+            "scenario": args.scenario,
+            "variant": variant,
             "model": args.model,
             "context_window": args.context_window,
             "reasoning_effort": args.reasoning_effort or "default",
             "timeout_seconds": args.timeout,
+            "refs": {
+                "treatment": {"requested": args.treatment_ref, "sha": ref_shas["treatment"]},
+                "ablation": {"requested": args.ablation_ref, "sha": ref_shas["ablation"]},
+                "selected_contract": {"requested": contract_ref, "sha": ref_shas[variant]},
+            },
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
         write(attempt_root / "invocation.json", json.dumps(invocation, indent=2) + "\n")
@@ -89,16 +137,29 @@ def main() -> None:
         write(attempt_root / "raw-stdout.log", stdout)
         write(attempt_root / "raw-stderr.log", stderr)
         grade = subprocess.run(
-            [sys.executable, str(GRADER), str(repo), "--json"], text=True, capture_output=True
+            [sys.executable, str(GRADER), str(repo), "--trace", str(attempt_root / "raw-stdout.log"), "--json"],
+            text=True,
+            capture_output=True,
         )
         write(attempt_root / "grader-stdout.json", grade.stdout)
         write(attempt_root / "grader-stderr.log", grade.stderr)
+        try:
+            grade_payload = json.loads(grade.stdout)
+            grade_result = grade_payload[0]
+            invocation["observed_trace"] = grade_result.get("trace")
+        except (json.JSONDecodeError, IndexError, AttributeError):
+            grade_result = {}
+            invocation["observed_trace"] = None
+        invocation["finished_at"] = datetime.now(timezone.utc).isoformat()
+        write(attempt_root / "invocation.json", json.dumps(invocation, indent=2) + "\n")
         result_record = {
             "variant": variant,
             "attempt": attempt,
             "run_exit_code": run_exit,
             "timed_out": timed_out,
             "grader_exit_code": grade.returncode,
+            "final_state_passed": grade_result.get("final_state_grade", {}).get("passed", False),
+            "trace_passed": grade_result.get("trace_grade", {}).get("passed", False),
             "passed": run_exit == 0 and grade.returncode == 0,
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "recovery": f"rerun the same command; a new attempt directory will be created after attempt-{attempt:03d}",

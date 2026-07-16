@@ -9,6 +9,10 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from typing import Optional
+
+from trace_evidence import grade as grade_trace
+from trace_evidence import summarize as summarize_trace
 
 
 def read_json(path: Path) -> dict:
@@ -22,7 +26,7 @@ def status(text: str) -> str:
     return ""
 
 
-def grade(repo: Path) -> dict:
+def grade(repo: Path, trace: Optional[Path] = None) -> dict:
     expected = read_json(repo / "EVAL_EXPECTATIONS.json")
     failures: list[str] = []
     checks: list[str] = []
@@ -80,12 +84,40 @@ def grade(repo: Path) -> dict:
             f"supplied contract remains unchanged: {relative}",
         )
     check((repo / "EVAL_PROMPT.md").is_file(), "eval prompt remains present")
+    final_state_checks = list(checks)
+    final_state_failures = list(failures)
+    trace_summary = None
+    trace_expected = expected.get("trace_expectations")
+    trace_checks: list[str] = []
+    trace_failures: list[str] = []
+    if trace_expected:
+        if trace is None or not trace.is_file():
+            trace_failures.append("runtime trace is supplied for delegation grading")
+        else:
+            trace_checks.append("runtime trace is supplied for delegation grading")
+            trace_summary = summarize_trace(trace)
+            trace_checks, trace_failures = grade_trace(trace_summary, trace_expected)
+            trace_checks.insert(0, "runtime trace is supplied for delegation grading")
+    checks.extend(trace_checks)
+    failures.extend(trace_failures)
     return {
         "scenario": expected["scenario"],
         "variant": expected["variant"],
         "passed": not failures,
         "checks": checks,
         "failures": failures,
+        "final_state_grade": {
+            "passed": not final_state_failures,
+            "checks": final_state_checks,
+            "failures": final_state_failures,
+        },
+        "trace_grade": {
+            "required": bool(trace_expected),
+            "passed": not trace_failures,
+            "checks": trace_checks,
+            "failures": trace_failures,
+        },
+        "trace": trace_summary,
         "validation": {
             "command": "python3 scripts/check.py",
             "exit_code": validation.returncode,
@@ -108,9 +140,13 @@ def find_repos(paths: list[Path]) -> list[Path]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("paths", nargs="+", type=Path)
+    parser.add_argument("--trace", type=Path)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    results = [grade(repo) for repo in find_repos(args.paths)]
+    repos = find_repos(args.paths)
+    if args.trace and len(repos) != 1:
+        raise SystemExit("--trace requires exactly one prepared eval repository")
+    results = [grade(repo, args.trace) for repo in repos]
     if not results:
         raise SystemExit("no prepared eval repositories found")
     if args.json:
