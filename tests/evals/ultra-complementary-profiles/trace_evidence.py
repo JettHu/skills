@@ -14,6 +14,11 @@ COMMAND_NAMES = {"Bash", "exec_command", "functions.exec_command"}
 SUCCESSFUL_AGENT_STATES = {"completed"}
 
 
+def stage_markers(*values: object) -> list[str]:
+    text = " ".join(str(value or "") for value in values)
+    return re.findall(r"\[[a-z0-9-]+:[a-z0-9-]+\]", text, flags=re.IGNORECASE)
+
+
 def json_lines(path: Path) -> list[dict[str, Any]]:
     events = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -117,12 +122,18 @@ def summarize(path: Path) -> dict[str, Any]:
             if use.get("name") not in AGENT_NAMES:
                 continue
             input_value = use.get("input") if isinstance(use.get("input"), dict) else {}
+            agent_role = input_value.get("subagent_type") or input_value.get("agent_type")
+            task_name = input_value.get("task_name")
+            description = input_value.get("description") or task_name
+            prompt = input_value.get("prompt") or input_value.get("message")
             calls.append(
                 {
                     "id": use.get("id"),
-                    "role": input_value.get("subagent_type") or input_value.get("agent_type") or input_value.get("task_name"),
-                    "description": input_value.get("description") or input_value.get("task_name"),
-                    "prompt": input_value.get("prompt") or input_value.get("message"),
+                    "role": agent_role or task_name,
+                    "role_source": "agent_type" if agent_role else ("task_name" if task_name else None),
+                    "description": description,
+                    "prompt": prompt,
+                    "stage_markers": stage_markers(description, prompt),
                     "status": "requested",
                     "agents_states": {},
                     "delegated_models": [],
@@ -131,12 +142,18 @@ def summarize(path: Path) -> dict[str, Any]:
         use = codex_tool_use(event)
         if use:
             input_value = use["input"]
+            agent_role = input_value.get("subagent_type") or input_value.get("agent_type")
+            task_name = input_value.get("task_name")
+            prompt = use.get("prompt")
+            description = prompt or input_value.get("description") or input_value.get("message") or task_name
             calls.append(
                 {
                     "id": use.get("id"),
-                    "role": input_value.get("subagent_type") or input_value.get("agent_type") or input_value.get("task_name") or ("Explore" if "explore" in str(use.get("prompt", "")).casefold() else None),
-                    "description": use.get("prompt") or input_value.get("description") or input_value.get("message") or input_value.get("task_name"),
-                    "prompt": use.get("prompt"),
+                    "role": agent_role or task_name,
+                    "role_source": "agent_type" if agent_role else ("task_name" if task_name else None),
+                    "description": description,
+                    "prompt": prompt,
+                    "stage_markers": stage_markers(description, prompt),
                     "status": use.get("status"),
                     "runtime_status": use.get("runtime_status"),
                     "agents_states": use.get("agents_states"),
@@ -212,7 +229,11 @@ def summarize(path: Path) -> dict[str, Any]:
     if runtime == "primary" and calls:
         tools = sorted(set(tools) | {"spawn_agent", "Agent"})
         agents = sorted(set(agents) | {str(call["role"]) for call in successful_calls if call.get("role")})
-        if any("explore" in f"{call.get('role', '')} {call.get('description', '')} {call.get('prompt', '')}".casefold() for call in successful_calls):
+        if any(
+            str(call.get("role", "")).casefold() == "explore"
+            or any("candidate-discovery" in marker.casefold() for marker in call.get("stage_markers", []))
+            for call in successful_calls
+        ):
             agents = sorted(set(agents) | {"Explore"})
     return {
         "runtime": runtime,
@@ -251,7 +272,11 @@ def grade(summary: dict[str, Any], expected: dict[str, Any]) -> tuple[list[str],
         marker = requirement.get("marker", "")
         matching = [
             call for call in calls
-            if (not role or role in f"{call.get('role', '')} {call.get('description', '')} {call.get('prompt', '')}".casefold())
+            if (
+                not role
+                or str(call.get("role", "")).casefold() == role
+                or (not call.get("role") and marker in call.get("stage_markers", []))
+            )
             and (not marker or marker in f"{call.get('description', '')} {call.get('prompt', '')}")
         ]
         minimum = requirement.get("min", 0)
@@ -265,17 +290,18 @@ def grade(summary: dict[str, Any], expected: dict[str, Any]) -> tuple[list[str],
         check(len(calls) <= maximum_total, f"no extra Ultra exploration beyond {maximum_total} Agent call(s)", "agent_calls_max_total")
     extra_exploration = expected.get("extra_exploration_calls")
     if extra_exploration:
+        exploration_markers = {
+            marker.casefold() for marker in extra_exploration.get("exploration_markers", [])
+        }
+
         def is_exploration(call: dict[str, Any]) -> bool:
             role = str(call.get("role", "")).casefold().strip()
-            text = f"{call.get('description', '')} {call.get('prompt', '')}"
-            folded = text.casefold()
-            return (
-                role == "explore"
-                or "candidate-discovery" in folded
-                or "candidate discovery" in folded
-                or "exploration" in folded
-                or re.search(r"\bexplore\b", folded) is not None
-            )
+            if role == "explore":
+                return True
+            if call.get("role_source") == "agent_type":
+                return False
+            markers = {marker.casefold() for marker in call.get("stage_markers", [])}
+            return bool(markers & exploration_markers)
 
         exploration_calls = [call for call in calls if is_exploration(call)]
         allowed_native_calls = extra_exploration.get("allowed_native_calls", 0)

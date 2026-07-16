@@ -73,9 +73,12 @@ validation state on either side also stops the matrix and cannot be counted as a
 ablation difference. For the architecture canary, a ledger-only ownership claim is
 insufficient: the raw trace must produce the dedicated `extra_exploration_call`
 failure for a completed Explore/candidate-discovery call outside the marked native
-pass. Other Agent calls, including a delegated post-artifact review, do not establish
-duplicate exploration. Re-running the same run id preserves every pair verdict under
-its treatment/ablation attempt numbers.
+pass. Exploration intent comes from a structured `Explore` role, or from an exact
+stage marker only when the runtime does not expose a role; free-text words such as
+`exploration` or `candidate-discovery` are not classifiers. Other Agent calls,
+including a delegated review that audits or summarizes an existing exploration
+artifact, do not establish duplicate exploration. Re-running the same run id
+preserves every pair verdict under its treatment/ablation attempt numbers.
 
 Omit `--reasoning-effort` to preserve a model's default. Each rerun creates a new
 numbered attempt and never overwrites prior evidence. Every attempt preserves the

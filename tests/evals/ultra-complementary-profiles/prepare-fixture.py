@@ -49,6 +49,7 @@ SCENARIOS = {
             }],
             "extra_exploration_calls": {
                 "allowed_native_calls": 1,
+                "exploration_markers": ["[target-native:architecture-candidate-discovery]"],
                 "max": 0,
             },
             "require_delegated_model": True,

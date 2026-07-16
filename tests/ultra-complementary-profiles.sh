@@ -262,7 +262,10 @@ post_review_trace.write_text(valid_trace.read_text() + json.dumps({
         "input": {
             "subagent_type": "general-purpose",
             "description": "independent post-artifact review",
-            "prompt": "Review artifacts/architecture-report.md for ADR alignment and risk exclusions",
+            "prompt": (
+                "Review and summarize the target-native exploration and candidate-discovery report; "
+                "audit artifacts/architecture-report.md for ADR alignment and risk exclusions"
+            ),
         },
     }]},
 }) + "\n" + json.dumps({
@@ -314,6 +317,11 @@ codex_trace.write_text("\n".join(json.dumps(event) for event in (
         "agents_states": {"agent-2": {"status": "failed"}}, "status": "completed",
     }},
     {"type": "item.completed", "item": {
+        "id": "collab-review", "type": "collab_tool_call", "tool": "spawn_agent",
+        "prompt": "Review and summarize the target-native exploration and candidate-discovery report",
+        "agents_states": {"agent-3": {"status": "completed"}}, "status": "completed",
+    }},
+    {"type": "item.completed", "item": {
         "id": "command-ok", "type": "command_execution", "command": "python3 scripts/check.py",
         "exit_code": 0, "status": "completed",
     }},
@@ -325,11 +333,14 @@ completed = subprocess.run(
 )
 assert completed.returncode == 0, completed.stdout + completed.stderr
 codex_grade = json.loads(completed.stdout)[0]
-assert codex_grade["trace"]["agent_call_count"] == 1
+assert codex_grade["trace"]["agent_call_count"] == 2
 assert codex_grade["trace"]["rejected_agent_call_count"] == 1
-assert codex_grade["trace"]["attempted_agent_calls"][1]["runtime_status"] == "completed"
-assert codex_grade["trace"]["attempted_agent_calls"][1]["agent_terminal_states"] == ["failed"]
+failed_call = next(call for call in codex_grade["trace"]["attempted_agent_calls"] if call["id"] == "collab-child-failed")
+assert failed_call["runtime_status"] == "completed"
+assert failed_call["agent_terminal_states"] == ["failed"]
 assert codex_grade["trace"]["agent_calls"][0]["prompt"].endswith("[target-native:architecture-candidate-discovery]")
+review_call = next(call for call in codex_grade["trace"]["agent_calls"] if call["id"] == "collab-review")
+assert review_call["role"] is None and review_call["stage_markers"] == []
 assert codex_grade["trace"]["delegated_model_observation"] == "unknown/unavailable"
 assert codex_grade["repository_grade"]["passed"] is True
 assert codex_grade["profile_grade"]["passed"] is True
