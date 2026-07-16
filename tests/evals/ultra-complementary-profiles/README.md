@@ -7,6 +7,12 @@ scenarios it also grades the runtime JSONL trace, so a model-authored stage ledg
 cannot substitute for an actual target-native subagent call. Model response prose is
 not a scoring input.
 
+Every mechanically exact fixture requirement is repeated in `EVAL_PROMPT.md`: the
+artifact path and literal coverage terms, exact tracker status, ordered stage names,
+accepted semantic stage aliases, and validation command. The grader normalizes only
+the published aliases. Validation is proved by a successful runtime command plus a
+fresh external rerun; the primary artifact does not need a hidden validation literal.
+
 Prepare all reusable scenarios without a model run:
 
 ```bash
@@ -52,8 +58,19 @@ python3 tests/evals/ultra-complementary-profiles/run-eval.py \
   --runtime qoder \
   --model Qwen3.7-Max-DogFooding \
   --context-window 1000000 \
+  --canary-gate \
   --timeout 1800
 ```
+
+Use `--canary-gate` only for the fail-fast treatment/ablation sentinel. It writes
+`canary-verdict.json` and passes the gate only when treatment is fully correct,
+ablation has valid repository/artifact/validation/tracker evidence, and the ablation
+fails solely on the scenario's declared ownership delta. If both variants pass, the
+verdict is `no-observed-attributable-difference`; that is an honest negative result
+and stops the matrix rather than claiming incremental value. Invalid tracker or
+validation state on either side also stops the matrix and cannot be counted as an
+ablation difference. For the architecture canary, a ledger-only ownership claim is
+insufficient: the raw trace must show the extra completed exploration call.
 
 Omit `--reasoning-effort` to preserve a model's default. Each rerun creates a new
 numbered attempt and never overwrites prior evidence. Every attempt preserves the

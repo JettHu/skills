@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 
 AGENT_NAMES = {"Agent", "spawn_agent", "collaboration.spawn_agent", "mcp__collaboration__spawn_agent"}
+COMMAND_NAMES = {"Bash", "exec_command", "functions.exec_command"}
 SUCCESSFUL_AGENT_STATES = {"completed"}
 
 
@@ -91,6 +92,7 @@ def summarize(path: Path) -> dict[str, Any]:
     tools: list[str] = []
     agents: list[str] = []
     calls: list[dict[str, Any]] = []
+    command_calls: list[dict[str, Any]] = []
 
     for event in events:
         if event.get("type") == "system" and event.get("subtype") == "init":
@@ -102,6 +104,15 @@ def summarize(path: Path) -> dict[str, Any]:
             runtime = "primary"
 
         for use in qoder_tool_uses(event):
+            if use.get("name") in COMMAND_NAMES:
+                input_value = use.get("input") if isinstance(use.get("input"), dict) else {}
+                command_calls.append(
+                    {
+                        "id": use.get("id"),
+                        "command": input_value.get("command") or input_value.get("cmd"),
+                        "status": "requested",
+                    }
+                )
             if use.get("name") not in AGENT_NAMES:
                 continue
             input_value = use.get("input") if isinstance(use.get("input"), dict) else {}
@@ -132,6 +143,18 @@ def summarize(path: Path) -> dict[str, Any]:
                     "delegated_models": [],
                 }
             )
+        item = event.get("item")
+        if isinstance(item, dict) and item.get("type") == "command_execution":
+            exit_code = item.get("exit_code")
+            runtime_status = str(item.get("status") or "unknown").casefold()
+            command_calls.append(
+                {
+                    "id": item.get("id"),
+                    "command": item.get("command") or item.get("cmd"),
+                    "status": "completed" if runtime_status == "completed" and exit_code in (None, 0) else "failed",
+                    "exit_code": exit_code,
+                }
+            )
 
     unique_by_id: dict[str, dict[str, Any]] = {}
     unique_without_id = []
@@ -145,6 +168,7 @@ def summarize(path: Path) -> dict[str, Any]:
             unique_without_id.append(call)
     calls = list(unique_by_id.values()) + unique_without_id
     by_id = {call["id"]: call for call in calls if call.get("id")}
+    commands_by_id = {call["id"]: call for call in command_calls if call.get("id")}
     for event in events:
         parent = event.get("parent_tool_use_id")
         message = event.get("message")
@@ -164,14 +188,24 @@ def summarize(path: Path) -> dict[str, Any]:
                 if not isinstance(item, dict) or item.get("type") != "tool_result":
                     continue
                 tool_use_id = item.get("tool_use_id")
-                if tool_use_id not in by_id:
-                    continue
                 tool_result = event.get("tool_use_result")
                 state = tool_result.get("state") if isinstance(tool_result, dict) else None
-                if item.get("is_error") is True or state in {"failed", "error", "cancelled"}:
-                    by_id[tool_use_id]["status"] = "failed"
-                elif state == "completed" or item.get("is_error") is False:
-                    by_id[tool_use_id]["status"] = "completed"
+                if tool_use_id in by_id:
+                    if item.get("is_error") is True or state in {"failed", "error", "cancelled"}:
+                        by_id[tool_use_id]["status"] = "failed"
+                    elif state == "completed" or item.get("is_error") is False:
+                        by_id[tool_use_id]["status"] = "completed"
+                if tool_use_id in commands_by_id:
+                    result = tool_result if isinstance(tool_result, dict) else {}
+                    failed = (
+                        item.get("is_error") is True
+                        or state in {"failed", "error", "cancelled"}
+                        or result.get("interrupted") is True
+                        or result.get("exit_code") not in (None, 0)
+                    )
+                    commands_by_id[tool_use_id]["status"] = "failed" if failed else "completed"
+                    if "exit_code" in result:
+                        commands_by_id[tool_use_id]["exit_code"] = result["exit_code"]
 
     successful_calls = [call for call in calls if call.get("status") == "completed"]
     if runtime == "primary" and calls:
@@ -187,6 +221,7 @@ def summarize(path: Path) -> dict[str, Any]:
         "agent_call_count": len(successful_calls),
         "attempted_agent_calls": calls,
         "rejected_agent_call_count": len(calls) - len(successful_calls),
+        "command_calls": command_calls,
         "delegated_models": sorted(
             {model for call in successful_calls for model in call.get("delegated_models", [])}
         ),
@@ -194,18 +229,21 @@ def summarize(path: Path) -> dict[str, Any]:
     }
 
 
-def grade(summary: dict[str, Any], expected: dict[str, Any]) -> tuple[list[str], list[str]]:
+def grade(summary: dict[str, Any], expected: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
     checks: list[str] = []
     failures: list[str] = []
+    failure_codes: list[str] = []
 
-    def check(condition: bool, message: str) -> None:
+    def check(condition: bool, message: str, code: str) -> None:
         (checks if condition else failures).append(message)
+        if not condition:
+            failure_codes.append(code)
 
     capabilities = summary["capabilities"]
     for tool in expected.get("capability_tools", []):
-        check(tool in capabilities["tools"], f"runtime exposes delegation tool: {tool}")
+        check(tool in capabilities["tools"], f"runtime exposes delegation tool: {tool}", "delegation_tool_available")
     for agent in expected.get("capability_agents", []):
-        check(agent in capabilities["agents"], f"runtime exposes delegation role: {agent}")
+        check(agent in capabilities["agents"], f"runtime exposes delegation role: {agent}", "delegation_role_available")
     calls = summary["agent_calls"]
     for requirement in expected.get("agent_calls", []):
         role = requirement.get("role", "").casefold()
@@ -218,12 +256,24 @@ def grade(summary: dict[str, Any], expected: dict[str, Any]) -> tuple[list[str],
         minimum = requirement.get("min", 0)
         maximum = requirement.get("max")
         label = requirement.get("marker") or requirement.get("role") or "Agent"
-        check(len(matching) >= minimum, f"real {label} delegation count is at least {minimum}")
+        check(len(matching) >= minimum, f"real {label} delegation count is at least {minimum}", "agent_calls_minimum")
         if maximum is not None:
-            check(len(matching) <= maximum, f"real {label} delegation count is at most {maximum}")
+            check(len(matching) <= maximum, f"real {label} delegation count is at most {maximum}", "agent_calls_maximum")
     maximum_total = expected.get("max_total_agent_calls")
     if maximum_total is not None:
-        check(len(calls) <= maximum_total, f"no extra Ultra exploration beyond {maximum_total} Agent call(s)")
+        check(len(calls) <= maximum_total, f"no extra Ultra exploration beyond {maximum_total} Agent call(s)", "agent_calls_max_total")
     if expected.get("require_delegated_model") and summary["runtime"] == "qoder":
-        check(bool(summary["delegated_models"]), "delegated model is observed in the runtime trace")
-    return checks, failures
+        check(bool(summary["delegated_models"]), "delegated model is observed in the runtime trace", "delegated_model_observed")
+    for requirement in expected.get("command_calls", []):
+        command = requirement["command"]
+        matching = [
+            call for call in summary.get("command_calls", [])
+            if str(call.get("command", "")).strip() == command
+        ]
+        successful = [call for call in matching if call.get("status") == "completed"]
+        minimum = requirement.get("min", 0)
+        maximum = requirement.get("max")
+        check(len(successful) >= minimum, f"successful `{command}` execution count is at least {minimum}", "validation_command_minimum")
+        if maximum is not None:
+            check(len(matching) <= maximum, f"`{command}` execution count is at most {maximum}", "validation_command_maximum")
+    return checks, failures, failure_codes

@@ -51,6 +51,53 @@ def resolve_ref(ref: str) -> str:
     return result.stdout.strip()
 
 
+def classify_canary(
+    treatment: dict,
+    ablation: dict,
+    allowed_ablation_failure_codes: list[str],
+    required_ablation_difference_codes: list[str],
+) -> dict:
+    treatment_grade = treatment.get("grade", {})
+    ablation_grade = ablation.get("grade", {})
+    treatment_correct = (
+        treatment.get("result", {}).get("run_exit_code") == 0
+        and treatment_grade.get("repository_grade", {}).get("passed") is True
+        and treatment_grade.get("profile_grade", {}).get("passed") is True
+    )
+    ablation_evidence_valid = (
+        ablation.get("result", {}).get("run_exit_code") == 0
+        and ablation_grade.get("repository_grade", {}).get("passed") is True
+    )
+    ablation_failure_codes = ablation_grade.get("profile_grade", {}).get("failure_codes", [])
+    attributable_difference = (
+        treatment_correct
+        and ablation_evidence_valid
+        and bool(ablation_failure_codes)
+        and set(ablation_failure_codes) <= set(allowed_ablation_failure_codes)
+        and set(required_ablation_difference_codes) <= set(ablation_failure_codes)
+    )
+    if not treatment_correct:
+        conclusion = "treatment-invalid"
+    elif not ablation_evidence_valid:
+        conclusion = "ablation-evidence-invalid"
+    elif not ablation_failure_codes:
+        conclusion = "no-observed-attributable-difference"
+    elif attributable_difference:
+        conclusion = "attributable-profile-difference"
+    else:
+        conclusion = "ablation-non-attributable-profile-failure"
+    return {
+        "treatment_correct": treatment_correct,
+        "ablation_evidence_valid": ablation_evidence_valid,
+        "ablation_profile_failure_codes": ablation_failure_codes,
+        "allowed_ablation_failure_codes": allowed_ablation_failure_codes,
+        "required_ablation_difference_codes": required_ablation_difference_codes,
+        "attributable_difference": attributable_difference,
+        "conclusion": conclusion,
+        "matrix_gate_passed": attributable_difference,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -66,17 +113,25 @@ def main() -> None:
     parser.add_argument("--qoder-bin", default="qodercli")
     parser.add_argument("--primary-bin", default="codex")
     parser.add_argument("--variant", choices=("both", "treatment", "ablation"), default="both")
+    parser.add_argument(
+        "--canary-gate",
+        action="store_true",
+        help="classify a treatment/ablation pair and pass only on an attributable profile difference",
+    )
     args = parser.parse_args()
     output = args.output.resolve()
     if args.runtime == "qoder" and args.context_window is None:
         parser.error("--context-window is required for the Qoder runtime")
     variants = ("treatment", "ablation") if args.variant == "both" else (args.variant,)
+    if args.canary_gate and args.variant != "both":
+        parser.error("--canary-gate requires --variant both")
     ref_shas = {
         "treatment": resolve_ref(args.treatment_ref),
         "ablation": resolve_ref(args.ablation_ref),
     }
 
     failed = False
+    pair_results: dict[str, dict] = {}
     for variant in variants:
         variant_root = output / args.run_id / args.scenario / variant
         attempt = next_attempt(variant_root)
@@ -165,6 +220,8 @@ def main() -> None:
             "timed_out": timed_out,
             "grader_exit_code": grade.returncode,
             "final_state_passed": grade_result.get("final_state_grade", {}).get("passed", False),
+            "repository_passed": grade_result.get("repository_grade", {}).get("passed", False),
+            "profile_passed": grade_result.get("profile_grade", {}).get("passed", False),
             "trace_passed": grade_result.get("trace_grade", {}).get("passed", False),
             "passed": run_exit == 0 and grade.returncode == 0,
             "finished_at": datetime.now(timezone.utc).isoformat(),
@@ -172,7 +229,30 @@ def main() -> None:
         }
         write(attempt_root / "result.json", json.dumps(result_record, indent=2) + "\n")
         print(json.dumps(result_record))
+        pair_results[variant] = {"result": result_record, "grade": grade_result}
         failed = failed or not result_record["passed"]
+    if args.canary_gate:
+        treatment_repo = (
+            output / args.run_id / args.scenario / "treatment"
+            / f"attempt-{pair_results['treatment']['result']['attempt']:03d}" / "repo"
+        )
+        expectations = json.loads((treatment_repo / "EVAL_EXPECTATIONS.json").read_text(encoding="utf-8"))
+        verdict = classify_canary(
+            pair_results["treatment"],
+            pair_results["ablation"],
+            expectations.get("ablation_attributable_failure_codes", []),
+            expectations.get("ablation_required_difference_codes", []),
+        )
+        verdict.update(
+            {
+                "scenario": args.scenario,
+                "treatment_attempt": pair_results["treatment"]["result"]["attempt"],
+                "ablation_attempt": pair_results["ablation"]["result"]["attempt"],
+            }
+        )
+        write(output / args.run_id / args.scenario / "canary-verdict.json", json.dumps(verdict, indent=2) + "\n")
+        print(json.dumps(verdict))
+        failed = not verdict["matrix_gate_passed"]
     raise SystemExit(1 if failed else 0)
 
 

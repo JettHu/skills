@@ -31,9 +31,12 @@ SCENARIOS = {
         "events": ["target-native-explore", "target-native-candidate", "ultra-post-review", "validation"],
         "forbidden": ["ultra-code-explore", "ultra-research"],
         "artifact": "artifacts/architecture-report.md",
-        "tokens": ["Order Router", "route_order", "ADR-0001", "validation: python3 scripts/check.py"],
+        "tokens": ["Order Router", "route_order", "ADR-0001"],
         "result": "unchanged",
         "tracker": "ready-for-agent",
+        "event_aliases": {"target-native-report": "target-native-candidate"},
+        "ablation_attributable_failure_codes": ["forbidden_events_absent", "agent_calls_max_total"],
+        "ablation_required_difference_codes": ["agent_calls_max_total"],
         "delegation_marker": "[target-native:architecture-candidate-discovery]",
         "trace_expectations": {
             "capability_tools": ["Agent"],
@@ -46,6 +49,7 @@ SCENARIOS = {
             }],
             "max_total_agent_calls": 1,
             "require_delegated_model": True,
+            "command_calls": [{"command": "python3 scripts/check.py", "min": 1, "max": 1}],
         },
     },
     "diagnosis-feedback-loop-first": {
@@ -55,7 +59,7 @@ SCENARIOS = {
         "events": ["target-feedback-loop-red", "target-fix", "target-feedback-loop-green", "ultra-code-review", "validation"],
         "forbidden": ["ultra-code-explore", "ultra-research-before-loop"],
         "artifact": "artifacts/diagnosis.md",
-        "tokens": ["python3 scripts/check.py", "red", "green"],
+        "tokens": ["red", "green"],
         "result": "fixed",
         "tracker": "ready-for-agent",
     },
@@ -66,7 +70,7 @@ SCENARIOS = {
         "events": ["target-native-explore", "ultra-independent-code", "target-artifact", "ultra-fresh-review", "validation"],
         "forbidden": ["ultra-research", "duplicate-architecture-goal"],
         "artifact": "artifacts/spec.md",
-        "tokens": ["Order Router", "Audit Writer", "security", "python3 scripts/check.py"],
+        "tokens": ["Order Router", "Audit Writer", "security"],
         "result": "unchanged",
         "tracker": "review-pending",
     },
@@ -77,7 +81,7 @@ SCENARIOS = {
         "events": ["target-native-explore", "target-draft", "ultra-complete-set-review", "ultra-publication", "validation"],
         "forbidden": ["ultra-research", "duplicate-drafting-goal"],
         "artifact": "artifacts/tickets.md",
-        "tokens": ["Ticket 01", "Blocked by", "python3 scripts/check.py"],
+        "tokens": ["Ticket 01", "Blocked by"],
         "result": "unchanged",
         "tracker": "ready-for-agent",
         "initial_tracker": "review-pending",
@@ -89,7 +93,7 @@ SCENARIOS = {
         "events": ["covered-additive-code", "target-artifact", "validation"],
         "forbidden": ["ultra-independent-code", "ultra-research"],
         "artifact": "artifacts/spec.md",
-        "tokens": ["Order Router", "python3 scripts/check.py"],
+        "tokens": ["Order Router"],
         "result": "unchanged",
         "tracker": "review-pending",
         "evidence": "Current surfaces: app/router.py and route_order contract. Risk: audit ordering is unchanged. Validation: python3 scripts/check.py.",
@@ -101,7 +105,7 @@ SCENARIOS = {
         "events": ["target-native-explore", "ultra-independent-code", "target-artifact", "ultra-fresh-review", "validation"],
         "forbidden": ["covered-additive-code", "ultra-research"],
         "artifact": "artifacts/spec.md",
-        "tokens": ["Order Router", "Audit Writer", "python3 scripts/check.py"],
+        "tokens": ["Order Router", "Audit Writer"],
         "result": "unchanged",
         "tracker": "review-pending",
         "history": ("Old discussion about a retired batch router. " * 120) + "No current contract or validation evidence.\n",
@@ -113,7 +117,7 @@ SCENARIOS = {
         "events": ["target-native-explore", "target-claim-verification", "target-artifact", "validation"],
         "forbidden": ["ultra-code-explore", "ultra-post-review"],
         "artifact": "artifacts/triage.md",
-        "tokens": ["Order Router", "confirmed", "python3 scripts/check.py"],
+        "tokens": ["Order Router", "confirmed"],
         "result": "unchanged",
         "tracker": "needs-triage",
     },
@@ -209,6 +213,9 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
         "expected_tracker_status": scenario["tracker"],
         "contract_hashes": contract_hashes,
         "trace_expectations": scenario.get("trace_expectations"),
+        "event_aliases": scenario.get("event_aliases", {}),
+        "ablation_attributable_failure_codes": scenario.get("ablation_attributable_failure_codes", []),
+        "ablation_required_difference_codes": scenario.get("ablation_required_difference_codes", []),
     }
     write(repo / "EVAL_EXPECTATIONS.json", json.dumps(expectations, indent=2) + "\n")
     delegation_instruction = ""
@@ -216,6 +223,25 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
         delegation_instruction = (
             "The target-native Explore delegation prompt must contain the literal ownership marker "
             f"`{scenario['delegation_marker']}`. Use that marker only for the target-owned candidate-discovery pass."
+        )
+    required_stages = " -> ".join(f"`{name}`" for name in scenario["events"])
+    aliases = scenario.get("event_aliases", {})
+    alias_instruction = ""
+    if aliases:
+        alias_instruction = " Accepted semantic stage aliases: " + ", ".join(
+            f"`{alias}` = `{canonical}`" for alias, canonical in aliases.items()
+        ) + "."
+    artifact_tokens = ", ".join(f"`{token}`" for token in scenario["tokens"])
+    if scenario.get("trace_expectations", {}).get("command_calls"):
+        validation_instruction = (
+            "Execute `python3 scripts/check.py` exactly once and require a successful exit. "
+            "Record that command in the `validation` event evidence. Runtime execution and live repository state are graded; "
+            "the primary artifact does not need to repeat the command."
+        )
+    else:
+        validation_instruction = (
+            "Run `python3 scripts/check.py` as the final validation, require a successful exit, and record the exact "
+            "command in the `validation` event evidence. The primary artifact does not need to repeat the command."
         )
     write(
         repo / "EVAL_PROMPT.md",
@@ -231,7 +257,11 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
 
             {delegation_instruction}
 
-            Perform the real file changes required by the task. Write the primary result to `{scenario['artifact']}`; that path is part of the public task contract, not a hidden grader expectation. Keep `.scratch/eval/issues/01-order-routing.md` at the workflow state justified by the task. Run `python3 scripts/check.py` as the final validation.
+            Perform the real file changes required by the task. Write the primary result to `{scenario['artifact']}`; that path is part of the public task contract, not a hidden grader expectation. The artifact must include these case-insensitive mechanical coverage terms: {artifact_tokens}.
+
+            Mechanical final-state contract: keep `.scratch/eval/issues/01-order-routing.md` at exact status `{scenario['tracker']}`. Record these required stages exactly once and in this order: {required_stages}.{alias_instruction} Extra stages are allowed only when they do not repeat a required goal or use a forbidden owner/stage from the portable contracts.
+
+            {validation_instruction}
 
             As durable execution evidence, write `artifacts/stage-evidence.json` with an `events` array. Append one object per stage in actual order, each with exactly `name`, `owner`, `goal`, and `evidence`. Use stable stage names that describe the contract (for example `target-native-explore`, `ultra-post-review`, or `validation`). Record a covered-but-skipped additive goal as `covered-additive-code`; never record model response prose as evidence.
 
