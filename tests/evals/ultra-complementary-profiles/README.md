@@ -34,6 +34,8 @@ python3 tests/evals/ultra-complementary-profiles/run-eval.py \
 
 The primary entrypoint uses `workspace-write` sandboxing with approval policy
 `never`; it does not bypass the sandbox. Model eval runs require committed refs.
+The runner resolves both requested refs before preparing a fixture and prepares
+directly from those immutable SHAs, so recorded provenance cannot race a moving ref.
 `working-tree` remains available only to `prepare-fixture.py` for deterministic
 constructor/grader tests because uncommitted contents cannot be truthfully named by
 a commit SHA.
@@ -61,7 +63,8 @@ delegation calls/models, and a recovery command description.
 
 Delegation-sensitive prompts carry a stable target-owned marker (for example,
 `[target-native:architecture-candidate-discovery]`). The trace grader accepts only
-successfully completed calls with that marker, rejects missing/extra calls, and
+calls whose outer runtime status and every reported child Agent terminal state are
+completed, rejects missing/failed/extra calls with that marker, and
 records primary-runtime delegated model identity as `unknown/unavailable` when the
 Codex JSONL protocol does not expose it.
 

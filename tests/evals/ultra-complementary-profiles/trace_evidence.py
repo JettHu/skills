@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 
 AGENT_NAMES = {"Agent", "spawn_agent", "collaboration.spawn_agent", "mcp__collaboration__spawn_agent"}
+SUCCESSFUL_AGENT_STATES = {"completed"}
 
 
 def json_lines(path: Path) -> list[dict[str, Any]]:
@@ -33,6 +34,17 @@ def qoder_tool_uses(event: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in content if isinstance(item, dict) and item.get("type") == "tool_use"]
 
 
+def agent_terminal_states(agents_states: dict[str, Any]) -> list[str]:
+    states = []
+    for value in agents_states.values():
+        if isinstance(value, dict):
+            state = value.get("status") or value.get("state")
+        else:
+            state = value
+        states.append(str(state or "unknown").casefold())
+    return states
+
+
 def codex_tool_use(event: dict[str, Any]) -> Optional[dict[str, Any]]:
     item = event.get("item")
     if not isinstance(item, dict) and event.get("type") == "collab_tool_call":
@@ -50,13 +62,25 @@ def codex_tool_use(event: dict[str, Any]) -> Optional[dict[str, Any]]:
             arguments = json.loads(arguments)
         except json.JSONDecodeError:
             arguments = {"raw": arguments}
+    agents_states = item.get("agents_states") if isinstance(item.get("agents_states"), dict) else {}
+    outer_status = str(item.get("status") or event.get("status") or "unknown").casefold()
+    child_states = agent_terminal_states(agents_states)
+    effective_status = (
+        "completed"
+        if outer_status == "completed"
+        and bool(child_states)
+        and all(state in SUCCESSFUL_AGENT_STATES for state in child_states)
+        else "failed"
+    )
     return {
         "id": item.get("id") or item.get("call_id"),
         "name": name,
         "input": arguments if isinstance(arguments, dict) else {},
         "prompt": item.get("prompt") or arguments.get("prompt") or arguments.get("message"),
-        "status": item.get("status") or event.get("status") or "unknown",
-        "agents_states": item.get("agents_states") if isinstance(item.get("agents_states"), dict) else {},
+        "status": effective_status,
+        "runtime_status": outer_status,
+        "agents_states": agents_states,
+        "agent_terminal_states": child_states,
     }
 
 
@@ -102,7 +126,9 @@ def summarize(path: Path) -> dict[str, Any]:
                     "description": use.get("prompt") or input_value.get("description") or input_value.get("message") or input_value.get("task_name"),
                     "prompt": use.get("prompt"),
                     "status": use.get("status"),
+                    "runtime_status": use.get("runtime_status"),
                     "agents_states": use.get("agents_states"),
+                    "agent_terminal_states": use.get("agent_terminal_states"),
                     "delegated_models": [],
                 }
             )

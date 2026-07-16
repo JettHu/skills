@@ -83,7 +83,7 @@ def main() -> None:
         prepare = [
             sys.executable, str(PREPARE), "--output", str(output), "--run-id", args.run_id,
             "--scenario", args.scenario, "--variant", variant, "--attempt", str(attempt),
-            "--treatment-ref", args.treatment_ref, "--ablation-ref", args.ablation_ref,
+            "--treatment-ref", ref_shas["treatment"], "--ablation-ref", ref_shas["ablation"],
         ]
         subprocess.run(prepare, check=True)
         attempt_root = variant_root / f"attempt-{attempt:03d}"
@@ -100,8 +100,8 @@ def main() -> None:
             runtime_version = command_output([args.qoder_bin, "--version"])
         else:
             command = [
-                args.primary_bin, "exec", "--json", "--ephemeral",
-                "--sandbox", "workspace-write", "--ask-for-approval", "never",
+                args.primary_bin, "--ask-for-approval", "never", "exec", "--json", "--ephemeral",
+                "--sandbox", "workspace-write",
                 "-C", str(repo),
                 "--model", args.model,
             ]

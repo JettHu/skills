@@ -104,12 +104,15 @@ from pathlib import Path
 import sys
 invocation = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 assert invocation["runtime"] == "primary"
-assert invocation["argv"][1:4] == ["exec", "--json", "--ephemeral"]
+assert invocation["argv"][1:4] == ["--ask-for-approval", "never", "exec"]
+assert invocation["argv"][4:6] == ["--json", "--ephemeral"]
 assert "--dangerously-bypass-approvals-and-sandbox" not in invocation["argv"]
-assert ["--sandbox", "workspace-write"] == invocation["argv"][4:6]
-assert "--ask-for-approval" in invocation["argv"] and "never" in invocation["argv"]
+assert ["--sandbox", "workspace-write"] == invocation["argv"][6:8]
 assert invocation["context_window"] is None
 assert len(invocation["refs"]["treatment"]["sha"]) == 40
+expectations = json.loads((Path(invocation["cwd"]) / "EVAL_EXPECTATIONS.json").read_text(encoding="utf-8"))
+assert expectations["contract_ref"] == invocation["refs"]["selected_contract"]["sha"]
+assert invocation["refs"]["selected_contract"]["requested"] == "HEAD"
 assert invocation["scenario"] == "architecture-native-ownership"
 assert invocation["variant"] == "treatment"
 PY
@@ -214,9 +217,9 @@ codex_trace.write_text("\n".join(json.dumps(event) for event in (
         "agents_states": {"agent-1": {"status": "completed"}}, "status": "completed",
     }},
     {"type": "item.completed", "item": {
-        "id": "collab-failed", "type": "collab_tool_call", "tool": "spawn_agent",
+        "id": "collab-child-failed", "type": "collab_tool_call", "tool": "spawn_agent",
         "prompt": "Explore repository [target-native:architecture-candidate-discovery]",
-        "agents_states": {}, "status": "failed",
+        "agents_states": {"agent-2": {"status": "failed"}}, "status": "completed",
     }},
 )) + "\n")
 completed = subprocess.run(
@@ -228,6 +231,8 @@ assert completed.returncode == 0, completed.stdout + completed.stderr
 codex_grade = json.loads(completed.stdout)[0]
 assert codex_grade["trace"]["agent_call_count"] == 1
 assert codex_grade["trace"]["rejected_agent_call_count"] == 1
+assert codex_grade["trace"]["attempted_agent_calls"][1]["runtime_status"] == "completed"
+assert codex_grade["trace"]["attempted_agent_calls"][1]["agent_terminal_states"] == ["failed"]
 assert codex_grade["trace"]["agent_calls"][0]["prompt"].endswith("[target-native:architecture-candidate-discovery]")
 assert codex_grade["trace"]["delegated_model_observation"] == "unknown/unavailable"
 
