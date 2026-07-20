@@ -46,9 +46,11 @@ not a scoring input.
 Every mechanically exact task outcome is repeated in the shared `EVAL_PROMPT.md`: the
 artifact path and literal coverage terms, exact tracker status, validation command and
 success condition, plus the `stage-evidence.json` schema and scenario-specific stable
-stage vocabulary. A scenario vocabulary contains required stages, published aliases,
-and any explicitly recordable ablation stage; it is not a global union and does not
-automatically expose historical forbidden-stage names.
+stage vocabulary. A new scenario vocabulary contains one canonical name per stage and
+any explicitly recordable ablation stage; it is not a global union and does not
+automatically expose historical forbidden-stage names. Schema-v2/v3 controls retain
+their recorded alias normalization for historical regrading, but new fixtures never
+publish a canonical stage beside its semantic alias.
 The prompt is byte-identical for treatment and ablation. It does not publish a
 treatment-owned stage sequence, ownership decision, or duplicate-stage conclusion.
 The ledger records completed stages in their actual runtime order; raw runtime trace,
@@ -56,20 +58,23 @@ not a model-authored ledger, is authoritative for duplicate exploration. Validat
 proved by a successful runtime command plus a fresh external rerun; the primary
 artifact does not need a hidden validation literal.
 
-New fixtures use schema version 3. Ledger events contain only `name`, `owner`, and
-`evidence`; the unused free-text `goal` field is gone. The evaluator maps stable stage
-identities to evaluator-owned evidence-goal identities, so a second exploration maps
+New fixtures use schema version 4. Ledger events contain only `name` and `evidence`;
+the evaluator does not ask the model to guess an owner label. The supplied contracts
+declare semantic ownership, while evaluator-owned required-stage identities, runtime
+stage markers, and command evidence establish execution. The evaluator maps canonical
+stage names to evaluator-owned evidence-goal identities, so a second exploration maps
 to the same candidate-discovery goal instead of passing merely because the Agent chose
 different prose. This mapping stays out of the shared prompt; attributable ablation
-still requires the matching real trace call.
+still requires the matching real trace call. Historical schema-v3 ledgers keep their
+recorded `owner` and alias checks when regraded under their preserved control record.
 
 The prepare-only attempt-local `control.json`, outside the model repository, is the
 authoritative expectation record and pins the initial fixture commit. The runner
 snapshots and removes it before model execution, then recreates its contents only as
 `grader-control.json` after runtime exit. The repository's
 `EVAL_EXPECTATIONS.json` contains only public fixture metadata and has its own hash in
-that control record; hidden required stages, owners, trace rules, and write sets exist
-only in the external authority. The grader requires each hidden scenario stage exactly
+that control record; hidden required stages, trace rules, and write sets exist only in
+the external authority. The grader requires each hidden scenario stage exactly
 once and preserves its contract-relative order, so
 removing a required candidate, review, publication, or feedback-loop stage still fails
 even when repository, artifact, tracker, and validation state are correct. Extra
@@ -136,7 +141,7 @@ python3 tests/evals/ultra-complementary-profiles/run-eval.py \
   --treatment-ref <implementation-sha> \
   --ablation-ref <baseline-sha> \
   --runtime qoder \
-  --model Qwen3.7-Max-DogFooding \
+  --model Qwen3.8-Max-Preview \
   --context-window 1000000 \
   --canary-gate \
   --timeout 1800
@@ -144,14 +149,15 @@ python3 tests/evals/ultra-complementary-profiles/run-eval.py \
 
 Use `--canary-gate` only for the fail-fast treatment/ablation sentinel. It writes a
 pair-specific durable verdict such as
-`canary-verdict-treatment-001-ablation-001.json` and passes the gate only when treatment is fully correct,
-ablation has valid repository/artifact/validation/tracker evidence, and the ablation
-fails solely on the scenario's declared ownership delta. If both variants pass, the
+`canary-verdict-treatment-001-ablation-001.json` and passes the gate only when
+treatment is fully correct, ablation has valid repository/artifact/validation/tracker
+evidence, and the ablation fails solely on the scenario's declared
+duplicate-exploration profile delta. If both variants pass, the
 verdict is `no-observed-attributable-difference`; that is an honest negative result
 and stops the matrix rather than claiming incremental value. Invalid tracker or
 validation state on either side also stops the matrix and cannot be counted as an
-ablation difference. For the architecture canary, a ledger-only ownership claim is
-insufficient: the raw trace must produce the dedicated `extra_exploration_call`
+ablation difference. For the architecture canary, a ledger-only duplicate-stage claim
+is insufficient: the raw trace must produce the dedicated `extra_exploration_call`
 failure for a completed delegated stage marked `[eval-stage:ultra-code-explore]`.
 The same recorded stage may also produce `duplicate_evidence_goal` through the hidden
 stable goal mapping; that code is allowable but never substitutes for the required

@@ -17,14 +17,16 @@ If the first argument is `solve`, dispatch directly to the [solve.md](solve.md) 
 
 ## Runtime adaptivity
 
-This skill is capability-oriented. The workflow describes outcomes; parenthetical hints describe the *capability needed*, not a specific tool. "Spawn agents" means "run exploration or review passes; use parallel subagents when available, otherwise serial passes."
+This skill is capability-oriented. The workflow describes outcomes; parenthetical hints describe the *capability needed*, not a specific tool. "Spawn agents" means delegate exploration or review passes when the runtime offers delegation, running independent passes in parallel when useful or ordered passes serially. If the runtime offers no delegation, the root Agent executes the capability-equivalent passes serially.
+
+Delegation availability and parallel scheduling are separate. A pass may use a delegated Agent even when it must run serially. When a declared review goal requires an independent lens, available delegation cannot be replaced by root self-review.
 
 If a named tool is unavailable, use the nearest equivalent workflow (serial passes, direct file reads, manual diff inspection) and state the substitution briefly. A missing specific tool is never by itself a blocker.
 
 Fallback examples:
-- Parallel exploration or review -> run the same passes serially with available read/search tools.
+- Parallel exploration or review -> delegate the same passes serially when delegation is available; use root read/search tools only when delegation is unavailable.
 - Web-search agent -> use direct web-search/fetch tools when available; if unavailable and research is optional or low-value, state the skip.
-- Team review -> run a manual two-lens review: completeness, then consistency.
+- Team review -> use one independent reviewer Agent for the required lenses; only without delegation, run a manual root two-lens review: completeness, then consistency.
 
 Example runtime mappings, not requirements: `parallel codebase exploration` -> Agent tool with `subagent_type=Explore`; `with web search` -> Agent tool with `subagent_type=general-purpose`; multi-reviewer code review -> TeamCreate/TeamDelete.
 
@@ -103,6 +105,8 @@ Invoke the target skill unmodified, passing through any remaining arguments (e.g
 ### 5. Post-review
 
 **When the profile declares an Ultra-additive review** — run the declared distinct review goal after the skill completes, using these lenses only when they contribute to that goal:
+
+When delegation is available, assign every Ultra-additive post-review to an independent reviewer Agent and consume its returned findings. Root self-review does not complete that stage. Only when delegation is unavailable may the root Agent run the same review lenses serially; record that capability fallback before reporting the review complete.
 
 - **Completeness reviewer**: Cross-reference the skill's output against pre-exploration findings (or conversation context). Flag only concrete omissions, especially *scope blindness* — issues or edge cases raised during exploration that the skill output silently dropped.
 - **Consistency reviewer**: Check that the output uses correct domain vocabulary (CONTEXT.md), respects ADRs, and follows project conventions. Flag only real *convention drift* — patterns, naming, or structures that deviate without justification.

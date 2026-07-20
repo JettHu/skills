@@ -219,9 +219,13 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
     if not isinstance(evidence, dict):
         evidence = {}
     events = evidence.get("events", [])
-    event_keys = {"name", "owner", "evidence"} if expected.get("schema_version") == 3 else {
-        "name", "owner", "goal", "evidence"
-    }
+    schema_version = expected.get("schema_version")
+    if schema_version == 4:
+        event_keys = {"name", "evidence"}
+    elif schema_version == 3:
+        event_keys = {"name", "owner", "evidence"}
+    else:
+        event_keys = {"name", "owner", "goal", "evidence"}
     valid_events = (
         evidence_path.is_file()
         and not evidence_path.is_symlink()
@@ -239,8 +243,7 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
     raw_names = [event["name"] for event in grading_events]
     names = [normalize_event_name(name, aliases) for name in raw_names]
     stage_vocabulary = expected.get("stage_vocabulary")
-    schema_version = expected.get("schema_version")
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
         normalized_vocabulary = {
             normalize_event_name(name, aliases) for name in (stage_vocabulary or [])
         }
@@ -257,13 +260,14 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
             "each scenario-required completed stage is recorded exactly once",
             "scenario-required stages preserve their contract-relative order",
         )
-        owners = expected.get("event_owners", {})
-        owner_ok = all(
-            owners.get(normalize_event_name(event.get("name"), aliases)) == event.get("owner")
-            for event in grading_events
-        )
-        check_profile(owner_ok, "recorded stage owners match the hidden ownership contract", "stage_owner")
-        if schema_version == 3:
+        if schema_version in {2, 3}:
+            owners = expected.get("event_owners", {})
+            owner_ok = all(
+                owners.get(normalize_event_name(event.get("name"), aliases)) == event.get("owner")
+                for event in grading_events
+            )
+            check_profile(owner_ok, "recorded stage owners match the hidden ownership contract", "stage_owner")
+        if schema_version in {3, 4}:
             goal_identities = expected.get("event_goal_identities", {})
             stable_goal_ids = [goal_identities.get(name) for name in names]
             check_profile(
@@ -382,7 +386,7 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
     )
 
     unexpected_paths: list[str] = []
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
         paths, paths_ok = changed_paths(repo, baseline)
         unexpected_paths = sorted(paths - set(expected.get("allowed_changes", [])))
         check_repository(paths_ok, "initial fixture baseline is available", "baseline_unavailable")

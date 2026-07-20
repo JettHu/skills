@@ -42,7 +42,6 @@ SCENARIOS = {
         "tokens": ["Order Router", "route_order", "ADR-0001"],
         "result": "unchanged",
         "tracker": "ready-for-agent",
-        "event_aliases": {"target-native-report": "target-native-candidate"},
         "ablation_attributable_failure_codes": [
             "extra_exploration_call", "duplicate_evidence_goal",
         ],
@@ -177,7 +176,7 @@ SCENARIO_AUTHORITY = {
 def goal_identities(scenario: dict) -> dict[str, str]:
     """Evaluator-owned stable goal identity; model-authored prose is not identity."""
     identities = {
-        name: f"stage-goal:{scenario.get('event_aliases', {}).get(name, name)}"
+        name: f"stage-goal:{name}"
         for name in stage_vocabulary(scenario)
     }
     if "target-native-explore" in identities:
@@ -191,17 +190,8 @@ def stage_vocabulary(scenario: dict) -> list[str]:
     """Return names this scenario may truthfully record, not historical forbiddens."""
     return sorted({
         *scenario["events"],
-        *scenario.get("event_aliases", {}),
         *scenario.get("recordable_extra_events", []),
     })
-
-
-def event_owner(name: str) -> str:
-    if name.startswith("target-"):
-        return "target"
-    if name.startswith("ultra-"):
-        return "ultra"
-    return "root"
 
 
 def trace_expectations(scenario_id: str, scenario: dict) -> dict:
@@ -352,24 +342,18 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
         contract_hashes[relative] = hashlib.sha256(value.encode()).hexdigest()
 
     vocabulary = stage_vocabulary(scenario)
-    aliases = scenario.get("event_aliases", {})
-    event_owners = {
-        aliases.get(name, name): event_owner(aliases.get(name, name))
-        for name in vocabulary
-    }
     allowed_changes = {
         scenario["artifact"],
         "artifacts/stage-evidence.json",
         *authority.get("allowed_changes", []),
     }
     expectations = {
-        "schema_version": 3,
+        "schema_version": 4,
         "scenario": scenario_id,
         "variant": variant,
         "stage_vocabulary": vocabulary,
         "required_events": scenario["events"],
         "recordable_extra_events": scenario.get("recordable_extra_events", []),
-        "event_owners": event_owners,
         "event_goal_identities": goal_identities(scenario),
         "artifact": scenario["artifact"],
         "artifact_tokens": scenario["tokens"],
@@ -380,7 +364,6 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
         "allowed_changes": sorted(allowed_changes),
         "contract_hashes": contract_hashes,
         "trace_expectations": trace_expectations(scenario_id, scenario),
-        "event_aliases": aliases,
         "ablation_attributable_failure_codes": scenario.get("ablation_attributable_failure_codes", []),
         "ablation_required_difference_codes": scenario.get("ablation_required_difference_codes", []),
     }
@@ -392,7 +375,6 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
             "stage_vocabulary", "recordable_extra_events", "artifact",
             "artifact_tokens", "artifact_sections", "artifact_sources",
             "expected_result", "expected_tracker_status",
-            "event_aliases",
         )
     }
     public_expectations_text = json.dumps(public_expectations, indent=2) + "\n"
@@ -445,7 +427,7 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
 
             {publication_instruction}
 
-            As durable execution evidence, write `artifacts/stage-evidence.json` with an `events` array. Append one object per completed stage in actual execution order, each with exactly `name`, `owner`, and `evidence`; do not add anticipated or expected stages. Use the applicable names from this scenario-specific stable vocabulary: {stage_vocabulary_text}. When delegating any stage, include exactly one neutral `[eval-stage:<stage-name>]` marker from that vocabulary in the Agent prompt and record the same stage in the ledger. Record the successful validation as `validation`.{covered_additive_instruction} Never record model response prose as evidence.
+            As durable execution evidence, write `artifacts/stage-evidence.json` with an `events` array. Append one object per completed stage in actual execution order, each with exactly `name` and `evidence`; do not add anticipated or expected stages. Use the applicable names from this scenario-specific stable vocabulary: {stage_vocabulary_text}. When delegating any stage, include exactly one neutral `[eval-stage:<stage-name>]` marker from that vocabulary in the Agent prompt and record the same stage in the ledger. Record the successful validation as `validation`.{covered_additive_instruction} Never record model response prose as evidence.
 
             Do not run any external grader and do not edit this prompt, `EVAL_EXPECTATIONS.json`, or the supplied skill inputs.
             """

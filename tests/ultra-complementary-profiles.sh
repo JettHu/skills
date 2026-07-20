@@ -23,6 +23,12 @@ assert "def stage_marker" in prepare_source
 assert "[target-native:architecture-candidate-discovery]" not in prepare_source
 assert "historical_forbidden_events" not in prepare_source
 assert "delegation_marker" not in prepare.SCENARIOS["architecture-native-ownership"]
+architecture = prepare.SCENARIOS["architecture-native-ownership"]
+assert "event_aliases" not in architecture
+assert prepare.stage_vocabulary(architecture) == [
+    "target-native-candidate", "target-native-explore", "ultra-code-explore",
+    "ultra-post-review", "validation",
+]
 assert set(prepare.SCENARIOS) == {
     "architecture-native-ownership", "diagnosis-feedback-loop-first",
     "spec-independent-code-trigger", "tickets-review-publication",
@@ -41,6 +47,8 @@ for text in (
     "Missing evidence in conversation context is not, by itself, a trigger",
     "Target-native delegation is outside this cap and remains intact",
     "invoke the target first so it can build and run its red-capable feedback loop",
+    "When delegation is available, assign every Ultra-additive post-review to an independent reviewer Agent",
+    "Only when delegation is unavailable may the root Agent run the same review lenses serially",
 ):
     assert text in core, f"missing complementary routing rule: {text}"
 
@@ -51,6 +59,7 @@ for text in (
     "Proportional review after actual code changes",
     "A short current artifact names affected modules and contracts",
     "A long prior discussion covers architecture but predates a changed contract",
+    "Independent reviewer Agent when delegation is available; root serial fallback only when delegation is unavailable",
 ):
     assert text in profiles, f"missing profile contract: {text}"
 
@@ -81,6 +90,14 @@ grader = repo_root / "tests/evals/ultra-complementary-profiles/grade-run.py"
 for repo in sorted(root.glob("*/treatment/attempt-001/repo")):
     expected = json.loads((repo.parent / "control.json").read_text(encoding="utf-8"))["expectations"]
     scenario = expected["scenario"]
+    public = json.loads((repo / "EVAL_EXPECTATIONS.json").read_text(encoding="utf-8"))
+    prompt = (repo / "EVAL_PROMPT.md").read_text(encoding="utf-8")
+    assert expected["schema_version"] == 4
+    assert "event_owners" not in expected
+    assert "event_aliases" not in expected
+    assert "owner" not in public
+    assert "event_aliases" not in public
+    assert "each with exactly `name` and `evidence`" in prompt
     artifact = repo / expected["artifact"]
     artifact.parent.mkdir(parents=True, exist_ok=True)
     coverage = " ".join(expected["artifact_tokens"] + expected["artifact_sources"])
@@ -94,7 +111,6 @@ for repo in sorted(root.glob("*/treatment/attempt-001/repo")):
     events = [
         {
             "name": name,
-            "owner": expected["event_owners"][name],
             "evidence": expected["artifact"],
         }
         for name in expected["required_events"]
@@ -507,7 +523,6 @@ for fixture in fixtures:
     assert f"`{expected['artifact']}`" in prompt
     expected_vocabulary = {
         *expected["required_events"],
-        *expected["event_aliases"],
         *expected["recordable_extra_events"],
     }
     assert set(expected["stage_vocabulary"]) == expected_vocabulary
@@ -521,10 +536,13 @@ for fixture in fixtures:
     assert " -> " not in prompt
     assert "Execute `/ultra" not in prompt
     assert "Do not invoke any slash command or Skill tool" in prompt
-    assert expected["schema_version"] == 3
+    assert expected["schema_version"] == 4
     assert expected["trace_expectations"] is not None
     assert "required_events" not in public
+    assert "event_owners" not in expected
+    assert "event_aliases" not in expected
     assert "event_owners" not in public
+    assert "event_aliases" not in public
     assert "trace_expectations" not in public
     assert "allowed_changes" not in public
     assert "contract_hashes" not in public
@@ -533,7 +551,7 @@ for fixture in fixtures:
     assert (fixture.parent / "control.json").is_file()
     if expected["scenario"] == "architecture-native-ownership":
         assert expected_vocabulary == {
-            "target-native-explore", "target-native-candidate", "target-native-report",
+            "target-native-explore", "target-native-candidate",
             "ultra-code-explore", "ultra-post-review", "validation",
         }
         assert "`ultra-research`" not in prompt
@@ -602,6 +620,7 @@ python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/prepare-fixture.py"
   --treatment-ref working-tree --ablation-ref HEAD >/dev/null
 
 python3 - "$REPO_ROOT" "$TMP" <<'PY'
+import hashlib
 import json
 import importlib.util
 from pathlib import Path
@@ -655,10 +674,10 @@ The ordering rule in docs/adr/ADR-0001.md creates an audit sequencing risk to pr
     encoding="utf-8",
 )
 events = [
-    {"name": "target-native-explore", "owner": "target", "evidence": "app/router.py"},
-    {"name": "target-native-report", "owner": "target", "evidence": "artifacts/architecture-report.md"},
-    {"name": "ultra-post-review", "owner": "ultra", "evidence": "docs/adr/ADR-0001.md"},
-    {"name": "validation", "owner": "root", "evidence": "python3 scripts/check.py"},
+    {"name": "target-native-explore", "evidence": "app/router.py"},
+    {"name": "target-native-candidate", "evidence": "artifacts/architecture-report.md"},
+    {"name": "ultra-post-review", "evidence": "docs/adr/ADR-0001.md"},
+    {"name": "validation", "evidence": "python3 scripts/check.py"},
 ]
 (treatment / "artifacts/stage-evidence.json").write_text(json.dumps({"events": events}, indent=2) + "\n")
 missing_delegation = treatment.parent / "missing-delegation.jsonl"
@@ -687,6 +706,69 @@ assert subprocess.run(
     [sys.executable, str(grader), str(treatment), "--trace", str(valid_trace)],
     capture_output=True,
 ).returncode == 0
+
+# Historical schema-v3 controls may still contain the old report alias and owner
+# field. Keep that regrade path without exposing either in newly prepared fixtures.
+current_control = json.loads(
+    (treatment.parent / "control.json").read_text(encoding="utf-8")
+)
+legacy_expected = json.loads(json.dumps(current_control["expectations"]))
+legacy_expected["schema_version"] = 3
+legacy_expected["stage_vocabulary"] = sorted(
+    [*legacy_expected["stage_vocabulary"], "target-native-report"]
+)
+legacy_expected["event_aliases"] = {
+    "target-native-report": "target-native-candidate",
+}
+legacy_expected["event_owners"] = {
+    "target-native-candidate": "target",
+    "target-native-explore": "target",
+    "ultra-code-explore": "ultra",
+    "ultra-post-review": "ultra",
+    "validation": "root",
+}
+legacy_expected["event_goal_identities"]["target-native-report"] = (
+    legacy_expected["event_goal_identities"]["target-native-candidate"]
+)
+legacy_expected_text = json.dumps(legacy_expected, indent=2) + "\n"
+legacy_control = dict(current_control)
+legacy_control["expectations"] = legacy_expected
+legacy_control["expectations_sha256"] = hashlib.sha256(
+    legacy_expected_text.encode()
+).hexdigest()
+legacy_control_path = treatment.parent / "legacy-schema-v3-control.json"
+legacy_control_path.write_text(
+    json.dumps(legacy_control, indent=2) + "\n", encoding="utf-8"
+)
+legacy_events = [
+    {"name": "target-native-explore", "owner": "target", "evidence": "app/router.py"},
+    {"name": "target-native-report", "owner": "target", "evidence": "artifacts/architecture-report.md"},
+    {"name": "ultra-post-review", "owner": "ultra", "evidence": "docs/adr/ADR-0001.md"},
+    {"name": "validation", "owner": "root", "evidence": "python3 scripts/check.py"},
+]
+stage_evidence_path = treatment / "artifacts/stage-evidence.json"
+current_stage_evidence = stage_evidence_path.read_text(encoding="utf-8")
+stage_evidence_path.write_text(
+    json.dumps({"events": legacy_events}, indent=2) + "\n", encoding="utf-8"
+)
+legacy_alias_result = subprocess.run(
+    [sys.executable, str(grader), str(treatment), "--trace", str(valid_trace),
+     "--control", str(legacy_control_path), "--json"],
+    capture_output=True, text=True,
+)
+assert legacy_alias_result.returncode == 0, legacy_alias_result.stdout + legacy_alias_result.stderr
+legacy_events[1]["owner"] = "native"
+stage_evidence_path.write_text(
+    json.dumps({"events": legacy_events}, indent=2) + "\n", encoding="utf-8"
+)
+legacy_owner_result = subprocess.run(
+    [sys.executable, str(grader), str(treatment), "--trace", str(valid_trace),
+     "--control", str(legacy_control_path), "--json"],
+    capture_output=True, text=True,
+)
+assert legacy_owner_result.returncode != 0
+assert "stage_owner" in json.loads(legacy_owner_result.stdout)[0]["profile_grade"]["failure_codes"]
+stage_evidence_path.write_text(current_stage_evidence, encoding="utf-8")
 
 def grade_json(repo_path=treatment, trace_path=valid_trace):
     result = subprocess.run(
@@ -807,7 +889,6 @@ def assert_required_stage_failure(missing_name):
     incomplete_events = [
         event for event in events
         if event["name"] != missing_name
-        and not (missing_name == "target-native-candidate" and event["name"] == "target-native-report")
     ]
     (treatment / "artifacts/stage-evidence.json").write_text(
         json.dumps({"events": incomplete_events}, indent=2) + "\n"
@@ -829,20 +910,6 @@ def assert_required_stage_failure(missing_name):
 
 assert_required_stage_failure("target-native-candidate")
 assert_required_stage_failure("ultra-post-review")
-wrong_owner_events = [dict(event) for event in events]
-wrong_owner_events[1]["owner"], wrong_owner_events[2]["owner"] = (
-    wrong_owner_events[2]["owner"], wrong_owner_events[1]["owner"]
-)
-(treatment / "artifacts/stage-evidence.json").write_text(
-    json.dumps({"events": wrong_owner_events}, indent=2) + "\n"
-)
-wrong_owner_result = subprocess.run(
-    [sys.executable, str(grader), str(treatment), "--trace", str(valid_trace), "--json"],
-    capture_output=True, text=True,
-)
-assert wrong_owner_result.returncode != 0
-assert "stage_owner" in json.loads(wrong_owner_result.stdout)[0]["profile_grade"]["failure_codes"]
-
 malformed_type_events = [dict(event) for event in events]
 malformed_type_events[0]["name"] = ["not", "a", "string"]
 (treatment / "artifacts/stage-evidence.json").write_text(
@@ -1102,7 +1169,6 @@ artifact.parent.mkdir(parents=True, exist_ok=True)
 artifact.write_text((treatment / "artifacts/architecture-report.md").read_text(), encoding="utf-8")
 ablation_events = events + [{
     "name": "ultra-code-explore",
-    "owner": "ultra",
     "evidence": "completed Agent call agent-2",
 }]
 (ablation / "artifacts/stage-evidence.json").write_text(
@@ -1121,7 +1187,7 @@ assert ledger_mismatch_grade["repository_grade"]["passed"] is True
 assert ledger_mismatch_grade["trace_grade"]["failure_codes"] == ["stage_trace_mismatch"]
 
 # With a second completed Explore in the raw trace, the same valid repository and
-# truthful actual-stage ledger fail solely on the attributable ownership delta.
+# truthful actual-stage ledger fail solely on the attributable profile delta.
 ablation_extra_result = subprocess.run(
     [sys.executable, str(grader), str(ablation), "--trace", str(extra_trace), "--json"],
     capture_output=True,
