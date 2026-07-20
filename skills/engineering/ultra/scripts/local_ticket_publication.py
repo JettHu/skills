@@ -228,6 +228,11 @@ def normalize_operational_fields(
     branch_fields: tuple[str, ...],
     worktree_fields: tuple[str, ...],
 ) -> str:
+    text = re.sub(
+        r"(?m)^([ \t]*[-*+] [ \t]*\[)[ xX](\][ \t]+)",
+        r"\1 \2",
+        text,
+    )
     start, end, _kind = metadata_region(text)
     region = text[start:end]
     groups = (

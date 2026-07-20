@@ -50,6 +50,45 @@ adapter() {
     --location "$location" --run-id "$run" "$@"
 }
 
+# Acceptance completion is operational evidence added after a solve. Checking
+# an unchanged criterion must not invalidate the reviewed Ticket body, while
+# changing the criterion text must still fail closed.
+CHECKBOX_REPO="$TMPDIR_ROOT/acceptance-checkbox"
+mkdir -p "$CHECKBOX_REPO/.scratch/feature/issues"
+write_contract "$CHECKBOX_REPO" retain-until-explicit-cleanup
+write_file_ticket "$CHECKBOX_REPO/.scratch/feature/issues/CHECKBOX-1.md" CHECKBOX-1 checkbox-run review-pending "" "Acceptance checkbox normalization"
+adapter "$CHECKBOX_REPO" file-per-ticket .scratch/feature/issues checkbox-run register >/dev/null
+python3 - "$CHECKBOX_REPO/.scratch/feature/issues/CHECKBOX-1.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(
+    path.read_text(encoding="utf-8").replace(
+        "- [ ] independently verifiable", "- [x] independently verifiable", 1
+    ),
+    encoding="utf-8",
+)
+PY
+adapter "$CHECKBOX_REPO" file-per-ticket .scratch/feature/issues checkbox-run promote >/dev/null
+python3 - "$CHECKBOX_REPO/.scratch/feature/issues/CHECKBOX-1.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(
+    path.read_text(encoding="utf-8").replace(
+        "independently verifiable", "semantically changed", 1
+    ),
+    encoding="utf-8",
+)
+PY
+if adapter "$CHECKBOX_REPO" file-per-ticket .scratch/feature/issues checkbox-run promote >"$TMPDIR_ROOT/checkbox-semantic-change.out" 2>&1; then
+  echo "publication accepted changed acceptance text" >&2
+  exit 1
+fi
+grep -Fq 'Ticket content changed after review registration' "$TMPDIR_ROOT/checkbox-semantic-change.out"
+
 # Every adapter operation is authorized by the one configured Local Markdown
 # representation and durable surface, never by CLI coordinates alone.
 surface_failures=0
