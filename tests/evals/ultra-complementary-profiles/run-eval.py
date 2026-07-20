@@ -19,6 +19,8 @@ import uuid
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+sys.path.insert(0, str(HERE))
+from primary_runtime import PrimaryRuntimeAdapter  # noqa: E402
 PREPARE = HERE / "prepare-fixture.py"
 GRADER = HERE / "grade-run.py"
 PAIR_VERDICT = HERE / "pair_verdict.py"
@@ -251,16 +253,34 @@ def main() -> None:
         control_snapshot = json.loads(control_path.read_text(encoding="utf-8"))
         control_path.unlink()
         prompt = (repo / "EVAL_PROMPT.md").read_text(encoding="utf-8")
-        runtime_root = Path(tempfile.mkdtemp(prefix="ultra-eval-runtime-"))
-        runtime_config = runtime_root / "config"
-        runtime_home = runtime_root / "home"
-        runtime_config.mkdir()
-        runtime_home.mkdir()
-        workspace_root = Path(tempfile.mkdtemp(prefix="agent-workspace-"))
-        runtime_repo = workspace_root / f"workspace-{uuid.uuid4().hex[:12]}"
-        shutil.move(str(repo), runtime_repo)
-        runtime_env = os.environ.copy()
-        runtime_env["HOME"] = str(runtime_home)
+        primary_adapter = None
+        if args.runtime == "primary":
+            primary_adapter = PrimaryRuntimeAdapter(
+                evidence_repo=repo,
+                primary_bin=args.primary_bin,
+                model=args.model,
+                reasoning_effort=args.reasoning_effort,
+                timeout=args.timeout,
+            ).start()
+            runtime_root = primary_adapter.runtime_root
+            runtime_config = primary_adapter.codex_home
+            runtime_home = primary_adapter.runtime_home
+            workspace_root = primary_adapter.workspace_root
+            runtime_repo = primary_adapter.runtime_repo
+            runtime_env = primary_adapter.env
+            assert runtime_root and runtime_config and runtime_home
+            assert workspace_root and runtime_repo and runtime_env
+        else:
+            runtime_root = Path(tempfile.mkdtemp(prefix="ultra-eval-runtime-"))
+            runtime_config = runtime_root / "config"
+            runtime_home = runtime_root / "home"
+            runtime_config.mkdir()
+            runtime_home.mkdir()
+            workspace_root = Path(tempfile.mkdtemp(prefix="agent-workspace-"))
+            runtime_repo = workspace_root / f"workspace-{uuid.uuid4().hex[:12]}"
+            shutil.move(str(repo), runtime_repo)
+            runtime_env = os.environ.copy()
+            runtime_env["HOME"] = str(runtime_home)
         runtime_errors: list[dict[str, object]] = []
         qoder_auth = Path.home() / ".qoder" / ".auth"
         if args.runtime == "qoder":
@@ -287,22 +307,12 @@ def main() -> None:
                 args.qoder_bin, *isolation_args, "skills", "list",
             ]
         else:
-            ambient_codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-            ambient_auth = ambient_codex_home / "auth.json"
-            if ambient_auth.is_file():
-                (runtime_config / "auth.json").symlink_to(ambient_auth)
-            runtime_env["CODEX_HOME"] = str(runtime_config)
-            command = [
-                args.primary_bin, "--ask-for-approval", "never", "exec", "--json",
-                "--sandbox", "workspace-write",
-                "-C", str(runtime_repo),
-                "--model", args.model,
-            ]
-            if args.reasoning_effort:
-                command.extend(["-c", f'model_reasoning_effort="{args.reasoning_effort}"'])
-            version_command = [args.primary_bin, "--version"]
+            assert primary_adapter is not None
+            command = primary_adapter.command(prompt)
+            version_command = primary_adapter.version_command()
             preflight_command = version_command
-        command.append(prompt)
+        if args.runtime == "qoder":
+            command.append(prompt)
         contract_ref = args.treatment_ref if variant == "treatment" else args.ablation_ref
         invocation = {
             "argv": command,
@@ -360,14 +370,25 @@ def main() -> None:
         stdout = ""
         stderr = ""
         try:
-            version_exit, version_stdout, version_stderr = probe(version_command, runtime_env)
+            if primary_adapter is not None:
+                version_probe = primary_adapter.probe(version_command)
+                version_exit = version_probe.exit_code
+                version_stdout = version_probe.stdout
+                version_stderr = version_probe.stderr
+            else:
+                version_exit, version_stdout, version_stderr = probe(version_command, runtime_env)
             version_text = (version_stdout or version_stderr).strip()
             if version_exit == 0 and version_text:
                 invocation["runtime_version"] = version_text.splitlines()[0]
             else:
                 runtime_errors.append({"phase": "version", "code": "runtime_version_failed", "exit_code": version_exit})
             if not runtime_errors:
-                preflight_exit, preflight_stdout, _ = probe(preflight_command, runtime_env)
+                if primary_adapter is not None:
+                    preflight_probe = primary_adapter.probe(preflight_command)
+                    preflight_exit = preflight_probe.exit_code
+                    preflight_stdout = preflight_probe.stdout
+                else:
+                    preflight_exit, preflight_stdout, _ = probe(preflight_command, runtime_env)
                 authentication_available = (
                     qoder_authentication_available(preflight_exit, preflight_stdout)
                     if args.runtime == "qoder"
@@ -415,14 +436,31 @@ def main() -> None:
                             "exit_code": skill_exit,
                         })
             if not runtime_errors:
-                result = subprocess.run(
-                    command, cwd=runtime_repo, env=runtime_env, text=True, capture_output=True,
-                    timeout=args.timeout,
-                )
-                run_exit = result.returncode
-                stdout, stderr = result.stdout, result.stderr
+                if primary_adapter is not None:
+                    result = primary_adapter.execute(
+                        prompt,
+                        stdout_path=attempt_root / "raw-stdout.log",
+                        stderr_path=attempt_root / "raw-stderr.log",
+                    )
+                    run_exit = result.exit_code
+                    stdout, stderr = result.stdout, result.stderr
+                    timed_out = result.timed_out
+                    if result.error_code:
+                        runtime_errors.append({
+                            "phase": "execution",
+                            "code": result.error_code,
+                            "exit_code": run_exit,
+                        })
+                else:
+                    result = subprocess.run(
+                        command, cwd=runtime_repo, env=runtime_env, text=True, capture_output=True,
+                        timeout=args.timeout,
+                    )
+                    run_exit = result.returncode
+                    stdout, stderr = result.stdout, result.stderr
                 if run_exit != 0:
-                    runtime_errors.append({"phase": "execution", "code": "runtime_exit_nonzero", "exit_code": run_exit})
+                    if not runtime_errors or runtime_errors[-1].get("phase") != "execution":
+                        runtime_errors.append({"phase": "execution", "code": "runtime_exit_nonzero", "exit_code": run_exit})
         except subprocess.TimeoutExpired as exc:
             timed_out = True
             run_exit = 124
@@ -433,18 +471,21 @@ def main() -> None:
             run_exit = 127 if isinstance(exc, FileNotFoundError) else 126
             runtime_errors.append({"phase": "execution", "code": "runtime_binary_unavailable", "exit_code": run_exit})
         finally:
-            try:
-                if runtime_repo.exists() or runtime_repo.is_symlink():
-                    shutil.move(str(runtime_repo), repo)
-            except OSError:
-                runtime_errors.append({"phase": "cleanup", "code": "runtime_workspace_restore_failed"})
-                repo.mkdir(parents=True, exist_ok=True)
-            shutil.rmtree(runtime_root, ignore_errors=True)
-            shutil.rmtree(workspace_root, ignore_errors=True)
-            if args.runtime == "primary":
+            if primary_adapter is not None:
+                for cleanup_code in primary_adapter.cleanup():
+                    runtime_errors.append({"phase": "cleanup", "code": cleanup_code})
                 invocation["runtime_isolation"]["primary_session_store_removed"] = (
-                    not runtime_config.exists()
+                    primary_adapter.cleanup_succeeded
                 )
+            else:
+                try:
+                    if runtime_repo.exists() or runtime_repo.is_symlink():
+                        shutil.move(str(runtime_repo), repo)
+                except OSError:
+                    runtime_errors.append({"phase": "cleanup", "code": "runtime_workspace_restore_failed"})
+                    repo.mkdir(parents=True, exist_ok=True)
+                shutil.rmtree(runtime_root, ignore_errors=True)
+                shutil.rmtree(workspace_root, ignore_errors=True)
         write(attempt_root / "raw-stdout.log", stdout)
         write(attempt_root / "raw-stderr.log", stderr)
         if runtime_errors:
