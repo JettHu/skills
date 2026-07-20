@@ -235,14 +235,25 @@ path.write_text(
     "if '--version' in sys.argv:\n"
     "    print('fake-qoder 1.0')\n"
     "    raise SystemExit(0)\n"
+    "config = pathlib.Path(sys.argv[sys.argv.index('--config-dir') + 1])\n"
+    "cwd = pathlib.Path(sys.argv[sys.argv.index('--cwd') + 1])\n"
+    "assert sys.argv[sys.argv.index('--setting-sources') + 1] == 'project'\n"
+    "assert '--disable-builtin-skills' in sys.argv\n"
+    "isolation = ['--config-dir', str(config), '--cwd', str(cwd), '--setting-sources', 'project', '--disable-builtin-skills']\n"
+    "record = {'kind': 'model', 'home': os.environ['HOME'], 'isolation': isolation}\n"
+    "if 'status' in sys.argv: record['kind'] = 'status'\n"
+    "elif 'agents' in sys.argv and 'list' in sys.argv: record['kind'] = 'agents'\n"
+    "elif 'skills' in sys.argv and 'list' in sys.argv: record['kind'] = 'skills'\n"
+    "if log_path := os.environ.get('QODER_FAKE_LOG'):\n"
+    "    with pathlib.Path(log_path).open('a', encoding='utf-8') as stream:\n"
+    "        stream.write(json.dumps(record) + '\\n')\n"
     "if 'status' in sys.argv:\n"
-    "    config = pathlib.Path(sys.argv[sys.argv.index('--config-dir') + 1])\n"
     "    assert {entry.name for entry in config.iterdir()} <= {'.auth'}\n"
     "    assert pathlib.Path(os.environ['HOME']) != pathlib.Path.home().parent\n"
     "    print(json.dumps({'logged_in': True, 'account': 'must-not-be-recorded'}))\n"
     "    raise SystemExit(0)\n"
     "if 'agents' in sys.argv and 'list' in sys.argv:\n"
-    "    print('Explore · Efficient\\ngeneral-purpose · Inherit')\n"
+    "    print('5 active agents\\n\\nBuilt-in:\\n  Explore · Efficient\\n  general-purpose · Inherit\\n  Plan · Inherit\\n  qoder-guide · Efficient\\n  statusline-setup · Performance')\n"
     "    raise SystemExit(0)\n"
     "if 'skills' in sys.argv and 'list' in sys.argv:\n"
     "    print('No skills discovered.')\n"
@@ -261,10 +272,12 @@ runner=(python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py
   --output "$TMP/runner" --run-id failure-record --scenario architecture-native-ownership
   --treatment-ref HEAD --ablation-ref HEAD --model fake --context-window 1000000
   --timeout 5 --qoder-bin "$TMP/fake-qoder" --variant treatment)
+export QODER_FAKE_LOG="$TMP/qoder-isolation-invocations.jsonl"
 if "${runner[@]}" >/dev/null 2>&1; then
   echo "runner unexpectedly passed a failed model run" >&2
   exit 1
 fi
+unset QODER_FAKE_LOG
 if "${runner[@]}" >/dev/null 2>&1; then
   echo "runner unexpectedly passed a failed rerun" >&2
   exit 1
@@ -305,13 +318,23 @@ assert invocation["preflight"] == {
     "exit_code": 0,
     "protocol_field": "logged_in",
     "required_agents": ["Explore", "general-purpose"],
-    "agent_capability_available": True,
+    "agent_classification": "available",
     "agent_probe_exit_code": 0,
-    "skill_isolation_clean": True,
+    "skill_classification": "clean",
     "skill_probe_exit_code": 0,
 }
 assert "must-not-be-recorded" not in json.dumps(invocation)
 assert not Path(invocation["cwd"]).exists()
+PY
+python3 - "$TMP/qoder-isolation-invocations.jsonl" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+records = [json.loads(line) for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()]
+assert [record["kind"] for record in records[:4]] == ["status", "agents", "skills", "model"]
+boundaries = {(record["home"], tuple(record["isolation"])) for record in records[:4]}
+assert len(boundaries) == 1, records[:4]
 PY
 
 python3 - "$TMP/qoder-status-false" "$TMP/qoder-status-missing" "$TMP/qoder-status-malformed" <<'PY'
@@ -364,22 +387,38 @@ assert not auth_bin.with_suffix(".model-invoked").exists()
 PY
 done
 
-python3 - "$TMP/qoder-agents-missing" "$TMP/qoder-skills-leaked" <<'PY'
+python3 - "$TMP/qoder-protocol-cases" <<'PY'
 from pathlib import Path
 import sys
 
-agents_missing, skills_leaked = map(Path, sys.argv[1:])
-for path, mode in ((agents_missing, "agents-missing"), (skills_leaked, "skills-leaked")):
-    agents_output = (
-        "Plan · Inherit"
-        if mode == "agents-missing"
-        else "Explore · Efficient\ngeneral-purpose · Inherit"
-    )
-    skills_output = (
-        "No skills discovered.\nambient-skill [Enabled]"
-        if mode == "skills-leaked"
-        else "No skills discovered."
-    )
+root = Path(sys.argv[1])
+root.mkdir()
+agent_outputs = {
+    "agent-missing-explore": "4 active agents\n\nBuilt-in:\n  general-purpose · Inherit\n  Plan · Inherit\n  qoder-guide · Efficient\n  statusline-setup · Performance",
+    "agent-missing-general-purpose": "4 active agents\n\nBuilt-in:\n  Explore · Efficient\n  Plan · Inherit\n  qoder-guide · Efficient\n  statusline-setup · Performance",
+    "agent-missing-both": "3 active agents\n\nBuilt-in:\n  Plan · Inherit\n  qoder-guide · Efficient\n  statusline-setup · Performance",
+    "agent-extra-valid": "6 active agents\n\nBuilt-in:\n  Explore · Efficient\n  general-purpose · Inherit\n  Plan · Inherit\n  qoder-guide · Efficient\n  statusline-setup · Performance\n  extra-agent · Inherit",
+    "agent-unknown": "5 active agents\n\nBuilt-in:\n  Explore · Efficient\n  general-purpose · Inherit\n  Plan · Inherit\n  unknown mixed line\n  statusline-setup · Performance",
+    "agent-count-mismatch": "6 active agents\n\nBuilt-in:\n  Explore · Efficient\n  general-purpose · Inherit\n  Plan · Inherit\n  qoder-guide · Efficient\n  statusline-setup · Performance",
+    "agent-empty": "",
+}
+valid_agents = "5 active agents\n\nBuilt-in:\n  Explore · Efficient\n  general-purpose · Inherit\n  Plan · Inherit\n  qoder-guide · Efficient\n  statusline-setup · Performance"
+skill_outputs = {
+    "skill-leak": "Discovered Agent Skills:\n\nambient-skill [Enabled]\n  Description: must-not-be-recorded-skill-description\n  Location:    /tmp/must-not-be-recorded-skill-path/SKILL.md",
+    "skill-sentinel-mixed": "No skills discovered.\nambient-skill [Enabled]",
+    "skill-unknown": "skills: []",
+    "skill-empty": "",
+}
+modes = [
+    "agent-missing-explore", "agent-missing-general-purpose", "agent-missing-both",
+    "agent-extra-valid", "agent-unknown", "agent-count-mismatch", "agent-probe-fail",
+    "agent-empty", "skill-leak", "skill-sentinel-mixed", "skill-unknown", "skill-empty",
+    "skill-probe-fail",
+]
+for mode in modes:
+    path = root / mode
+    agents_output = agent_outputs.get(mode, valid_agents)
+    skills_output = skill_outputs.get(mode, "No skills discovered.")
     path.write_text(
         "#!/usr/bin/env python3\n"
         "from pathlib import Path\n"
@@ -391,20 +430,26 @@ for path, mode in ((agents_missing, "agents-missing"), (skills_leaked, "skills-l
         "    print('{\"logged_in\": true}')\n"
         "    raise SystemExit(0)\n"
         "if 'agents' in sys.argv and 'list' in sys.argv:\n"
+        f"    if {mode!r} == 'agent-probe-fail': raise SystemExit(7)\n"
         f"    print({agents_output!r})\n"
         "    raise SystemExit(0)\n"
         "if 'skills' in sys.argv and 'list' in sys.argv:\n"
+        f"    if {mode!r} == 'skill-probe-fail': raise SystemExit(8)\n"
         f"    print({skills_output!r})\n"
         "    raise SystemExit(0)\n"
         "Path(__file__).with_suffix('.model-invoked').write_text('unexpected')\n"
-        "raise SystemExit(0)\n",
+        "raise SystemExit(9)\n",
         encoding="utf-8",
     )
     path.chmod(0o755)
 PY
 
-for capability_case in agents-missing skills-leaked; do
-  capability_bin="$TMP/qoder-$capability_case"
+for capability_case in \
+  agent-missing-explore agent-missing-general-purpose agent-missing-both \
+  agent-unknown agent-count-mismatch agent-empty agent-probe-fail \
+  skill-leak skill-sentinel-mixed skill-unknown skill-empty skill-probe-fail
+do
+  capability_bin="$TMP/qoder-protocol-cases/$capability_case"
   if python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py" \
     --output "$TMP/runner" --run-id "$capability_case" --scenario architecture-native-ownership \
     --treatment-ref HEAD --ablation-ref HEAD --model fake --context-window 1000000 \
@@ -421,16 +466,70 @@ root, capability_bin, capability_case = Path(sys.argv[1]), Path(sys.argv[2]), sy
 invocation = json.loads((root / "invocation.json").read_text(encoding="utf-8"))
 result = json.loads((root / "result.json").read_text(encoding="utf-8"))
 expected_code = {
-    "agents-missing": "qoder_agent_capability_failed",
-    "skills-leaked": "qoder_skill_isolation_failed",
+    "agent-missing-explore": "qoder_required_agent_missing",
+    "agent-missing-general-purpose": "qoder_required_agent_missing",
+    "agent-missing-both": "qoder_required_agent_missing",
+    "agent-unknown": "qoder_agent_protocol_unrecognized",
+    "agent-count-mismatch": "qoder_agent_protocol_unrecognized",
+    "agent-empty": "qoder_agent_protocol_unrecognized",
+    "agent-probe-fail": "qoder_agent_probe_failed",
+    "skill-leak": "qoder_skill_isolation_failed",
+    "skill-sentinel-mixed": "qoder_skill_protocol_unrecognized",
+    "skill-unknown": "qoder_skill_protocol_unrecognized",
+    "skill-empty": "qoder_skill_protocol_unrecognized",
+    "skill-probe-fail": "qoder_skill_probe_failed",
 }[capability_case]
 assert expected_code in result["error_codes"]
 assert invocation["preflight"]["required_agents"] == ["Explore", "general-purpose"]
-assert invocation["preflight"]["agent_capability_available"] is (capability_case != "agents-missing")
-assert invocation["preflight"]["skill_isolation_clean"] is (capability_case != "skills-leaked")
+expected_agent_classification = {
+    "agent-missing-explore": "required_agent_missing",
+    "agent-missing-general-purpose": "required_agent_missing",
+    "agent-missing-both": "required_agent_missing",
+    "agent-unknown": "protocol_unrecognized",
+    "agent-count-mismatch": "protocol_unrecognized",
+    "agent-empty": "protocol_unrecognized",
+    "agent-probe-fail": "probe_failed",
+}.get(capability_case, "available")
+expected_skill_classification = {
+    "skill-leak": "skill_leak",
+    "skill-sentinel-mixed": "protocol_unrecognized",
+    "skill-unknown": "protocol_unrecognized",
+    "skill-empty": "protocol_unrecognized",
+    "skill-probe-fail": "probe_failed",
+}.get(capability_case, "clean")
+assert invocation["preflight"]["agent_classification"] == expected_agent_classification
+assert invocation["preflight"]["skill_classification"] == expected_skill_classification
+serialized = json.dumps(invocation)
+assert "must-not-be-recorded-skill-description" not in serialized
+assert "must-not-be-recorded-skill-path" not in serialized
+assert "ambient-skill" not in serialized
 assert not capability_bin.with_suffix(".model-invoked").exists()
 PY
 done
+
+capability_case=agent-extra-valid
+capability_bin="$TMP/qoder-protocol-cases/$capability_case"
+if python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py" \
+  --output "$TMP/runner" --run-id "$capability_case" --scenario architecture-native-ownership \
+  --treatment-ref HEAD --ablation-ref HEAD --model fake --context-window 1000000 \
+  --timeout 5 --qoder-bin "$capability_bin" --variant treatment >/dev/null 2>&1; then
+  echo "failed fake model unexpectedly passed after valid Agent preflight" >&2
+  exit 1
+fi
+python3 - "$TMP/runner/$capability_case/architecture-native-ownership/treatment/attempt-001" "$capability_bin" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root, capability_bin = Path(sys.argv[1]), Path(sys.argv[2])
+invocation = json.loads((root / "invocation.json").read_text(encoding="utf-8"))
+result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+assert invocation["preflight"]["agent_classification"] == "available"
+assert invocation["preflight"]["skill_classification"] == "clean"
+assert result["error_codes"] == ["runtime_exit_nonzero"]
+assert capability_bin.with_suffix(".model-invoked").is_file()
+assert "extra-agent" not in json.dumps(invocation)
+PY
 
 canary_runner=(python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py"
   --output "$TMP/runner" --run-id verdict-history --scenario architecture-native-ownership
@@ -555,7 +654,7 @@ path.write_text(
     "elif 'status' in sys.argv:\n"
     "    print('{\"logged_in\": true}')\n"
     "elif 'agents' in sys.argv and 'list' in sys.argv:\n"
-    "    print('Explore · Efficient\\ngeneral-purpose · Inherit')\n"
+    "    print('5 active agents\\n\\nBuilt-in:\\n  Explore · Efficient\\n  general-purpose · Inherit\\n  Plan · Inherit\\n  qoder-guide · Efficient\\n  statusline-setup · Performance')\n"
     "elif 'skills' in sys.argv and 'list' in sys.argv:\n"
     "    print('No skills discovered.')\n"
     "else:\n"

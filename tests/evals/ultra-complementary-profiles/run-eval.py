@@ -47,6 +47,16 @@ def probe(args: list[str], env: dict[str, str]) -> tuple[int, str, str]:
         return 124, "", "runtime probe timed out"
 
 
+def qoder_isolation_args(runtime_config: Path, runtime_repo: Path) -> list[str]:
+    """Return the shared isolation boundary for every Qoder runtime call."""
+    return [
+        "--config-dir", str(runtime_config),
+        "--cwd", str(runtime_repo),
+        "--setting-sources", "project",
+        "--disable-builtin-skills",
+    ]
+
+
 def qoder_authentication_available(exit_code: int, stdout: str) -> bool:
     """Fail closed unless Qoder's real status protocol says logged_in is true."""
     if exit_code != 0:
@@ -58,24 +68,61 @@ def qoder_authentication_available(exit_code: int, stdout: str) -> bool:
     return isinstance(payload, dict) and payload.get("logged_in") is True
 
 
-def qoder_required_agents_available(exit_code: int, stdout: str) -> bool:
-    """Fail closed unless the isolated Qoder runtime lists required built-in agents."""
+def classify_qoder_agents(exit_code: int, stdout: str) -> str:
+    """Classify the Qoder 1.0.48 ``agents list`` protocol without retaining output."""
     if exit_code != 0:
-        return False
-    observed = {
-        match.group(1)
-        for line in stdout.splitlines()
-        if (match := re.match(r"^\s*([A-Za-z0-9_-]+)\s+·\s+", line))
-    }
-    return set(QODER_REQUIRED_AGENTS) <= observed
+        return "probe_failed"
+    lines = stdout.splitlines()
+    if len(lines) < 4 or lines[1] != "" or lines[2] != "Built-in:":
+        return "protocol_unrecognized"
+    header = re.fullmatch(r"([0-9]+) active agents", lines[0])
+    if header is None:
+        return "protocol_unrecognized"
+    entries: list[str] = []
+    for line in lines[3:]:
+        entry = re.fullmatch(r"  ([A-Za-z0-9_-]+) · ([A-Za-z][A-Za-z0-9_-]*)", line)
+        if entry is None:
+            return "protocol_unrecognized"
+        entries.append(entry.group(1))
+    if int(header.group(1)) != len(entries) or len(set(entries)) != len(entries):
+        return "protocol_unrecognized"
+    if not set(QODER_REQUIRED_AGENTS) <= set(entries):
+        return "required_agent_missing"
+    return "available"
 
 
-def qoder_skill_isolation_clean(exit_code: int, stdout: str) -> bool:
-    """Fail closed unless isolated Qoder reports that no skills are discoverable."""
+def classify_qoder_skills(exit_code: int, stdout: str) -> str:
+    """Classify clean, leaked, or unrecognized Qoder 1.0.48 Skill-list output."""
     if exit_code != 0:
-        return False
-    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-    return lines == ["No skills discovered."]
+        return "probe_failed"
+    nonempty_lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    if nonempty_lines == ["No skills discovered."]:
+        return "clean"
+    lines = stdout.splitlines()
+    while lines and lines[-1] == "":
+        lines.pop()
+    if len(lines) < 5 or lines[:2] != ["Discovered Agent Skills:", ""]:
+        return "protocol_unrecognized"
+    index = 2
+    discovered = 0
+    while index < len(lines):
+        if re.fullmatch(r"[^\s].* \[(?:Enabled|Disabled)\]", lines[index]) is None:
+            return "protocol_unrecognized"
+        if index + 2 >= len(lines):
+            return "protocol_unrecognized"
+        if re.fullmatch(r"  Description: .+", lines[index + 1]) is None:
+            return "protocol_unrecognized"
+        if re.fullmatch(r"  Location:\s+.+", lines[index + 2]) is None:
+            return "protocol_unrecognized"
+        discovered += 1
+        index += 3
+        if index < len(lines):
+            if lines[index] != "":
+                return "protocol_unrecognized"
+            index += 1
+            if index == len(lines):
+                return "protocol_unrecognized"
+    return "skill_leak" if discovered else "protocol_unrecognized"
 
 
 def resolve_ref(ref: str) -> str:
@@ -219,29 +266,25 @@ def main() -> None:
         if args.runtime == "qoder":
             if qoder_auth.is_dir():
                 (runtime_config / ".auth").symlink_to(qoder_auth, target_is_directory=True)
+            isolation_args = qoder_isolation_args(runtime_config, runtime_repo)
             command = [
-                args.qoder_bin, "-p", "--output-format", "stream-json", "--permission-mode",
-                "bypass_permissions", "--cwd", str(runtime_repo), "--model", args.model,
+                args.qoder_bin, *isolation_args,
+                "-p", "--output-format", "stream-json", "--permission-mode",
+                "bypass_permissions", "--model", args.model,
                 "--context-window", str(args.context_window),
-                "--config-dir", str(runtime_config), "--setting-sources", "project",
-                "--disable-builtin-skills",
             ]
             if args.reasoning_effort:
                 command.extend(["--reasoning-effort", args.reasoning_effort])
             version_command = [args.qoder_bin, "--version"]
             preflight_command = [
-                args.qoder_bin, "--config-dir", str(runtime_config),
+                args.qoder_bin, *isolation_args,
                 "status", "--output", "json",
             ]
             agent_preflight_command = [
-                args.qoder_bin, "--config-dir", str(runtime_config),
-                "--cwd", str(runtime_repo), "--setting-sources", "project",
-                "--disable-builtin-skills", "agents", "list",
+                args.qoder_bin, *isolation_args, "agents", "list",
             ]
             skill_preflight_command = [
-                args.qoder_bin, "--config-dir", str(runtime_config),
-                "--cwd", str(runtime_repo), "--setting-sources", "project",
-                "--disable-builtin-skills", "skills", "list",
+                args.qoder_bin, *isolation_args, "skills", "list",
             ]
         else:
             ambient_codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
@@ -340,29 +383,35 @@ def main() -> None:
                 elif args.runtime == "qoder":
                     agent_exit, agent_stdout, _ = probe(agent_preflight_command, runtime_env)
                     skill_exit, skill_stdout, _ = probe(skill_preflight_command, runtime_env)
-                    agent_capability_available = qoder_required_agents_available(
-                        agent_exit, agent_stdout
-                    )
-                    skill_isolation_clean = qoder_skill_isolation_clean(
-                        skill_exit, skill_stdout
-                    )
+                    agent_classification = classify_qoder_agents(agent_exit, agent_stdout)
+                    skill_classification = classify_qoder_skills(skill_exit, skill_stdout)
                     invocation["preflight"].update({
                         "required_agents": list(QODER_REQUIRED_AGENTS),
-                        "agent_capability_available": agent_capability_available,
+                        "agent_classification": agent_classification,
                         "agent_probe_exit_code": agent_exit,
-                        "skill_isolation_clean": skill_isolation_clean,
+                        "skill_classification": skill_classification,
                         "skill_probe_exit_code": skill_exit,
                     })
-                    if not agent_capability_available:
+                    agent_error_codes = {
+                        "probe_failed": "qoder_agent_probe_failed",
+                        "protocol_unrecognized": "qoder_agent_protocol_unrecognized",
+                        "required_agent_missing": "qoder_required_agent_missing",
+                    }
+                    if agent_classification != "available":
                         runtime_errors.append({
                             "phase": "preflight",
-                            "code": "qoder_agent_capability_failed",
+                            "code": agent_error_codes[agent_classification],
                             "exit_code": agent_exit,
                         })
-                    if not skill_isolation_clean:
+                    skill_error_codes = {
+                        "probe_failed": "qoder_skill_probe_failed",
+                        "protocol_unrecognized": "qoder_skill_protocol_unrecognized",
+                        "skill_leak": "qoder_skill_isolation_failed",
+                    }
+                    if skill_classification != "clean":
                         runtime_errors.append({
                             "phase": "preflight",
-                            "code": "qoder_skill_isolation_failed",
+                            "code": skill_error_codes[skill_classification],
                             "exit_code": skill_exit,
                         })
             if not runtime_errors:

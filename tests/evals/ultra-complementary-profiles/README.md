@@ -26,16 +26,26 @@ contract refs. Only the supplied skill/profile content differs between arms.
 The practical runtime boundary is preflighted without a model request. Qoder receives
 an isolated `HOME` and a temporary config root containing only a bridge to
 `~/.qoder/.auth`; settings, skills, plugins, and other ambient Qoder state are not
-copied. Before execution, token-free probes run in that exact isolation: `qodercli
-status --output json` must report `logged_in` exactly `true`, `qodercli agents list`
-must expose both `Explore` and `general-purpose`, and `qodercli skills list` must
-report no discovered skills. Exit zero alone, a missing capability, discovered ambient
-skill state, a missing/false auth field, or malformed auth JSON fails closed before any
-model request. Evidence records only the auth/capability/isolation verdicts, required
-Agent names, and probe exit codes; it never records account identity, authentication
-contents, or raw skill-list output. Binary lookup, version, preflight, execution, and
-timeout failures all produce attempt-local invocation/result/error evidence, and temporary
-runtime directories are removed on every path.
+copied. One shared argument set gives the model invocation and every token-free probe
+the same config root, opaque fixture cwd, project-only setting source, disabled built-in
+Skills mode, and isolated runtime `HOME`. `qodercli status --output json` must report
+`logged_in` exactly `true`. `qodercli agents list` must match the Qoder 1.0.48 protocol:
+an exact `<count> active agents` header, one blank line, `Built-in:`, then exactly that
+many `<name> · <mode>` entries; additional well-formed built-in Agents are allowed, but
+both `Explore` and `general-purpose` are required. Unknown lines, mixed formats, count
+mismatches, and empty output fail closed. `qodercli skills list` is clean only when its
+sole non-empty output is `No skills discovered.`; a well-formed `Discovered Agent Skills:`
+listing is a Skill leak, while mixed, empty, or unknown output is an unrecognized protocol.
+
+Agent failures use `qoder_agent_probe_failed`, `qoder_agent_protocol_unrecognized`, or
+`qoder_required_agent_missing`. Skill failures use `qoder_skill_probe_failed`,
+`qoder_skill_protocol_unrecognized`, or `qoder_skill_isolation_failed`. Every failure
+stops before model execution. Invocation evidence records only authentication and
+protocol classifications, required Agent names, and probe exit codes; it never records
+account identity, authentication contents, or raw Agent/Skill output. Binary lookup,
+version, preflight, execution, and timeout failures all produce attempt-local
+invocation/result/error evidence, and temporary runtime directories are removed on every
+path.
 
 Primary uses the same isolated temporary `HOME`/`CODEX_HOME`, but intentionally keeps
 Codex session persistence enabled inside that disposable store. Codex collaboration
@@ -143,9 +153,10 @@ The generated prompt is contract-only: it does not contain a slash invocation an
 forbids the runtime `Skill` tool and installed/global skill contracts. The runner also
 uses an ephemeral user configuration root and isolated `HOME`. Qoder starts with only
 the ambient `.qoder/.auth` bridge, project-only settings, and disabled built-in
-skills; it does not copy settings, skills, or plugins. The token-free Qoder preflight
-independently proves that required built-in Agents remain available while no Skill is
-discoverable. Primary receives an isolated `HOME`/`CODEX_HOME` containing only an auth
+skills; it does not copy settings, skills, or plugins. The strictly parsed token-free
+Qoder preflight independently proves that required built-in Agents remain available
+while no Skill is discoverable, under the same shared isolation arguments as the model
+call. Primary receives an isolated `HOME`/`CODEX_HOME` containing only an auth
 link. Temporary runtime state is removed after every outcome. Runtime traces independently
 fail any observed `Skill` invocation, so the supplied treatment/ablation contracts are the
 only admissible workflow inputs.
