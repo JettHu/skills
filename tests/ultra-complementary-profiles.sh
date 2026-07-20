@@ -241,6 +241,12 @@ path.write_text(
     "    assert pathlib.Path(os.environ['HOME']) != pathlib.Path.home().parent\n"
     "    print(json.dumps({'logged_in': True, 'account': 'must-not-be-recorded'}))\n"
     "    raise SystemExit(0)\n"
+    "if 'agents' in sys.argv and 'list' in sys.argv:\n"
+    "    print('Explore · Efficient\\ngeneral-purpose · Inherit')\n"
+    "    raise SystemExit(0)\n"
+    "if 'skills' in sys.argv and 'list' in sys.argv:\n"
+    "    print('No skills discovered.')\n"
+    "    raise SystemExit(0)\n"
     "if '--cwd' in sys.argv:\n"
     "    repo = pathlib.Path(sys.argv[sys.argv.index('--cwd') + 1])\n"
     "    assert not (repo.parent / 'control.json').exists()\n"
@@ -298,6 +304,11 @@ assert invocation["preflight"] == {
     "authentication_available": True,
     "exit_code": 0,
     "protocol_field": "logged_in",
+    "required_agents": ["Explore", "general-purpose"],
+    "agent_capability_available": True,
+    "agent_probe_exit_code": 0,
+    "skill_isolation_clean": True,
+    "skill_probe_exit_code": 0,
 }
 assert "must-not-be-recorded" not in json.dumps(invocation)
 assert not Path(invocation["cwd"]).exists()
@@ -350,6 +361,74 @@ assert invocation["preflight"] == {
 }
 assert "runtime_preflight_failed" in result["error_codes"]
 assert not auth_bin.with_suffix(".model-invoked").exists()
+PY
+done
+
+python3 - "$TMP/qoder-agents-missing" "$TMP/qoder-skills-leaked" <<'PY'
+from pathlib import Path
+import sys
+
+agents_missing, skills_leaked = map(Path, sys.argv[1:])
+for path, mode in ((agents_missing, "agents-missing"), (skills_leaked, "skills-leaked")):
+    agents_output = (
+        "Plan · Inherit"
+        if mode == "agents-missing"
+        else "Explore · Efficient\ngeneral-purpose · Inherit"
+    )
+    skills_output = (
+        "No skills discovered.\nambient-skill [Enabled]"
+        if mode == "skills-leaked"
+        else "No skills discovered."
+    )
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "from pathlib import Path\n"
+        "import sys\n"
+        "if '--version' in sys.argv:\n"
+        "    print('fake-qoder 1.0')\n"
+        "    raise SystemExit(0)\n"
+        "if 'status' in sys.argv:\n"
+        "    print('{\"logged_in\": true}')\n"
+        "    raise SystemExit(0)\n"
+        "if 'agents' in sys.argv and 'list' in sys.argv:\n"
+        f"    print({agents_output!r})\n"
+        "    raise SystemExit(0)\n"
+        "if 'skills' in sys.argv and 'list' in sys.argv:\n"
+        f"    print({skills_output!r})\n"
+        "    raise SystemExit(0)\n"
+        "Path(__file__).with_suffix('.model-invoked').write_text('unexpected')\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+PY
+
+for capability_case in agents-missing skills-leaked; do
+  capability_bin="$TMP/qoder-$capability_case"
+  if python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py" \
+    --output "$TMP/runner" --run-id "$capability_case" --scenario architecture-native-ownership \
+    --treatment-ref HEAD --ablation-ref HEAD --model fake --context-window 1000000 \
+    --timeout 5 --qoder-bin "$capability_bin" --variant treatment >/dev/null 2>&1; then
+    echo "runner accepted invalid Qoder capability preflight: $capability_case" >&2
+    exit 1
+  fi
+  python3 - "$TMP/runner/$capability_case/architecture-native-ownership/treatment/attempt-001" "$capability_bin" "$capability_case" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root, capability_bin, capability_case = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+invocation = json.loads((root / "invocation.json").read_text(encoding="utf-8"))
+result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+expected_code = {
+    "agents-missing": "qoder_agent_capability_failed",
+    "skills-leaked": "qoder_skill_isolation_failed",
+}[capability_case]
+assert expected_code in result["error_codes"]
+assert invocation["preflight"]["required_agents"] == ["Explore", "general-purpose"]
+assert invocation["preflight"]["agent_capability_available"] is (capability_case != "agents-missing")
+assert invocation["preflight"]["skill_isolation_clean"] is (capability_case != "skills-leaked")
+assert not capability_bin.with_suffix(".model-invoked").exists()
 PY
 done
 
@@ -475,6 +554,10 @@ path.write_text(
     "    print('sleep-qoder 1.0')\n"
     "elif 'status' in sys.argv:\n"
     "    print('{\"logged_in\": true}')\n"
+    "elif 'agents' in sys.argv and 'list' in sys.argv:\n"
+    "    print('Explore · Efficient\\ngeneral-purpose · Inherit')\n"
+    "elif 'skills' in sys.argv and 'list' in sys.argv:\n"
+    "    print('No skills discovered.')\n"
     "else:\n"
     "    time.sleep(5)\n",
     encoding="utf-8",

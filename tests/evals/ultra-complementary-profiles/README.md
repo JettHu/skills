@@ -26,13 +26,16 @@ contract refs. Only the supplied skill/profile content differs between arms.
 The practical runtime boundary is preflighted without a model request. Qoder receives
 an isolated `HOME` and a temporary config root containing only a bridge to
 `~/.qoder/.auth`; settings, skills, plugins, and other ambient Qoder state are not
-copied. A real `qodercli status --output json` check runs in that isolation before
-execution. The runner parses the JSON protocol and requires `logged_in` to be exactly
-`true`; exit zero alone, a missing/false field, or malformed JSON fails closed before
-any model request. Evidence records only whether authentication was available, never
-account identity or authentication contents. Binary lookup, version, preflight, execution,
-and timeout failures all produce attempt-local invocation/result/error evidence, and
-temporary runtime directories are removed on every path.
+copied. Before execution, token-free probes run in that exact isolation: `qodercli
+status --output json` must report `logged_in` exactly `true`, `qodercli agents list`
+must expose both `Explore` and `general-purpose`, and `qodercli skills list` must
+report no discovered skills. Exit zero alone, a missing capability, discovered ambient
+skill state, a missing/false auth field, or malformed auth JSON fails closed before any
+model request. Evidence records only the auth/capability/isolation verdicts, required
+Agent names, and probe exit codes; it never records account identity, authentication
+contents, or raw skill-list output. Binary lookup, version, preflight, execution, and
+timeout failures all produce attempt-local invocation/result/error evidence, and temporary
+runtime directories are removed on every path.
 
 Primary uses the same isolated temporary `HOME`/`CODEX_HOME`, but intentionally keeps
 Codex session persistence enabled inside that disposable store. Codex collaboration
@@ -140,10 +143,12 @@ The generated prompt is contract-only: it does not contain a slash invocation an
 forbids the runtime `Skill` tool and installed/global skill contracts. The runner also
 uses an ephemeral user configuration root and isolated `HOME`. Qoder starts with only
 the ambient `.qoder/.auth` bridge, project-only settings, and disabled built-in
-skills; it does not copy settings, skills, or plugins. Primary receives an isolated
-`HOME`/`CODEX_HOME` containing only an auth link. Temporary runtime state is removed
-after every outcome. Runtime traces independently fail any observed `Skill` invocation, so
-the supplied treatment/ablation contracts are the only admissible workflow inputs.
+skills; it does not copy settings, skills, or plugins. The token-free Qoder preflight
+independently proves that required built-in Agents remain available while no Skill is
+discoverable. Primary receives an isolated `HOME`/`CODEX_HOME` containing only an auth
+link. Temporary runtime state is removed after every outcome. Runtime traces independently
+fail any observed `Skill` invocation, so the supplied treatment/ablation contracts are the
+only admissible workflow inputs.
 
 Run a treatment/ablation pair through Qoder:
 

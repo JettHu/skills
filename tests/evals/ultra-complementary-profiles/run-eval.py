@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import shlex
 import subprocess
@@ -21,6 +22,7 @@ ROOT = HERE.parents[2]
 PREPARE = HERE / "prepare-fixture.py"
 GRADER = HERE / "grade-run.py"
 PAIR_VERDICT = HERE / "pair_verdict.py"
+QODER_REQUIRED_AGENTS = ("Explore", "general-purpose")
 
 
 def write(path: Path, value: str) -> None:
@@ -54,6 +56,26 @@ def qoder_authentication_available(exit_code: int, stdout: str) -> bool:
     except (json.JSONDecodeError, TypeError):
         return False
     return isinstance(payload, dict) and payload.get("logged_in") is True
+
+
+def qoder_required_agents_available(exit_code: int, stdout: str) -> bool:
+    """Fail closed unless the isolated Qoder runtime lists required built-in agents."""
+    if exit_code != 0:
+        return False
+    observed = {
+        match.group(1)
+        for line in stdout.splitlines()
+        if (match := re.match(r"^\s*([A-Za-z0-9_-]+)\s+·\s+", line))
+    }
+    return set(QODER_REQUIRED_AGENTS) <= observed
+
+
+def qoder_skill_isolation_clean(exit_code: int, stdout: str) -> bool:
+    """Fail closed unless isolated Qoder reports that no skills are discoverable."""
+    if exit_code != 0:
+        return False
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    return lines == ["No skills discovered."]
 
 
 def resolve_ref(ref: str) -> str:
@@ -211,6 +233,16 @@ def main() -> None:
                 args.qoder_bin, "--config-dir", str(runtime_config),
                 "status", "--output", "json",
             ]
+            agent_preflight_command = [
+                args.qoder_bin, "--config-dir", str(runtime_config),
+                "--cwd", str(runtime_repo), "--setting-sources", "project",
+                "--disable-builtin-skills", "agents", "list",
+            ]
+            skill_preflight_command = [
+                args.qoder_bin, "--config-dir", str(runtime_config),
+                "--cwd", str(runtime_repo), "--setting-sources", "project",
+                "--disable-builtin-skills", "skills", "list",
+            ]
         else:
             ambient_codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
             ambient_auth = ambient_codex_home / "auth.json"
@@ -305,6 +337,34 @@ def main() -> None:
                 }
                 if preflight_exit != 0 or authentication_available is False:
                     runtime_errors.append({"phase": "preflight", "code": "runtime_preflight_failed", "exit_code": preflight_exit})
+                elif args.runtime == "qoder":
+                    agent_exit, agent_stdout, _ = probe(agent_preflight_command, runtime_env)
+                    skill_exit, skill_stdout, _ = probe(skill_preflight_command, runtime_env)
+                    agent_capability_available = qoder_required_agents_available(
+                        agent_exit, agent_stdout
+                    )
+                    skill_isolation_clean = qoder_skill_isolation_clean(
+                        skill_exit, skill_stdout
+                    )
+                    invocation["preflight"].update({
+                        "required_agents": list(QODER_REQUIRED_AGENTS),
+                        "agent_capability_available": agent_capability_available,
+                        "agent_probe_exit_code": agent_exit,
+                        "skill_isolation_clean": skill_isolation_clean,
+                        "skill_probe_exit_code": skill_exit,
+                    })
+                    if not agent_capability_available:
+                        runtime_errors.append({
+                            "phase": "preflight",
+                            "code": "qoder_agent_capability_failed",
+                            "exit_code": agent_exit,
+                        })
+                    if not skill_isolation_clean:
+                        runtime_errors.append({
+                            "phase": "preflight",
+                            "code": "qoder_skill_isolation_failed",
+                            "exit_code": skill_exit,
+                        })
             if not runtime_errors:
                 result = subprocess.run(
                     command, cwd=runtime_repo, env=runtime_env, text=True, capture_output=True,
