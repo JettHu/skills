@@ -34,6 +34,14 @@ account identity or authentication contents. Binary lookup, version, preflight, 
 and timeout failures all produce attempt-local invocation/result/error evidence, and
 temporary runtime directories are removed on every path.
 
+Primary uses the same isolated temporary `HOME`/`CODEX_HOME`, but intentionally keeps
+Codex session persistence enabled inside that disposable store. Codex collaboration
+resolves the parent through the thread store; `codex exec --ephemeral` suppresses that
+rollout and made the saved Primary attempts fail with `no thread` and `no rollout
+found`. The temporary store is deleted after the attempt. Deterministic runner tests
+prove this launch shape, not live Agent spawning; fresh Primary model evidence must
+still verify collaboration end to end.
+
 ## Public contract and external observability
 
 This harness compares revised profile contracts with an ablation ref in equivalent,
@@ -75,11 +83,16 @@ snapshots and removes it before model execution, then recreates its contents onl
 `EVAL_EXPECTATIONS.json` contains only public fixture metadata and has its own hash in
 that control record; hidden required stages, trace rules, and write sets exist only in
 the external authority. The grader requires each hidden scenario stage exactly
-once and preserves its contract-relative order, so
+once and preserves only contract-backed precedence, so
 removing a required candidate, review, publication, or feedback-loop stage still fails
 even when repository, artifact, tracker, and validation state are correct. Extra
 recorded stages do not themselves prove duplicate exploration; only completed runtime
 trace calls can produce the attributable `extra_exploration_call` delta.
+
+For Spec scenarios the evaluator follows the portable coordinator order: an eligible
+Ultra independent-code pre-pass, target-native exploration, target artifact, fresh
+review, then validation. Ticket publication and validation must each execute exactly
+once after complete-set review, but their relative order is not a hidden requirement.
 
 The grader never executes model-writable Python. Its immutable scenario validator
 checks final behavior and structurally parses diagnosis code without importing it,
@@ -115,7 +128,8 @@ python3 tests/evals/ultra-complementary-profiles/run-eval.py \
 ```
 
 The primary entrypoint uses `workspace-write` sandboxing with approval policy
-`never`; it does not bypass the sandbox. Model eval runs require committed refs.
+`never`; it does not bypass the sandbox or disable its temporary thread store. Model
+eval runs require committed refs.
 The runner resolves both requested refs before preparing a fixture and prepares
 directly from those immutable SHAs, so recorded provenance cannot race a moving ref.
 `working-tree` remains available only to `prepare-fixture.py` for deterministic
@@ -173,6 +187,32 @@ target-native Explore call followed by a distinct delegated Ultra post-review; a
 ledger-only post-review cannot pass. Re-running the same run id
 preserves every pair verdict under its treatment/ablation attempt numbers.
 
+For an ordinary matrix comparison, add `--pair-verdict` instead of
+`--canary-gate`. The runner assigns one evaluator-owned `pair_id` to both attempts and
+writes a `pair-verdict-*.json` after both complete. Its identity includes runtime and
+version, model, context/reasoning/timeout settings, scenario, and both immutable
+treatment/ablation refs. The generator rejects mismatched arms rather than discovering
+or guessing a partner across concurrent attempts. Verdict files include the pair
+identity and attempt numbers and are created exclusively, so retries cannot overwrite
+an older verdict. Repository, validation, write-set, tracker, or artifact failure keeps
+the ablation evidence invalid and can never yield an attributable difference.
+
+Existing attempts may be classified without a model run by copying their
+`invocation.json`, `result.json`, `grader-control.json`, `fixture-manifest.json`, and
+literal or temporary regraded `grader-stdout.json` to a temporary matching
+run/scenario tree, then running:
+
+```bash
+python3 tests/evals/ultra-complementary-profiles/pair_verdict.py \
+  --treatment-attempt /tmp/<run>/<scenario>/treatment/attempt-001 \
+  --ablation-attempt /tmp/<run>/<scenario>/ablation/attempt-001 \
+  --output /tmp/<run>/<scenario>
+```
+
+Legacy attempts without a shared `pair_id` must be supplied explicitly. The generator
+still requires matching runtime/model/settings/scenario/refs and one shared copied
+run/scenario root; it never auto-pairs attempt numbers.
+
 Agent and command events also retain one unified runtime index. The architecture
 contract requires completed target-native Explore, then completed Ultra post-review,
 then successful validation; keeping validation last only in the model-authored ledger
@@ -189,11 +229,14 @@ Delegation-sensitive `TARGET_SKILL.md` native contracts carry neutral markers su
 `[eval-stage:<stage-name>]` annotation rule and scenario vocabulary, not the hidden
 required sequence. The trace grader accepts only calls whose outer runtime status and
 every reported child Agent terminal state are completed. It observes shell command
-events, including validation launched through ordinary `sh -c`, `bash -lc`, and
-command-substitution wrappers, so repeated executions cannot hide behind those common
-forms. Every behavior-sensitive scenario has external evidence through
-stage markers, red/green command order, immutable file changes, publication adapter
-receipt, or a no-delegation cap. The grader also
+events, including validation launched through ordinary `sh -c`, `bash -lc`,
+command-substitution wrappers, absolute paths under the declared command cwd, and
+file-descriptor redirects such as `2>&1`, so repeated executions cannot hide behind
+those forms. Qoder background Agent launches become completed calls only after the
+later task event reports a terminal `completed` state; failed, stopped, duplicated, or
+never-completed tasks remain failures. Every behavior-sensitive scenario has external
+evidence through stage markers, red/green command order, immutable file changes,
+publication adapter receipt, or a no-delegation cap. The grader also
 records primary-runtime delegated model identity as `unknown/unavailable` when the
 Codex JSONL protocol does not expose it.
 

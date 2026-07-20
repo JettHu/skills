@@ -20,6 +20,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 PREPARE = HERE / "prepare-fixture.py"
 GRADER = HERE / "grade-run.py"
+PAIR_VERDICT = HERE / "pair_verdict.py"
 
 
 def write(path: Path, value: str) -> None:
@@ -140,6 +141,11 @@ def main() -> None:
         action="store_true",
         help="classify a treatment/ablation pair and pass only on an attributable profile difference",
     )
+    parser.add_argument(
+        "--pair-verdict",
+        action="store_true",
+        help="write a durable identity-checked verdict for an ordinary treatment/ablation pair",
+    )
     args = parser.parse_args()
     output = args.output.resolve()
     if args.runtime == "qoder" and args.context_window is None:
@@ -147,6 +153,10 @@ def main() -> None:
     variants = ("treatment", "ablation") if args.variant == "both" else (args.variant,)
     if args.canary_gate and args.variant != "both":
         parser.error("--canary-gate requires --variant both")
+    if args.pair_verdict and args.variant != "both":
+        parser.error("--pair-verdict requires --variant both")
+    if args.pair_verdict and args.canary_gate:
+        parser.error("use --canary-gate or --pair-verdict, not both")
     ref_shas = {
         "treatment": resolve_ref(args.treatment_ref),
         "ablation": resolve_ref(args.ablation_ref),
@@ -154,6 +164,8 @@ def main() -> None:
 
     failed = False
     pair_results: dict[str, dict] = {}
+    pair_id = uuid.uuid4().hex if len(variants) == 2 else None
+    pair_attempt_roots: dict[str, Path] = {}
     for variant in variants:
         variant_root = output / args.run_id / args.scenario / variant
         attempt = next_attempt(variant_root)
@@ -164,6 +176,7 @@ def main() -> None:
         ]
         subprocess.run(prepare, check=True)
         attempt_root = variant_root / f"attempt-{attempt:03d}"
+        pair_attempt_roots[variant] = attempt_root
         repo = attempt_root / "repo"
         control_path = attempt_root / "control.json"
         control_snapshot = json.loads(control_path.read_text(encoding="utf-8"))
@@ -205,7 +218,7 @@ def main() -> None:
                 (runtime_config / "auth.json").symlink_to(ambient_auth)
             runtime_env["CODEX_HOME"] = str(runtime_config)
             command = [
-                args.primary_bin, "--ask-for-approval", "never", "exec", "--json", "--ephemeral",
+                args.primary_bin, "--ask-for-approval", "never", "exec", "--json",
                 "--sandbox", "workspace-write",
                 "-C", str(runtime_repo),
                 "--model", args.model,
@@ -223,6 +236,8 @@ def main() -> None:
             "evidence_repo": str(repo),
             "runtime": args.runtime,
             "runtime_version": None,
+            "run_id": args.run_id,
+            "pair_id": pair_id,
             "scenario": args.scenario,
             "variant": variant,
             "model": args.model,
@@ -241,6 +256,11 @@ def main() -> None:
                 "qoder_auth_bridge_present": args.runtime == "qoder" and (runtime_config / ".auth").is_symlink(),
                 "initial_runtime_config_entries": sorted(path.name for path in runtime_config.iterdir()),
                 "neutral_opaque_cwd": True,
+                **({
+                    "primary_session_persistence": "temporary-codex-home",
+                    "temporary_codex_home": str(runtime_config),
+                    "primary_session_store_removed": None,
+                } if args.runtime == "primary" else {}),
             },
             "authority": {
                 "baseline_commit": control_snapshot["baseline_commit"],
@@ -312,6 +332,10 @@ def main() -> None:
                 repo.mkdir(parents=True, exist_ok=True)
             shutil.rmtree(runtime_root, ignore_errors=True)
             shutil.rmtree(workspace_root, ignore_errors=True)
+            if args.runtime == "primary":
+                invocation["runtime_isolation"]["primary_session_store_removed"] = (
+                    not runtime_config.exists()
+                )
         write(attempt_root / "raw-stdout.log", stdout)
         write(attempt_root / "raw-stderr.log", stderr)
         if runtime_errors:
@@ -357,6 +381,22 @@ def main() -> None:
         print(json.dumps(result_record))
         pair_results[variant] = {"result": result_record, "grade": grade_result}
         failed = failed or not result_record["passed"]
+    if args.pair_verdict:
+        verdict_result = subprocess.run(
+            [
+                sys.executable, str(PAIR_VERDICT),
+                "--treatment-attempt", str(pair_attempt_roots["treatment"]),
+                "--ablation-attempt", str(pair_attempt_roots["ablation"]),
+                "--output", str(output / args.run_id / args.scenario),
+            ],
+            text=True,
+            capture_output=True,
+        )
+        if verdict_result.returncode:
+            print(verdict_result.stderr or verdict_result.stdout, file=sys.stderr, end="")
+            failed = True
+        else:
+            print(json.dumps({"pair_verdict": verdict_result.stdout.strip()}))
     if args.canary_gate:
         treatment_attempt_root = (
             output / args.run_id / args.scenario / "treatment"
@@ -373,6 +413,7 @@ def main() -> None:
         verdict.update(
             {
                 "scenario": args.scenario,
+                "pair_id": pair_id,
                 "treatment_attempt": pair_results["treatment"]["result"]["attempt"],
                 "ablation_attempt": pair_results["ablation"]["result"]["attempt"],
             }

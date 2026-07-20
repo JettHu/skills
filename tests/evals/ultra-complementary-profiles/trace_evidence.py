@@ -25,6 +25,7 @@ def stage_markers(*values: object) -> list[str]:
 def command_segments(command: object) -> list[str]:
     if not isinstance(command, str):
         return []
+    command = re.sub(r"(?<!\S)\d*[<>]&(?:\d+|-)(?=\s|[;&|]|$)", "", command)
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|(){}\n")
         lexer.whitespace = " \t\r"
@@ -42,16 +43,38 @@ def command_segments(command: object) -> list[str]:
     return [shlex.join(segment) for segment in segments if segment]
 
 
-def observable_commands(command: object, depth: int = 0) -> list[str]:
+def normalize_command_path(command: str, cwd: object) -> str:
+    if not isinstance(cwd, str) or not cwd:
+        return command
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return command
+    normalized = []
+    for token in tokens:
+        path = Path(token)
+        if path.is_absolute():
+            try:
+                token = str(path.relative_to(Path(cwd)))
+            except ValueError:
+                pass
+        normalized.append(token)
+    return shlex.join(normalized)
+
+
+def observable_commands(command: object, cwd: object = None, depth: int = 0) -> list[str]:
     """Expose commands executed through common cooperative shell wrappers."""
     if not isinstance(command, str) or depth > 4:
         return []
     observed: list[str] = []
     substitutions = re.findall(r"\$\(([^()]*)\)", command)
     for nested in substitutions:
-        observed.extend(observable_commands(nested, depth + 1))
+        observed.extend(observable_commands(nested, cwd, depth + 1))
     for segment in command_segments(command):
         observed.append(segment)
+        normalized = normalize_command_path(segment, cwd)
+        if normalized != segment:
+            observed.append(normalized)
         try:
             tokens = shlex.split(segment)
         except ValueError:
@@ -66,8 +89,8 @@ def observable_commands(command: object, depth: int = 0) -> list[str]:
             None,
         )
         if command_index is not None:
-            observed.extend(observable_commands(tokens[command_index], depth + 1))
-    return observed
+            observed.extend(observable_commands(tokens[command_index], cwd, depth + 1))
+    return list(dict.fromkeys(observed))
 
 
 def json_lines(path: Path) -> list[dict[str, Any]]:
@@ -181,6 +204,7 @@ def summarize(path: Path) -> dict[str, Any]:
                     {
                         "id": use.get("id"),
                         "command": input_value.get("command") or input_value.get("cmd"),
+                        "cwd": input_value.get("dir_path") or input_value.get("workdir"),
                         "status": "requested",
                         "trace_index": None,
                         "requested_trace_index": event_index,
@@ -206,6 +230,7 @@ def summarize(path: Path) -> dict[str, Any]:
                     "trace_index": None,
                     "requested_trace_index": event_index,
                     "agents_states": {},
+                    "background_task_id": None,
                     "delegated_models": [],
                 }
             )
@@ -231,6 +256,7 @@ def summarize(path: Path) -> dict[str, Any]:
                     "runtime_status": use.get("runtime_status"),
                     "agents_states": use.get("agents_states"),
                     "agent_terminal_states": use.get("agent_terminal_states"),
+                    "background_task_id": None,
                     "delegated_models": [],
                 }
             )
@@ -238,11 +264,17 @@ def summarize(path: Path) -> dict[str, Any]:
         if isinstance(item, dict) and item.get("type") == "command_execution":
             exit_code = item.get("exit_code")
             runtime_status = str(item.get("status") or "unknown").casefold()
+            if runtime_status == "completed":
+                effective_status = "completed" if exit_code in (None, 0) else "failed"
+            elif runtime_status in {"failed", "error", "cancelled"}:
+                effective_status = "failed"
+            else:
+                effective_status = "requested"
             command_calls.append(
                 {
                     "id": item.get("id"),
                     "command": item.get("command") or item.get("cmd"),
-                    "status": "completed" if runtime_status == "completed" and exit_code in (None, 0) else "failed",
+                    "status": effective_status,
                     "exit_code": exit_code,
                     "trace_index": event_index,
                 }
@@ -275,6 +307,19 @@ def summarize(path: Path) -> dict[str, Any]:
             if call_id in by_id and delegated_model and delegated_model not in by_id[call_id]["delegated_models"]:
                 by_id[call_id]["delegated_models"].append(delegated_model)
 
+        if event.get("type") == "system":
+            tool_use_id = event.get("tool_use_id")
+            task_id = event.get("task_id")
+            if tool_use_id in by_id and task_id:
+                by_id[tool_use_id]["background_task_id"] = task_id
+                task_status = str(event.get("status") or "").casefold()
+                if task_status == "completed":
+                    by_id[tool_use_id]["status"] = "completed"
+                    by_id[tool_use_id]["trace_index"] = event_index
+                elif task_status in {"failed", "error", "cancelled", "stopped"}:
+                    by_id[tool_use_id]["status"] = "failed"
+                    by_id[tool_use_id]["trace_index"] = event_index
+
         message_content = message.get("content") if isinstance(message, dict) else None
         if isinstance(message_content, list):
             for item in message_content:
@@ -282,7 +327,14 @@ def summarize(path: Path) -> dict[str, Any]:
                     continue
                 tool_use_id = item.get("tool_use_id")
                 tool_result = event.get("tool_use_result")
-                state = tool_result.get("state") if isinstance(tool_result, dict) else None
+                if isinstance(tool_result, dict):
+                    state = (
+                        tool_result.get("state")
+                        or tool_result.get("status")
+                        or tool_result.get("kind")
+                    )
+                else:
+                    state = None
                 if tool_use_id in by_id:
                     if item.get("is_error") is True or state in {"failed", "error", "cancelled"}:
                         by_id[tool_use_id]["status"] = "failed"
@@ -292,23 +344,43 @@ def summarize(path: Path) -> dict[str, Any]:
                         by_id[tool_use_id]["trace_index"] = event_index
                 if tool_use_id in commands_by_id:
                     result = tool_result if isinstance(tool_result, dict) else {}
+                    exit_code = result.get("exit_code", result.get("exitCode"))
                     failed = (
                         item.get("is_error") is True
                         or state in {"failed", "error", "cancelled"}
                         or result.get("interrupted") is True
-                        or result.get("exit_code") not in (None, 0)
+                        or exit_code not in (None, 0)
                     )
                     commands_by_id[tool_use_id]["status"] = "failed" if failed else "completed"
                     commands_by_id[tool_use_id]["trace_index"] = event_index
-                    if "exit_code" in result:
-                        commands_by_id[tool_use_id]["exit_code"] = result["exit_code"]
+                    if exit_code is not None:
+                        commands_by_id[tool_use_id]["exit_code"] = exit_code
+
+    terminal_command_states = {"completed", "failed"}
+    unique_commands_by_id: dict[str, dict[str, Any]] = {}
+    unique_commands_without_id = []
+    for call in command_calls:
+        call_id = call.get("id")
+        if not call_id:
+            unique_commands_without_id.append(call)
+            continue
+        prior = unique_commands_by_id.get(call_id)
+        if prior is None or call.get("status") in terminal_command_states:
+            unique_commands_by_id[call_id] = call
+    command_calls = list(unique_commands_by_id.values()) + unique_commands_without_id
 
     successful_calls = [call for call in calls if call.get("status") == "completed"]
     if runtime == "primary" and calls:
         tools = sorted(set(tools) | {"spawn_agent", "Agent"})
         agents = sorted(set(agents) | {str(call["role"]) for call in successful_calls if call.get("role")})
     for call in command_calls:
-        call["segments"] = observable_commands(call.get("command"))
+        call["segments"] = observable_commands(call.get("command"), call.get("cwd"))
+    delegated_models = sorted(
+        {model for call in successful_calls for model in call.get("delegated_models", [])}
+    )
+    background_completion_observed = any(
+        call.get("background_task_id") for call in successful_calls
+    )
     return {
         "runtime": runtime,
         "root_model": root_model,
@@ -319,10 +391,16 @@ def summarize(path: Path) -> dict[str, Any]:
         "rejected_agent_call_count": len(calls) - len(successful_calls),
         "command_calls": command_calls,
         "tools_used": sorted(set(tools_used)),
-        "delegated_models": sorted(
-            {model for call in successful_calls for model in call.get("delegated_models", [])}
+        "delegated_models": delegated_models,
+        "delegated_model_observation": (
+            "unknown/unavailable"
+            if runtime == "primary"
+            else "observed-in-trace"
+            if delegated_models
+            else "runtime-task-completion-observed-model-unavailable"
+            if background_completion_observed
+            else "unknown/unavailable"
         ),
-        "delegated_model_observation": "unknown/unavailable" if runtime == "primary" else "observed-in-trace",
     }
 
 
@@ -446,7 +524,14 @@ def grade(summary: dict[str, Any], expected: dict[str, Any]) -> tuple[list[str],
                 "extra_exploration_call",
             )
     if expected.get("require_delegated_model") and summary["runtime"] == "qoder":
-        check(bool(summary["delegated_models"]), "delegated model is observed in the runtime trace", "delegated_model_observed")
+        delegated_execution_observed = bool(summary["delegated_models"]) or any(
+            call.get("background_task_id") for call in calls
+        )
+        check(
+            delegated_execution_observed,
+            "delegated Agent completion is observed in the runtime trace",
+            "delegated_model_observed",
+        )
     for requirement in expected.get("command_calls", []):
         command = requirement["command"]
         matching = [

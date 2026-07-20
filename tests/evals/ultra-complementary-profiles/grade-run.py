@@ -96,22 +96,46 @@ def normalize_event_name(name: object, aliases: dict[str, str]) -> object:
 
 
 def check_required_sequence(
-    names: list[object], required: list[str], check, once_message: str, order_message: str
+    names: list[object], required: list[str], check, once_message: str, order_message: str,
+    precedence: Optional[list[list[str]]] = None,
 ) -> None:
     check(
         all(names.count(name) == 1 for name in required),
         once_message,
         "required_events_once",
     )
-    cursor = 0
-    ordered = True
-    for name in required:
-        try:
-            cursor = names.index(name, cursor) + 1
-        except ValueError:
-            ordered = False
-            break
+    pairs = precedence if precedence is not None else [
+        [before, after] for before, after in zip(required, required[1:])
+    ]
+    ordered = all(
+        isinstance(pair, list)
+        and len(pair) == 2
+        and all(isinstance(name, str) and name in names for name in pair)
+        and names.index(pair[0]) < names.index(pair[1])
+        for pair in pairs
+    )
     check(ordered, order_message, "required_stage_order")
+
+
+def schema_v4_precedence(expected: dict, required: list[str]) -> list[list[str]]:
+    configured = expected.get("required_event_precedence")
+    if configured is not None:
+        return configured if isinstance(configured, list) else [["__invalid__", "__invalid__"]]
+    scenario = expected.get("scenario")
+    if scenario in {"spec-independent-code-trigger", "long-stale-context"}:
+        portable = [
+            "ultra-independent-code", "target-native-explore", "target-artifact",
+            "ultra-fresh-review", "validation",
+        ]
+        return [[before, after] for before, after in zip(portable, portable[1:])]
+    if scenario == "tickets-review-publication":
+        return [
+            ["target-native-explore", "target-draft"],
+            ["target-draft", "ultra-complete-set-review"],
+            ["ultra-complete-set-review", "ultra-publication"],
+            ["ultra-complete-set-review", "validation"],
+        ]
+    return [[before, after] for before, after in zip(required, required[1:])]
 
 
 def changed_paths(repo: Path, baseline: str) -> tuple[set[str], bool]:
@@ -259,6 +283,7 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
             check_profile,
             "each scenario-required completed stage is recorded exactly once",
             "scenario-required stages preserve their contract-relative order",
+            schema_v4_precedence(expected, required) if schema_version == 4 else None,
         )
         if schema_version in {2, 3}:
             owners = expected.get("event_owners", {})

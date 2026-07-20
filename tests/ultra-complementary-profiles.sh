@@ -29,6 +29,14 @@ assert prepare.stage_vocabulary(architecture) == [
     "target-native-candidate", "target-native-explore", "ultra-code-explore",
     "ultra-post-review", "validation",
 ]
+assert prepare.SCENARIOS["spec-independent-code-trigger"]["events"] == [
+    "ultra-independent-code", "target-native-explore", "target-artifact",
+    "ultra-fresh-review", "validation",
+]
+assert prepare.SCENARIOS["long-stale-context"]["events"] == [
+    "ultra-independent-code", "target-native-explore", "target-artifact",
+    "ultra-fresh-review", "validation",
+]
 assert set(prepare.SCENARIOS) == {
     "architecture-native-ownership", "diagnosis-feedback-loop-first",
     "spec-independent-code-trigger", "tickets-review-publication",
@@ -177,6 +185,27 @@ for repo in sorted(root.glob("*/treatment/attempt-001/repo")):
         capture_output=True, text=True,
     )
     assert result.returncode == 0, f"{scenario}: {result.stdout}{result.stderr}"
+    if scenario == "tickets-review-publication":
+        alternate_events = [
+            event for event in events
+            if event["name"] not in {"ultra-publication", "validation"}
+        ] + [
+            next(event for event in events if event["name"] == "validation"),
+            next(event for event in events if event["name"] == "ultra-publication"),
+        ]
+        (repo / "artifacts/stage-evidence.json").write_text(
+            json.dumps({"events": alternate_events}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        alternate = subprocess.run(
+            [sys.executable, str(grader), str(repo), "--trace", str(trace), "--json"],
+            capture_output=True, text=True,
+        )
+        assert alternate.returncode == 0, alternate.stdout + alternate.stderr
+        (repo / "artifacts/stage-evidence.json").write_text(
+            json.dumps({"events": events}, indent=2) + "\n",
+            encoding="utf-8",
+        )
     if scenario == "diagnosis-feedback-loop-first":
         sentinel = repo.parent / "model-code-executed"
         (repo / "app/router.py").write_text(
@@ -351,6 +380,41 @@ assert (second["treatment_attempt"], second["ablation_attempt"]) == (2, 2)
 assert first["verdict_file"] != second["verdict_file"]
 PY
 
+pair_runner=(python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py"
+  --output "$TMP/runner" --run-id ordinary-pair-verdict --scenario architecture-native-ownership
+  --treatment-ref HEAD --ablation-ref HEAD --runtime qoder --model fake --context-window 1000000
+  --timeout 5 --qoder-bin "$TMP/fake-qoder" --pair-verdict)
+if "${pair_runner[@]}" >/dev/null 2>&1; then
+  echo "failed ordinary pair unexpectedly passed" >&2
+  exit 1
+fi
+python3 - "$TMP/runner/ordinary-pair-verdict/architecture-native-ownership" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+verdicts = list(root.glob("pair-verdict-*.json"))
+assert len(verdicts) == 1
+verdict = json.loads(verdicts[0].read_text(encoding="utf-8"))
+identity = verdict["pair_identity"]
+assert identity["pair_id"]
+assert identity["runtime"]["name"] == "qoder"
+assert identity["model"] == "fake"
+assert identity["settings"] == {
+    "context_window": 1000000,
+    "reasoning_effort": "default",
+    "timeout_seconds": 5,
+}
+assert identity["scenario"] == "architecture-native-ownership"
+assert identity["refs"]["treatment"]["sha"] == identity["refs"]["ablation"]["sha"]
+for variant in ("treatment", "ablation"):
+    invocation = json.loads(
+        (root / variant / "attempt-001/invocation.json").read_text(encoding="utf-8")
+    )
+    assert invocation["pair_id"] == identity["pair_id"]
+PY
+
 if python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py" \
   --output "$TMP/runner" --run-id uncommitted-ref --scenario architecture-native-ownership \
   --treatment-ref working-tree --ablation-ref HEAD --model fake --context-window 1000000 \
@@ -374,9 +438,10 @@ import sys
 invocation = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 assert invocation["runtime"] == "primary"
 assert invocation["argv"][1:4] == ["--ask-for-approval", "never", "exec"]
-assert invocation["argv"][4:6] == ["--json", "--ephemeral"]
+assert invocation["argv"][4] == "--json"
+assert "--ephemeral" not in invocation["argv"]
 assert "--dangerously-bypass-approvals-and-sandbox" not in invocation["argv"]
-assert ["--sandbox", "workspace-write"] == invocation["argv"][6:8]
+assert ["--sandbox", "workspace-write"] == invocation["argv"][5:7]
 assert invocation["context_window"] is None
 assert len(invocation["refs"]["treatment"]["sha"]) == 40
 expectations = json.loads((Path(invocation["evidence_repo"]) / "EVAL_EXPECTATIONS.json").read_text(encoding="utf-8"))
@@ -389,6 +454,9 @@ assert invocation["runtime_isolation"]["ephemeral_user_config"] is True
 assert invocation["runtime_isolation"]["user_and_local_setting_sources_disabled"] is False
 assert invocation["runtime_isolation"]["ambient_home_isolated"] is True
 assert invocation["runtime_isolation"]["neutral_opaque_cwd"] is True
+assert invocation["runtime_isolation"]["primary_session_persistence"] == "temporary-codex-home"
+assert invocation["runtime_isolation"]["primary_session_store_removed"] is True
+assert not Path(invocation["runtime_isolation"]["temporary_codex_home"]).exists()
 assert invocation["authority"]["snapshotted_before_model_run"] is True
 assert len(invocation["authority"]["baseline_commit"]) == 40
 prompt = invocation["argv"][-1]
@@ -584,7 +652,7 @@ for fixture in fixtures:
         assert observability["max_total_agent_calls"] == 0
     elif scenario in {"spec-independent-code-trigger", "long-stale-context"}:
         assert observability["required_marker_events"] == [
-            "target-native-explore", "ultra-independent-code", "ultra-fresh-review",
+            "ultra-independent-code", "target-native-explore", "ultra-fresh-review",
         ]
     elif scenario == "triage-native-exploration":
         assert observability["required_marker_events"] == ["target-native-explore"]
@@ -624,6 +692,7 @@ import hashlib
 import json
 import importlib.util
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -776,6 +845,90 @@ def grade_json(repo_path=treatment, trace_path=valid_trace):
         capture_output=True, text=True,
     )
     return result, json.loads(result.stdout)[0]
+
+
+# A preserved Primary JSONL lifecycle emits started and completed for one command
+# item. The terminal event owns the final status and the command executes once.
+primary_lifecycle_trace = (
+    repo / "tests/evals/ultra-complementary-profiles/fixtures/primary-command-lifecycle.jsonl"
+)
+primary_lifecycle_result, primary_lifecycle_grade = grade_json(
+    trace_path=primary_lifecycle_trace
+)
+primary_validation_calls = [
+    call for call in primary_lifecycle_grade["trace"]["command_calls"]
+    if "python3 scripts/check.py" in call["segments"]
+]
+assert len(primary_validation_calls) == 1
+assert primary_validation_calls[0]["status"] == "completed"
+assert "validation_command_maximum" not in primary_lifecycle_grade["trace_grade"]["failure_codes"]
+
+
+# Saved Qoder traces report background launch and terminal task completion in
+# separate events, and may wrap an absolute validation path with `2>&1`.
+qoder_background_trace = (
+    repo / "tests/evals/ultra-complementary-profiles/fixtures/qoder-background-agent-shell.jsonl"
+)
+qoder_background_result, qoder_background_grade = grade_json(
+    trace_path=qoder_background_trace
+)
+assert qoder_background_result.returncode == 0, (
+    qoder_background_result.stdout + qoder_background_result.stderr
+)
+assert [call["id"] for call in qoder_background_grade["trace"]["agent_calls"]] == [
+    "call_background_native", "call_background_review",
+]
+assert qoder_background_grade["trace"]["agent_calls"][0]["background_task_id"] == (
+    "aExplore-native"
+)
+assert len([
+    call for call in qoder_background_grade["trace"]["command_calls"]
+    if "python3 scripts/check.py" in call["segments"]
+]) == 1
+
+failed_shell_trace = treatment.parent / "qoder-shell-failed.jsonl"
+failed_shell_trace.write_text(
+    qoder_background_trace.read_text(encoding="utf-8").replace(
+        '"exitCode":0', '"exitCode":7'
+    ),
+    encoding="utf-8",
+)
+failed_shell_result, failed_shell_grade = grade_json(trace_path=failed_shell_trace)
+assert failed_shell_result.returncode != 0
+assert "validation_command_success" in failed_shell_grade["trace_grade"]["failure_codes"]
+
+for terminal_case, replacement in (
+    ("failed", '"status":"failed"'),
+    ("unfinished", None),
+):
+    invalid_background_trace = treatment.parent / f"qoder-background-{terminal_case}.jsonl"
+    lines = qoder_background_trace.read_text(encoding="utf-8").splitlines()
+    terminal = next(
+        line for line in lines
+        if '"task_id":"ageneral-review"' in line and '"status":"completed"' in line
+    )
+    if replacement is None:
+        lines.remove(terminal)
+    else:
+        lines[lines.index(terminal)] = terminal.replace('"status":"completed"', replacement)
+    invalid_background_trace.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    invalid_result, invalid_grade = grade_json(trace_path=invalid_background_trace)
+    assert invalid_result.returncode != 0, terminal_case
+    assert "required_stage_call" in invalid_grade["trace_grade"]["failure_codes"]
+
+duplicate_background_trace = treatment.parent / "qoder-background-duplicate.jsonl"
+duplicate_lines = qoder_background_trace.read_text(encoding="utf-8").splitlines()
+native_launch = next(line for line in duplicate_lines if '"id":"call_background_native"' in line)
+native_result = next(line for line in duplicate_lines if '"tool_use_id":"call_background_native"' in line and 'async_launched' in line)
+duplicate_lines.extend((
+    native_launch.replace("call_background_native", "call_background_native_duplicate"),
+    native_result.replace("call_background_native", "call_background_native_duplicate"),
+    '{"type":"system","task_id":"aExplore-native-duplicate","tool_use_id":"call_background_native_duplicate","status":"completed"}',
+))
+duplicate_background_trace.write_text("\n".join(duplicate_lines) + "\n", encoding="utf-8")
+duplicate_result, duplicate_grade = grade_json(trace_path=duplicate_background_trace)
+assert duplicate_result.returncode != 0
+assert "required_stage_call" in duplicate_grade["trace_grade"]["failure_codes"]
 
 
 # Token stuffing cannot replace structured evidence-backed artifact content.
@@ -1249,6 +1402,146 @@ invalid = runner_module.classify_canary(
     ["extra_exploration_call"],
 )
 assert invalid["conclusion"] == "ablation-evidence-invalid"
+
+pair_module_path = repo / "tests/evals/ultra-complementary-profiles/pair_verdict.py"
+pair_spec = importlib.util.spec_from_file_location("complementary_pair_verdict", pair_module_path)
+pair_module = importlib.util.module_from_spec(pair_spec)
+assert pair_spec.loader is not None
+pair_spec.loader.exec_module(pair_module)
+shared_refs = {
+    "treatment": {"requested": "treatment-ref", "sha": "a" * 40},
+    "ablation": {"requested": "ablation-ref", "sha": "b" * 40},
+}
+base_invocation = {
+    "runtime": "qoder", "runtime_version": "1.0.48", "model": "model-a",
+    "context_window": 1000000, "reasoning_effort": "max", "timeout_seconds": 1800,
+    "scenario": "architecture-native-ownership", "refs": shared_refs,
+}
+treatment_invocation = {
+    **base_invocation, "variant": "treatment", "pair_id": "pair-one",
+    "refs": {**shared_refs, "selected_contract": shared_refs["treatment"]},
+}
+ablation_invocation = {
+    **base_invocation, "variant": "ablation", "pair_id": "pair-one",
+    "refs": {**shared_refs, "selected_contract": shared_refs["ablation"]},
+}
+pair_identity = pair_module.build_pair_identity(treatment_invocation, ablation_invocation)
+assert pair_identity == {
+    "pair_id": "pair-one",
+    "runtime": {"name": "qoder", "version": "1.0.48"},
+    "model": "model-a",
+    "settings": {
+        "context_window": 1000000,
+        "reasoning_effort": "max",
+        "timeout_seconds": 1800,
+    },
+    "scenario": "architecture-native-ownership",
+    "refs": shared_refs,
+}
+wrong_model = {**ablation_invocation, "model": "model-b"}
+try:
+    pair_module.build_pair_identity(treatment_invocation, wrong_model)
+except ValueError as exc:
+    assert "identity mismatch" in str(exc)
+else:
+    raise AssertionError("pair identity accepted a concurrent attempt from another model")
+missing_model_treatment = dict(treatment_invocation)
+missing_model_ablation = dict(ablation_invocation)
+missing_model_treatment.pop("model")
+missing_model_ablation.pop("model")
+try:
+    pair_module.build_pair_identity(missing_model_treatment, missing_model_ablation)
+except ValueError as exc:
+    assert "model" in str(exc)
+else:
+    raise AssertionError("pair identity accepted two attempts with no model identity")
+
+for invalid_code in ("repository_validation", "scenario_write_set", "tracker_status", "artifact_exists"):
+    invalid_ablation_grade = {
+        "repository_grade": {"passed": False, "failure_codes": [invalid_code]},
+        "profile_grade": {
+            "passed": False,
+            "failure_codes": ["extra_exploration_call"],
+        },
+    }
+    invalid_pair = pair_module.classify_pair(
+        run_ok,
+        {"result": {"run_exit_code": 0}, "grade": invalid_ablation_grade},
+        ["extra_exploration_call"],
+        ["extra_exploration_call"],
+    )
+    assert invalid_pair["conclusion"] == "ablation-evidence-invalid"
+    assert invalid_pair["attributable_difference"] is False
+
+durable_pair_id = "fixture-pair-one"
+pair_refs = {
+    "treatment": {
+        "requested": t_manifest["contract_ref"],
+        "sha": "a" * 40,
+    },
+    "ablation": {
+        "requested": a_manifest["contract_ref"],
+        "sha": "b" * 40,
+    },
+}
+for variant, attempt_root, grade_value in (
+    ("treatment", treatment.parent, clean_grade),
+    ("ablation", ablation.parent, ablation_extra_grade),
+):
+    invocation = {
+        "run_id": "fixture-pair-run",
+        "pair_id": durable_pair_id,
+        "runtime": "qoder",
+        "runtime_version": "1.0.48",
+        "model": "fixture-model",
+        "context_window": 1000000,
+        "reasoning_effort": "max",
+        "timeout_seconds": 1800,
+        "scenario": "architecture-native-ownership",
+        "variant": variant,
+        "refs": {
+            **pair_refs,
+            "selected_contract": pair_refs[variant],
+        },
+        "started_at": f"2026-07-20T00:00:0{0 if variant == 'treatment' else 1}+00:00",
+    }
+    (attempt_root / "invocation.json").write_text(
+        json.dumps(invocation, indent=2) + "\n", encoding="utf-8"
+    )
+    (attempt_root / "result.json").write_text(
+        json.dumps({"variant": variant, "attempt": 1, "run_exit_code": 0}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (attempt_root / "grader-stdout.json").write_text(
+        json.dumps([grade_value], indent=2) + "\n", encoding="utf-8"
+    )
+    (attempt_root / "grader-control.json").write_text(
+        (attempt_root / "control.json").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+pair_output = tmp / "durable-pair-verdicts"
+pair_command = [
+    sys.executable, str(pair_module_path),
+    "--treatment-attempt", str(treatment.parent),
+    "--ablation-attempt", str(ablation.parent),
+    "--output", str(pair_output),
+]
+generated = subprocess.run(pair_command, capture_output=True, text=True)
+assert generated.returncode == 0, generated.stdout + generated.stderr
+verdict_files = list(pair_output.glob("pair-verdict-*.json"))
+assert len(verdict_files) == 1
+verdict_path = verdict_files[0]
+verdict_before_retry = verdict_path.read_bytes()
+verdict = json.loads(verdict_before_retry)
+assert verdict["pair_identity"]["pair_id"] == durable_pair_id
+assert verdict["pair_identity"]["refs"] == pair_refs
+assert verdict["conclusion"] == "attributable-profile-difference"
+assert verdict["attributable_difference"] is True
+
+same_pair_retry = subprocess.run(pair_command, capture_output=True, text=True)
+assert same_pair_retry.returncode != 0
+assert verdict_path.read_bytes() == verdict_before_retry
+assert len(list(pair_output.glob("pair-verdict-*.json"))) == 1
 PY
 
 echo "ultra complementary profiles fixture passed"

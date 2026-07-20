@@ -61,7 +61,7 @@ SCENARIOS = {
         "target": "to-spec",
         "task": "Produce a Spec for a security-sensitive change spanning the order router and audit writer. Current local evidence settles external facts.",
         "native": "Explore the repository only if current codebase understanding is absent, then write the Spec through the target workflow.",
-        "events": ["target-native-explore", "ultra-independent-code", "target-artifact", "ultra-fresh-review", "validation"],
+        "events": ["ultra-independent-code", "target-native-explore", "target-artifact", "ultra-fresh-review", "validation"],
         "artifact": "artifacts/spec.md",
         "tokens": ["Order Router", "Audit Writer", "security"],
         "result": "unchanged",
@@ -93,7 +93,7 @@ SCENARIOS = {
         "target": "to-spec",
         "task": "Produce a cross-system Spec. HISTORY.md is long but predates ADR-0001 and lacks a current validation path.",
         "native": "Explore when current understanding is absent, then produce the Spec.",
-        "events": ["target-native-explore", "ultra-independent-code", "target-artifact", "ultra-fresh-review", "validation"],
+        "events": ["ultra-independent-code", "target-native-explore", "target-artifact", "ultra-fresh-review", "validation"],
         "artifact": "artifacts/spec.md",
         "tokens": ["Order Router", "Audit Writer"],
         "result": "unchanged",
@@ -139,8 +139,8 @@ SCENARIO_AUTHORITY = {
     "spec-independent-code-trigger": {
         "artifact_sections": ["Scope", "Security Risks", "Validation Plan"],
         "artifact_sources": ["app/router.py", "docs/adr/ADR-0001.md"],
-        "trace_required_events": ["target-native-explore", "ultra-independent-code", "ultra-fresh-review"],
-        "trace_reconcile_events": ["target-native-explore", "ultra-independent-code", "ultra-fresh-review"],
+        "trace_required_events": ["ultra-independent-code", "target-native-explore", "ultra-fresh-review"],
+        "trace_reconcile_events": ["ultra-independent-code", "target-native-explore", "ultra-fresh-review"],
     },
     "tickets-review-publication": {
         "artifact_sections": ["Ticket 01", "Blockers", "Review and Publication Evidence"],
@@ -161,8 +161,8 @@ SCENARIO_AUTHORITY = {
     "long-stale-context": {
         "artifact_sections": ["Scope", "Current Code Evidence", "Fresh Review", "Validation Plan"],
         "artifact_sources": ["HISTORY.md", "app/router.py", "docs/adr/ADR-0001.md"],
-        "trace_required_events": ["target-native-explore", "ultra-independent-code", "ultra-fresh-review"],
-        "trace_reconcile_events": ["target-native-explore", "ultra-independent-code", "ultra-fresh-review"],
+        "trace_required_events": ["ultra-independent-code", "target-native-explore", "ultra-fresh-review"],
+        "trace_reconcile_events": ["ultra-independent-code", "target-native-explore", "ultra-fresh-review"],
     },
     "triage-native-exploration": {
         "artifact_sections": ["Claim", "Repository Evidence", "Triage Decision"],
@@ -239,6 +239,18 @@ def trace_expectations(scenario_id: str, scenario: dict) -> dict:
             "max": 0,
         }
     return result
+
+
+def required_event_precedence(scenario_id: str, events: list[str]) -> list[list[str]]:
+    """Publish only contract-backed precedence; Tickets validation/publication may swap."""
+    if scenario_id == "tickets-review-publication":
+        return [
+            ["target-native-explore", "target-draft"],
+            ["target-draft", "ultra-complete-set-review"],
+            ["ultra-complete-set-review", "ultra-publication"],
+            ["ultra-complete-set-review", "validation"],
+        ]
+    return [[before, after] for before, after in zip(events, events[1:])]
 
 
 def run(args: list[str], cwd: Path) -> str:
@@ -353,6 +365,7 @@ def prepare(repo: Path, scenario_id: str, variant: str, ref: str) -> None:
         "variant": variant,
         "stage_vocabulary": vocabulary,
         "required_events": scenario["events"],
+        "required_event_precedence": required_event_precedence(scenario_id, scenario["events"]),
         "recordable_extra_events": scenario.get("recordable_extra_events", []),
         "event_goal_identities": goal_identities(scenario),
         "artifact": scenario["artifact"],
