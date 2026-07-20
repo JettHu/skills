@@ -107,6 +107,14 @@ def agent_terminal_states(agents_states: dict[str, Any]) -> list[str]:
     return states
 
 
+def explicit_agent_role(input_value: dict[str, Any]) -> tuple[object, Optional[str]]:
+    if input_value.get("subagent_type"):
+        return input_value["subagent_type"], "subagent_type"
+    if input_value.get("agent_type"):
+        return input_value["agent_type"], "agent_type"
+    return None, None
+
+
 def codex_tool_use(event: dict[str, Any]) -> Optional[dict[str, Any]]:
     item = event.get("item")
     if not isinstance(item, dict) and event.get("type") == "collab_tool_call":
@@ -156,7 +164,7 @@ def summarize(path: Path) -> dict[str, Any]:
     command_calls: list[dict[str, Any]] = []
     tools_used: list[str] = []
 
-    for event in events:
+    for event_index, event in enumerate(events):
         if event.get("type") == "system" and event.get("subtype") == "init":
             runtime = "qoder"
             root_model = event.get("model")
@@ -174,24 +182,29 @@ def summarize(path: Path) -> dict[str, Any]:
                         "id": use.get("id"),
                         "command": input_value.get("command") or input_value.get("cmd"),
                         "status": "requested",
+                        "trace_index": None,
+                        "requested_trace_index": event_index,
                     }
                 )
             if use.get("name") not in AGENT_NAMES:
                 continue
             input_value = use.get("input") if isinstance(use.get("input"), dict) else {}
-            agent_role = input_value.get("subagent_type") or input_value.get("agent_type")
+            agent_role, role_source = explicit_agent_role(input_value)
             task_name = input_value.get("task_name")
             description = input_value.get("description") or task_name
             prompt = input_value.get("prompt") or input_value.get("message")
             calls.append(
                 {
                     "id": use.get("id"),
-                    "role": agent_role or task_name,
-                    "role_source": "agent_type" if agent_role else ("task_name" if task_name else None),
+                    "role": agent_role,
+                    "role_source": role_source,
+                    "task_name": task_name,
                     "description": description,
                     "prompt": prompt,
                     "stage_markers": stage_markers(description, prompt),
                     "status": "requested",
+                    "trace_index": None,
+                    "requested_trace_index": event_index,
                     "agents_states": {},
                     "delegated_models": [],
                 }
@@ -200,19 +213,21 @@ def summarize(path: Path) -> dict[str, Any]:
         if use:
             tools_used.append(str(use.get("name") or "spawn_agent"))
             input_value = use["input"]
-            agent_role = input_value.get("subagent_type") or input_value.get("agent_type")
+            agent_role, role_source = explicit_agent_role(input_value)
             task_name = input_value.get("task_name")
             prompt = use.get("prompt")
             description = prompt or input_value.get("description") or input_value.get("message") or task_name
             calls.append(
                 {
                     "id": use.get("id"),
-                    "role": agent_role or task_name,
-                    "role_source": "agent_type" if agent_role else ("task_name" if task_name else None),
+                    "role": agent_role,
+                    "role_source": role_source,
+                    "task_name": task_name,
                     "description": description,
                     "prompt": prompt,
                     "stage_markers": stage_markers(description, prompt),
                     "status": use.get("status"),
+                    "trace_index": event_index,
                     "runtime_status": use.get("runtime_status"),
                     "agents_states": use.get("agents_states"),
                     "agent_terminal_states": use.get("agent_terminal_states"),
@@ -229,6 +244,7 @@ def summarize(path: Path) -> dict[str, Any]:
                     "command": item.get("command") or item.get("cmd"),
                     "status": "completed" if runtime_status == "completed" and exit_code in (None, 0) else "failed",
                     "exit_code": exit_code,
+                    "trace_index": event_index,
                 }
             )
             tools_used.append("command_execution")
@@ -246,7 +262,7 @@ def summarize(path: Path) -> dict[str, Any]:
     calls = list(unique_by_id.values()) + unique_without_id
     by_id = {call["id"]: call for call in calls if call.get("id")}
     commands_by_id = {call["id"]: call for call in command_calls if call.get("id")}
-    for event in events:
+    for event_index, event in enumerate(events):
         parent = event.get("parent_tool_use_id")
         message = event.get("message")
         model = message.get("model") if isinstance(message, dict) else None
@@ -270,8 +286,10 @@ def summarize(path: Path) -> dict[str, Any]:
                 if tool_use_id in by_id:
                     if item.get("is_error") is True or state in {"failed", "error", "cancelled"}:
                         by_id[tool_use_id]["status"] = "failed"
+                        by_id[tool_use_id]["trace_index"] = event_index
                     elif state == "completed" or item.get("is_error") is False:
                         by_id[tool_use_id]["status"] = "completed"
+                        by_id[tool_use_id]["trace_index"] = event_index
                 if tool_use_id in commands_by_id:
                     result = tool_result if isinstance(tool_result, dict) else {}
                     failed = (
@@ -281,6 +299,7 @@ def summarize(path: Path) -> dict[str, Any]:
                         or result.get("exit_code") not in (None, 0)
                     )
                     commands_by_id[tool_use_id]["status"] = "failed" if failed else "completed"
+                    commands_by_id[tool_use_id]["trace_index"] = event_index
                     if "exit_code" in result:
                         commands_by_id[tool_use_id]["exit_code"] = result["exit_code"]
 
@@ -369,6 +388,47 @@ def grade(summary: dict[str, Any], expected: dict[str, Any]) -> tuple[list[str],
                 ordered = False
                 break
         check(ordered, "required completed delegation stages occur in runtime order", "delegated_stage_order")
+    timeline_sequence = expected.get("timeline_sequence", [])
+    if timeline_sequence:
+        marker_names = {marker: name for name, marker in known_markers.items()}
+        observed_timeline = []
+        for call in calls:
+            for marker in call.get("stage_markers", []):
+                if marker in marker_names:
+                    observed_timeline.append({
+                        "trace_index": call.get("trace_index"),
+                        "kind": "agent_marker",
+                        "value": marker_names[marker],
+                    })
+        for call in summary.get("command_calls", []):
+            for segment in call.get("segments", []):
+                observed_timeline.append({
+                    "trace_index": call.get("trace_index"),
+                    "kind": "command",
+                    "value": segment,
+                    "status": call.get("status"),
+                })
+        observed_timeline.sort(key=lambda item: (
+            item["trace_index"] is None,
+            item["trace_index"] if item["trace_index"] is not None else 0,
+        ))
+        cursor = 0
+        ordered = True
+        for wanted in timeline_sequence:
+            try:
+                cursor = next(
+                    index + 1
+                    for index in range(cursor, len(observed_timeline))
+                    if all(observed_timeline[index].get(key) == value for key, value in wanted.items())
+                )
+            except StopIteration:
+                ordered = False
+                break
+        check(
+            ordered,
+            "required Agent and command events occur in unified runtime order",
+            "trace_event_order",
+        )
     maximum_total = expected.get("max_total_agent_calls")
     if maximum_total is not None:
         check(len(calls) <= maximum_total, f"no extra Ultra exploration beyond {maximum_total} Agent call(s)", "agent_calls_max_total")

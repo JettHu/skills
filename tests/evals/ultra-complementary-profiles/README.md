@@ -27,8 +27,10 @@ The practical runtime boundary is preflighted without a model request. Qoder rec
 an isolated `HOME` and a temporary config root containing only a bridge to
 `~/.qoder/.auth`; settings, skills, plugins, and other ambient Qoder state are not
 copied. A real `qodercli status --output json` check runs in that isolation before
-execution. Evidence records only whether authentication was available, never account
-identity or authentication contents. Binary lookup, version, preflight, execution,
+execution. The runner parses the JSON protocol and requires `logged_in` to be exactly
+`true`; exit zero alone, a missing/false field, or malformed JSON fails closed before
+any model request. Evidence records only whether authentication was available, never
+account identity or authentication contents. Binary lookup, version, preflight, execution,
 and timeout failures all produce attempt-local invocation/result/error evidence, and
 temporary runtime directories are removed on every path.
 
@@ -155,14 +157,20 @@ The same recorded stage may also produce `duplicate_evidence_goal` through the h
 stable goal mapping; that code is allowable but never substitutes for the required
 external trace delta.
 Every completed Agent call must carry exactly one known neutral stage-intent marker;
-an explicit runtime role constrains Explore intent when exposed, while free text is
-never a classifier. Marker identities and their real
+an explicit `subagent_type` or `agent_type` constrains Explore intent when exposed,
+while `task_name` remains task identity and free text is never a role classifier.
+Marker identities and their real
 trace order are reconciled with the stage ledger in both directions, so a ledger-only
 claim, an unrecorded trace call, or false ledger ordering produces non-attributable
 `stage_trace_mismatch`. Architecture treatment additionally requires one real
 target-native Explore call followed by a distinct delegated Ultra post-review; a
 ledger-only post-review cannot pass. Re-running the same run id
 preserves every pair verdict under its treatment/ablation attempt numbers.
+
+Agent and command events also retain one unified runtime index. The architecture
+contract requires completed target-native Explore, then completed Ultra post-review,
+then successful validation; keeping validation last only in the model-authored ledger
+cannot conceal a validation-first runtime trace.
 
 Omit `--reasoning-effort` to preserve a model's default. Each rerun creates a new
 numbered attempt and never overwrites prior evidence. Every attempt preserves the

@@ -123,6 +123,11 @@ SCENARIO_AUTHORITY = {
             "target-native-explore", "ultra-post-review", "ultra-code-explore",
         ],
         "trace_marker_sequence": ["target-native-explore", "ultra-post-review"],
+        "trace_timeline_sequence": [
+            {"kind": "agent_marker", "value": "target-native-explore"},
+            {"kind": "agent_marker", "value": "ultra-post-review"},
+            {"kind": "command", "value": "python3 scripts/check.py", "status": "completed"},
+        ],
     },
     "diagnosis-feedback-loop-first": {
         "artifact_sections": ["Reproduction", "Root Cause", "Fix", "Validation"],
@@ -222,6 +227,7 @@ def trace_expectations(scenario_id: str, scenario: dict) -> dict:
         "required_marker_events": required_trace_events,
         "reconcile_events": authority.get("trace_reconcile_events", []),
         "marker_sequence": authority.get("trace_marker_sequence", []),
+        "timeline_sequence": authority.get("trace_timeline_sequence", []),
         "max_total_agent_calls": authority.get("max_agent_calls"),
         "require_delegated_model": bool(required_trace_events),
         "command_calls": command_calls,

@@ -194,7 +194,7 @@ path.write_text(
     "    config = pathlib.Path(sys.argv[sys.argv.index('--config-dir') + 1])\n"
     "    assert {entry.name for entry in config.iterdir()} <= {'.auth'}\n"
     "    assert pathlib.Path(os.environ['HOME']) != pathlib.Path.home().parent\n"
-    "    print(json.dumps({'authenticated': True, 'account': 'must-not-be-recorded'}))\n"
+    "    print(json.dumps({'logged_in': True, 'account': 'must-not-be-recorded'}))\n"
     "    raise SystemExit(0)\n"
     "if '--cwd' in sys.argv:\n"
     "    repo = pathlib.Path(sys.argv[sys.argv.index('--cwd') + 1])\n"
@@ -249,10 +249,64 @@ assert invocation["runtime_isolation"] == {
     "neutral_opaque_cwd": True,
 }
 assert set(invocation["runtime_isolation"]["initial_runtime_config_entries"]) <= {".auth"}
-assert invocation["preflight"] == {"authentication_available": True, "exit_code": 0}
+assert invocation["preflight"] == {
+    "authentication_available": True,
+    "exit_code": 0,
+    "protocol_field": "logged_in",
+}
 assert "must-not-be-recorded" not in json.dumps(invocation)
 assert not Path(invocation["cwd"]).exists()
 PY
+
+python3 - "$TMP/qoder-status-false" "$TMP/qoder-status-missing" "$TMP/qoder-status-malformed" <<'PY'
+from pathlib import Path
+import sys
+
+responses = ('{"logged_in": false}', '{}', '{malformed')
+for path, response in zip(map(Path, sys.argv[1:]), responses):
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "from pathlib import Path\n"
+        "import sys\n"
+        "if '--version' in sys.argv:\n"
+        "    print('fake-qoder 1.0')\n"
+        "    raise SystemExit(0)\n"
+        "if 'status' in sys.argv:\n"
+        f"    print({response!r})\n"
+        "    raise SystemExit(0)\n"
+        "Path(__file__).with_suffix('.model-invoked').write_text('unexpected')\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+PY
+
+for auth_case in false missing malformed; do
+  auth_bin="$TMP/qoder-status-$auth_case"
+  if python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py" \
+    --output "$TMP/runner" --run-id "auth-$auth_case" --scenario architecture-native-ownership \
+    --treatment-ref HEAD --ablation-ref HEAD --model fake --context-window 1000000 \
+    --timeout 5 --qoder-bin "$auth_bin" --variant treatment >/dev/null 2>&1; then
+    echo "runner accepted unauthenticated Qoder status: $auth_case" >&2
+    exit 1
+  fi
+  python3 - "$TMP/runner/auth-$auth_case/architecture-native-ownership/treatment/attempt-001" "$auth_bin" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root, auth_bin = Path(sys.argv[1]), Path(sys.argv[2])
+invocation = json.loads((root / "invocation.json").read_text(encoding="utf-8"))
+result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+assert invocation["preflight"] == {
+    "authentication_available": False,
+    "exit_code": 0,
+    "protocol_field": "logged_in",
+}
+assert "runtime_preflight_failed" in result["error_codes"]
+assert not auth_bin.with_suffix(".model-invoked").exists()
+PY
+done
 
 canary_runner=(python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py"
   --output "$TMP/runner" --run-id verdict-history --scenario architecture-native-ownership
@@ -336,7 +390,7 @@ path.write_text(
     "if '--version' in sys.argv:\n"
     "    print('sleep-qoder 1.0')\n"
     "elif 'status' in sys.argv:\n"
-    "    print('{}')\n"
+    "    print('{\"logged_in\": true}')\n"
     "else:\n"
     "    time.sleep(5)\n",
     encoding="utf-8",
@@ -916,6 +970,14 @@ assert "delegated_stage_order" in misordered_trace_grade["trace_grade"]["failure
 assert "stage_trace_mismatch" in misordered_trace_grade["trace_grade"]["failure_codes"]
 assert any("do not agree" in message for message in misordered_trace_grade["trace_grade"]["failures"])
 
+validation_first_trace = treatment.parent / "validation-before-delegation.jsonl"
+validation_first_trace.write_text("\n".join(json.dumps(event) for event in (
+    [ordered_events[0], *ordered_events[7:], *ordered_events[1:7]]
+)) + "\n")
+validation_first_result, validation_first_grade = grade_json(trace_path=validation_first_trace)
+assert validation_first_result.returncode != 0
+assert "trace_event_order" in validation_first_grade["trace_grade"]["failure_codes"]
+
 codex_trace = treatment.parent / "codex-collab-trace.jsonl"
 codex_trace.write_text("\n".join(json.dumps(event) for event in (
     {"type": "thread.started", "thread_id": "fresh-primary"},
@@ -957,6 +1019,35 @@ assert review_call["role"] is None and review_call["stage_markers"] == ["[eval-s
 assert codex_grade["trace"]["delegated_model_observation"] == "unknown/unavailable"
 assert codex_grade["repository_grade"]["passed"] is True
 assert codex_grade["profile_grade"]["passed"] is True
+
+codex_task_name_trace = treatment.parent / "codex-task-name-trace.jsonl"
+codex_task_name_trace.write_text("\n".join(json.dumps(event) for event in (
+    {"type": "thread.started", "thread_id": "task-name-is-not-role"},
+    {"type": "item.completed", "item": {
+        "id": "native-task", "type": "collab_tool_call", "tool": "spawn_agent",
+        "arguments": {"task_name": "codebase_scout"},
+        "prompt": "Explore repository [eval-stage:target-native-explore]",
+        "agents_states": {"agent-1": {"status": "completed"}}, "status": "completed",
+    }},
+    {"type": "item.completed", "item": {
+        "id": "review-task", "type": "collab_tool_call", "tool": "spawn_agent",
+        "arguments": {"task_name": "risk_review"},
+        "prompt": "Review artifact risks [eval-stage:ultra-post-review]",
+        "agents_states": {"agent-2": {"status": "completed"}}, "status": "completed",
+    }},
+    {"type": "item.completed", "item": {
+        "id": "command-task", "type": "command_execution", "command": "python3 scripts/check.py",
+        "exit_code": 0, "status": "completed",
+    }},
+)) + "\n")
+task_name_result, task_name_grade = grade_json(trace_path=codex_task_name_trace)
+assert task_name_result.returncode == 0, task_name_result.stdout + task_name_result.stderr
+native_task_call = next(
+    call for call in task_name_grade["trace"]["agent_calls"] if call["id"] == "native-task"
+)
+assert native_task_call["role"] is None
+assert native_task_call["role_source"] is None
+assert native_task_call["task_name"] == "codebase_scout"
 
 primary_unmarked_trace = treatment.parent / "primary-unmarked-trace.jsonl"
 primary_unmarked_trace.write_text("\n".join(json.dumps(event) for event in (

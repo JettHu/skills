@@ -44,6 +44,17 @@ def probe(args: list[str], env: dict[str, str]) -> tuple[int, str, str]:
         return 124, "", "runtime probe timed out"
 
 
+def qoder_authentication_available(exit_code: int, stdout: str) -> bool:
+    """Fail closed unless Qoder's real status protocol says logged_in is true."""
+    if exit_code != 0:
+        return False
+    try:
+        payload = json.loads(stdout)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return isinstance(payload, dict) and payload.get("logged_in") is True
+
+
 def resolve_ref(ref: str) -> str:
     if ref == "working-tree":
         raise SystemExit(
@@ -261,12 +272,18 @@ def main() -> None:
             else:
                 runtime_errors.append({"phase": "version", "code": "runtime_version_failed", "exit_code": version_exit})
             if not runtime_errors:
-                preflight_exit, _, _ = probe(preflight_command, runtime_env)
+                preflight_exit, preflight_stdout, _ = probe(preflight_command, runtime_env)
+                authentication_available = (
+                    qoder_authentication_available(preflight_exit, preflight_stdout)
+                    if args.runtime == "qoder"
+                    else None
+                )
                 invocation["preflight"] = {
-                    "authentication_available": preflight_exit == 0 if args.runtime == "qoder" else None,
+                    "authentication_available": authentication_available,
                     "exit_code": preflight_exit,
+                    "protocol_field": "logged_in" if args.runtime == "qoder" else None,
                 }
-                if preflight_exit != 0:
+                if preflight_exit != 0 or authentication_available is False:
                     runtime_errors.append({"phase": "preflight", "code": "runtime_preflight_failed", "exit_code": preflight_exit})
             if not runtime_errors:
                 result = subprocess.run(
