@@ -308,6 +308,232 @@ for repo in sorted(root.glob("*/treatment/attempt-001/repo")):
         assert "repository_validation" in malicious_grade["repository_grade"]["failure_codes"]
 PY
 
+# --- Ticket 20 long-stale portable scheduling regression ---
+python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/prepare-fixture.py" \
+  --output "$TMP" --run-id regression --scenario long-stale-context \
+  --treatment-ref working-tree --ablation-ref HEAD >/dev/null
+
+python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/prepare-fixture.py" \
+  --output "$TMP" --run-id regression --scenario short-evidence-complete \
+  --treatment-ref working-tree --ablation-ref HEAD >/dev/null
+
+python3 - "$REPO_ROOT" "$TMP/regression" <<'PY'
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+repo_root = Path(sys.argv[1])
+root = Path(sys.argv[2])
+grader = repo_root / "tests/evals/ultra-complementary-profiles/grade-run.py"
+
+# --- long-stale-context fixture ---
+long_stale = root / "long-stale-context/treatment/attempt-001/repo"
+control = json.loads((long_stale.parent / "control.json").read_text(encoding="utf-8"))
+expected = control["expectations"]
+prompt = (long_stale / "EVAL_PROMPT.md").read_text(encoding="utf-8")
+
+# 1. Objective trigger is explicit: task names both subsystems
+assert "Order Router" in prompt, "long-stale task must name Order Router"
+assert "Audit Writer" in prompt, "long-stale task must name Audit Writer"
+assert "affects both Order Router and Audit Writer" in prompt, (
+    "long-stale task must state the requested change affects both subsystems"
+)
+# Stale/long context itself is not a trigger
+assert "HISTORY.md is long" in prompt
+assert "predates ADR-0001" in prompt
+
+# Pre-target scheduling contract is present in the supplied PROFILES.md
+profiles_text = (long_stale / "skill-input/skills/engineering/ultra/PROFILES.md").read_text(encoding="utf-8")
+assert "Pre-target pass scheduling" in profiles_text
+assert "must complete before the target workflow and any target-native stage begins" in profiles_text
+assert "requested change affects two or more subsystems, or a security/data boundary" in profiles_text
+
+# Required event order: ultra-independent-code BEFORE target-native-explore
+assert expected["required_events"] == [
+    "ultra-independent-code", "target-native-explore", "target-artifact",
+    "ultra-fresh-review", "validation",
+]
+precedence = expected.get("required_event_precedence")
+if precedence is None:
+    # schema_v4_precedence will derive it; verify the portable order
+    portable = [
+        "ultra-independent-code", "target-native-explore", "target-artifact",
+        "ultra-fresh-review", "validation",
+    ]
+    precedence = [[b, a] for b, a in zip(portable, portable[1:])]
+assert ["ultra-independent-code", "target-native-explore"] in precedence, (
+    "precedence must require ultra-independent-code before target-native-explore"
+)
+
+# Helper: write a valid artifact and ledger for long-stale
+def write_long_stale_pass(repo, event_names):
+    artifact = repo / "artifacts/spec.md"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    coverage = " ".join(expected["artifact_tokens"] + expected["artifact_sources"])
+    artifact.write_text(
+        "# Spec\n\n" + "\n\n".join(
+            f"## {h}\n\nEvidence for {h} grounded in {coverage} with validation risk."
+            for h in expected["artifact_sections"]
+        ) + "\n",
+        encoding="utf-8",
+    )
+    events = [{"name": n, "evidence": "artifacts/spec.md"} for n in event_names]
+    (repo / "artifacts/stage-evidence.json").write_text(
+        json.dumps({"events": events}, indent=2) + "\n", encoding="utf-8"
+    )
+
+def build_trace(repo, marker_events):
+    trace_events = [{
+        "type": "system", "subtype": "init", "tools": ["Agent", "Bash"],
+        "agents": ["general-purpose"], "model": "root-model",
+    }]
+    obs = expected["trace_expectations"]
+    for index, name in enumerate(marker_events):
+        call_id = f"agent-{index}"
+        marker = obs["known_stage_markers"][name]
+        trace_events.extend((
+            {"type": "assistant", "message": {"content": [{
+                "type": "tool_use", "id": call_id, "name": "Agent",
+                "input": {
+                    "subagent_type": "Explore" if name == "target-native-explore" else "general-purpose",
+                    "prompt": f"Do stage {marker}",
+                },
+            }]}},
+            {"type": "assistant", "parent_tool_use_id": call_id, "message": {"model": "delegated", "content": []}},
+            {"type": "user", "message": {"content": [{
+                "type": "tool_result", "tool_use_id": call_id, "is_error": False,
+            }]}, "tool_use_result": {"state": "completed"}},
+        ))
+    call_id = "command-0"
+    trace_events.extend((
+        {"type": "assistant", "message": {"content": [{
+            "type": "tool_use", "id": call_id, "name": "Bash",
+            "input": {"command": "python3 scripts/check.py"},
+        }]}},
+        {"type": "user", "message": {"content": [{
+            "type": "tool_result", "tool_use_id": call_id, "is_error": False,
+        }]}, "tool_use_result": {"state": "completed", "exit_code": 0}},
+    ))
+    trace_path = repo.parent / "regression-trace.jsonl"
+    trace_path.write_text("\n".join(json.dumps(e) for e in trace_events) + "\n", encoding="utf-8")
+    return trace_path
+
+# 2. Correct order passes
+correct_order = [
+    "ultra-independent-code", "target-native-explore", "target-artifact",
+    "ultra-fresh-review", "validation",
+]
+write_long_stale_pass(long_stale, correct_order)
+trace = build_trace(long_stale, ["ultra-independent-code", "target-native-explore", "ultra-fresh-review"])
+result = subprocess.run(
+    [sys.executable, str(grader), str(long_stale), "--trace", str(trace), "--json"],
+    capture_output=True, text=True,
+)
+assert result.returncode == 0, f"correct order must pass: {result.stdout}{result.stderr}"
+
+# 3. Reversed order (target-native-explore before ultra-independent-code) fails with required_stage_order
+reversed_order = [
+    "target-native-explore", "ultra-independent-code", "target-artifact",
+    "ultra-fresh-review", "validation",
+]
+write_long_stale_pass(long_stale, reversed_order)
+reversed_trace = build_trace(long_stale, ["target-native-explore", "ultra-independent-code", "ultra-fresh-review"])
+result = subprocess.run(
+    [sys.executable, str(grader), str(long_stale), "--trace", str(reversed_trace), "--json"],
+    capture_output=True, text=True,
+)
+assert result.returncode != 0, "reversed order must fail"
+grade = json.loads(result.stdout)[0]
+assert "required_stage_order" in grade["failure_codes"], (
+    f"reversed order must produce required_stage_order, got: {grade['failure_codes']}"
+)
+
+# 4. Missing ultra-independent-code fails
+missing_code = [
+    "target-native-explore", "target-artifact",
+    "ultra-fresh-review", "validation",
+]
+write_long_stale_pass(long_stale, missing_code)
+missing_trace = build_trace(long_stale, ["target-native-explore", "ultra-fresh-review"])
+result = subprocess.run(
+    [sys.executable, str(grader), str(long_stale), "--trace", str(missing_trace), "--json"],
+    capture_output=True, text=True,
+)
+assert result.returncode != 0, "missing ultra-independent-code must fail"
+grade = json.loads(result.stdout)[0]
+assert "required_events_once" in grade["failure_codes"], (
+    f"missing independent-code must produce required_events_once, got: {grade['failure_codes']}"
+)
+
+# 5. short-evidence-complete still skips additive code pass
+short_repo = root / "short-evidence-complete/treatment/attempt-001/repo"
+short_control = json.loads((short_repo.parent / "control.json").read_text(encoding="utf-8"))
+short_expected = short_control["expectations"]
+assert short_expected["trace_expectations"]["max_total_agent_calls"] == 0, (
+    "short-evidence-complete must forbid agent calls (additive pass skipped)"
+)
+assert "ultra-independent-code" not in short_expected["required_events"]
+assert "covered-additive-code" in short_expected["required_events"]
+# Verify the fixture passes with the covered-additive-code ledger
+short_artifact = short_repo / "artifacts/spec.md"
+short_artifact.parent.mkdir(parents=True, exist_ok=True)
+short_coverage = " ".join(short_expected["artifact_tokens"] + short_expected["artifact_sources"])
+short_artifact.write_text(
+    "# Spec\n\n" + "\n\n".join(
+        f"## {h}\n\nEvidence for {h} grounded in {short_coverage} with validation risk."
+        for h in short_expected["artifact_sections"]
+    ) + "\n",
+    encoding="utf-8",
+)
+short_events = [{"name": n, "evidence": "artifacts/spec.md"} for n in short_expected["required_events"]]
+(short_repo / "artifacts/stage-evidence.json").write_text(
+    json.dumps({"events": short_events}, indent=2) + "\n", encoding="utf-8"
+)
+# Build a minimal trace with zero agent calls for short-evidence-complete
+short_trace_events = [{
+    "type": "system", "subtype": "init", "tools": ["Agent", "Bash"],
+    "agents": ["general-purpose"], "model": "root-model",
+}]
+short_trace_events.extend((
+    {"type": "assistant", "message": {"content": [{
+        "type": "tool_use", "id": "command-0", "name": "Bash",
+        "input": {"command": "python3 scripts/check.py"},
+    }]}},
+    {"type": "user", "message": {"content": [{
+        "type": "tool_result", "tool_use_id": "command-0", "is_error": False,
+    }]}, "tool_use_result": {"state": "completed", "exit_code": 0}},
+))
+short_trace_path = short_repo.parent / "regression-trace.jsonl"
+short_trace_path.write_text("\n".join(json.dumps(e) for e in short_trace_events) + "\n", encoding="utf-8")
+short_result = subprocess.run(
+    [sys.executable, str(grader), str(short_repo), "--trace", str(short_trace_path), "--json"],
+    capture_output=True, text=True,
+)
+assert short_result.returncode == 0, f"short-complete must pass without additive code: {short_result.stdout}{short_result.stderr}"
+
+# 6. treatment/ablation public prompt and metadata are byte-identical
+for scenario in ("long-stale-context", "short-evidence-complete"):
+    t_repo = root / f"{scenario}/treatment/attempt-001/repo"
+    a_repo = root / f"{scenario}/ablation/attempt-001/repo"
+    t_prompt = (t_repo / "EVAL_PROMPT.md").read_bytes()
+    a_prompt = (a_repo / "EVAL_PROMPT.md").read_bytes()
+    assert t_prompt == a_prompt, f"{scenario}: treatment/ablation EVAL_PROMPT.md must be byte-identical"
+    t_expect = (t_repo / "EVAL_EXPECTATIONS.json").read_bytes()
+    a_expect = (a_repo / "EVAL_EXPECTATIONS.json").read_bytes()
+    assert t_expect == a_expect, f"{scenario}: treatment/ablation EVAL_EXPECTATIONS.json must be byte-identical"
+    t_target = (t_repo / "TARGET_SKILL.md").read_bytes()
+    a_target = (a_repo / "TARGET_SKILL.md").read_bytes()
+    assert t_target == a_target, f"{scenario}: treatment/ablation TARGET_SKILL.md must be byte-identical"
+    t_manifest = json.loads((t_repo.parent / "fixture-manifest.json").read_text(encoding="utf-8"))
+    a_manifest = json.loads((a_repo.parent / "fixture-manifest.json").read_text(encoding="utf-8"))
+    assert t_manifest["common_hashes"] == a_manifest["common_hashes"], (
+        f"{scenario}: treatment/ablation common_hashes must be identical"
+    )
+
+print("Ticket 20 long-stale portable scheduling regression passed")
+PY
+
 python3 - "$TMP/fake-qoder" <<'PY'
 from pathlib import Path
 import sys
@@ -409,6 +635,238 @@ assert invocation["preflight"] == {
 assert "must-not-be-recorded" not in json.dumps(invocation)
 assert not Path(invocation["cwd"]).exists()
 PY
+
+python3 - "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py" "$TMP/atomic-policy-state" <<'PY'
+import argparse
+import importlib.util
+from pathlib import Path
+import sys
+import threading
+
+source, state = map(Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location("atomic_policy_runner", source)
+runner = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(runner)
+runner.POLICY_STATE_DIR = state
+output = state / "output"
+manifest = output / "run/policy-manifest.json"
+manifest.parent.mkdir(parents=True)
+manifest.write_text("{}\n", encoding="utf-8")
+args = argparse.Namespace(
+    output=output,
+    run_id="run",
+    runtime="qoder",
+    model="Qwen3.8-Max-Preview",
+    reasoning_effort=None,
+    context_window=1000000,
+    scenario="architecture-native-ownership",
+)
+refs = {"treatment": "a" * 40, "ablation": "b196b40def10579a17326b3b8a0fbc04cb513907"}
+barrier = threading.Barrier(2)
+results = []
+
+def reserve():
+    barrier.wait()
+    try:
+        runner.reserve_policy_cell(args, refs, "treatment", output / "attempt")
+        results.append(True)
+    except SystemExit:
+        results.append(False)
+
+threads = [threading.Thread(target=reserve) for _ in range(2)]
+for thread in threads:
+    thread.start()
+for thread in threads:
+    thread.join()
+assert results.count(True) == 1, results
+assert results.count(False) == 1, results
+PY
+
+python3 - "$TMP/policy-driver.py" <<'PY'
+from pathlib import Path
+import sys
+
+Path(sys.argv[1]).write_text(
+    "import importlib.util\n"
+    "import os\n"
+    "from pathlib import Path\n"
+    "import sys\n"
+    "source = Path(sys.argv[1])\n"
+    "spec = importlib.util.spec_from_file_location('policy_runner', source)\n"
+    "runner = importlib.util.module_from_spec(spec)\n"
+    "assert spec.loader is not None\n"
+    "spec.loader.exec_module(runner)\n"
+    "runner.POLICY_STATE_DIR = Path(os.environ['POLICY_STATE_DIR_FOR_TEST'])\n"
+    "sys.argv = [str(source), *sys.argv[2:]]\n"
+    "runner.main()\n",
+    encoding="utf-8",
+)
+PY
+export POLICY_STATE_DIR_FOR_TEST="$TMP/policy-v1-state"
+policy_runner=(python3 "$TMP/policy-driver.py" "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py"
+  --output "$TMP/runner" --run-id prospective-retry --scenario architecture-native-ownership
+  --treatment-ref HEAD --ablation-ref b196b40def10579a17326b3b8a0fbc04cb513907
+  --model Qwen3.8-Max-Preview --context-window 1000000 --timeout 1800
+  --qoder-bin "$TMP/fake-qoder" --variant treatment
+  --acceptance-policy "$REPO_ROOT/tests/evals/ultra-complementary-profiles/acceptance-policy-v1.json")
+if "${policy_runner[@]}" >/dev/null 2>&1; then
+  echo "policy runner unexpectedly passed a failed model run" >&2
+  exit 1
+fi
+if "${policy_runner[@]}" >/dev/null 2>&1; then
+  echo "policy runner allowed a retry after model start" >&2
+  exit 1
+fi
+test -f "$TMP/runner/prospective-retry/policy-manifest.json"
+test -f "$TMP/runner/prospective-retry/architecture-native-ownership/treatment/attempt-001/result.json"
+test ! -e "$TMP/runner/prospective-retry/architecture-native-ownership/treatment/attempt-002"
+python3 - "$TMP/runner/prospective-retry" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+manifest = json.loads((root / "policy-manifest.json").read_text(encoding="utf-8"))
+assert manifest["policy_commit_sha"] == "55be4b2fd07f8d4177480559ce7f6883b2f2bf64"
+assert manifest["policy_file_sha256"] == "4c9da992f2caad5575c221875c0bb222f8e75165146b990b1bf0b0fa71d8c0db"
+assert manifest["run_ids"] == ["prospective-retry"]
+assert manifest["models"] == ["Qwen3.8-Max-Preview"]
+assert manifest["scenarios"] == ["architecture-native-ownership"]
+assert manifest["timeout"] == 1800
+invocation = json.loads(
+    (root / "architecture-native-ownership/treatment/attempt-001/invocation.json").read_text(
+        encoding="utf-8"
+    )
+)
+assert invocation["model_started"] is True
+assert invocation["prospective_policy"] == manifest
+PY
+
+policy_other_runner=(python3 "$TMP/policy-driver.py" "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py"
+  --output "$TMP/other-runner" --run-id prospective-other-id --scenario architecture-native-ownership
+  --treatment-ref HEAD --ablation-ref b196b40def10579a17326b3b8a0fbc04cb513907
+  --model Qwen3.8-Max-Preview --context-window 1000000 --timeout 1800
+  --qoder-bin "$TMP/fake-qoder" --variant treatment
+  --acceptance-policy "$REPO_ROOT/tests/evals/ultra-complementary-profiles/acceptance-policy-v1.json")
+if "${policy_other_runner[@]}" >/dev/null 2>&1; then
+  echo "policy runner allowed a retry under a new run ID" >&2
+  exit 1
+fi
+test ! -e "$TMP/other-runner/prospective-other-id/architecture-native-ownership/treatment/attempt-001"
+python3 - "$TMP/policy-v1-state/started-cells" <<'PY'
+import json
+from pathlib import Path
+import stat
+import sys
+
+receipts = list(Path(sys.argv[1]).glob("*.json"))
+assert len(receipts) == 1
+receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+assert receipt["policy_commit_sha"] == "55be4b2fd07f8d4177480559ce7f6883b2f2bf64"
+assert stat.S_IMODE(receipts[0].stat().st_mode) & 0o222 == 0
+PY
+
+python3 - "$TMP/fake-policy-preflight" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(
+    "#!/usr/bin/env python3\n"
+    "import json\n"
+    "import sys\n"
+    "if '--version' in sys.argv:\n"
+    "    print('fake-qoder 1.0')\n"
+    "    raise SystemExit(0)\n"
+    "elif 'status' in sys.argv:\n"
+    "    print(json.dumps({'logged_in': False}))\n"
+    "raise SystemExit(0)\n",
+    encoding="utf-8",
+)
+path.chmod(0o755)
+PY
+policy_preflight_runner=(python3 "$TMP/policy-driver.py" "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py"
+  --output "$TMP/runner" --run-id prospective-preflight --scenario architecture-native-ownership
+  --treatment-ref HEAD --ablation-ref b196b40def10579a17326b3b8a0fbc04cb513907
+  --model Qwen3.8-Max-Preview --context-window 1000000 --timeout 1800
+  --qoder-bin "$TMP/fake-policy-preflight" --variant treatment
+  --acceptance-policy "$REPO_ROOT/tests/evals/ultra-complementary-profiles/acceptance-policy-v1.json")
+if "${policy_preflight_runner[@]}" >/dev/null 2>&1 || "${policy_preflight_runner[@]}" >/dev/null 2>&1; then
+  echo "policy runner unexpectedly passed a pre-model failure" >&2
+  exit 1
+fi
+test -f "$TMP/runner/prospective-preflight/architecture-native-ownership/treatment/attempt-001/result.json"
+test -f "$TMP/runner/prospective-preflight/architecture-native-ownership/treatment/attempt-002/result.json"
+python3 - "$TMP/runner/prospective-preflight/architecture-native-ownership/treatment" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+for attempt in ("attempt-001", "attempt-002"):
+    assert json.loads((root / attempt / "invocation.json").read_text(encoding="utf-8"))["model_started"] is False
+PY
+
+python3 - "$TMP/fake-policy-pair" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(
+    "#!/usr/bin/env python3\n"
+    "import json\n"
+    "import os\n"
+    "from pathlib import Path\n"
+    "import sys\n"
+    "if '--version' in sys.argv:\n"
+    "    print('fake-qoder 1.0')\n"
+    "    raise SystemExit(0)\n"
+    "elif 'status' in sys.argv:\n"
+    "    state = Path(os.environ['PAIR_STATUS_STATE'])\n"
+    "    count = int(state.read_text() if state.exists() else '0') + 1\n"
+    "    state.write_text(str(count))\n"
+    "    print(json.dumps({'logged_in': count == 1}))\n"
+    "    raise SystemExit(0)\n"
+    "elif 'agents' in sys.argv:\n"
+    "    print('2 active agents\\n\\nBuilt-in:\\n  Explore · Efficient\\n  general-purpose · Inherit')\n"
+    "    raise SystemExit(0)\n"
+    "elif 'skills' in sys.argv:\n"
+    "    print('No skills discovered.')\n"
+    "    raise SystemExit(0)\n"
+    "raise SystemExit(9)\n",
+    encoding="utf-8",
+)
+path.chmod(0o755)
+PY
+export PAIR_STATUS_STATE="$TMP/policy-pair-status"
+policy_pair_runner=(python3 "$TMP/policy-driver.py" "$REPO_ROOT/tests/evals/ultra-complementary-profiles/run-eval.py"
+  --output "$TMP/runner" --run-id prospective-pair --scenario architecture-native-ownership
+  --treatment-ref HEAD --ablation-ref b196b40def10579a17326b3b8a0fbc04cb513907
+  --model Qwen3.7-Plus --context-window 1000000 --timeout 1800
+  --qoder-bin "$TMP/fake-policy-pair" --variant both
+  --acceptance-policy "$REPO_ROOT/tests/evals/ultra-complementary-profiles/acceptance-policy-v1.json")
+if "${policy_pair_runner[@]}" >/dev/null 2>&1 || "${policy_pair_runner[@]}" >/dev/null 2>&1; then
+  echo "policy pair runner unexpectedly passed" >&2
+  exit 1
+fi
+python3 - "$TMP/runner/prospective-pair/architecture-native-ownership" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+treatment = root / "treatment/attempt-001/invocation.json"
+ablation_one = root / "ablation/attempt-001/invocation.json"
+ablation_two = root / "ablation/attempt-002/invocation.json"
+assert json.loads(treatment.read_text(encoding="utf-8"))["model_started"] is True
+assert json.loads(ablation_one.read_text(encoding="utf-8"))["model_started"] is False
+assert json.loads(ablation_two.read_text(encoding="utf-8"))["model_started"] is False
+assert json.loads(treatment.read_text(encoding="utf-8"))["pair_id"] == json.loads(
+    ablation_two.read_text(encoding="utf-8")
+)["pair_id"]
+PY
+unset PAIR_STATUS_STATE POLICY_STATE_DIR_FOR_TEST
 python3 - "$TMP/qoder-isolation-invocations.jsonl" <<'PY'
 import json
 from pathlib import Path

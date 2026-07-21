@@ -70,7 +70,7 @@ This sufficiency check never suppresses an unconditional target-native stage. Co
 
 ### 3. Pre-exploration (parallel agents, adaptive scope)
 
-Run only eligible `ultra-additive` pre-target stages whose objective trigger matches and whose evidence goal is not already covered. Each pass returns a concise summary (under 500 words). These summaries become conversation context that the target skill benefits from naturally. Record the goal as completed so no later pass repeats it.
+Run only eligible `ultra-additive` pre-target stages whose objective trigger matches and whose evidence goal is not already covered. Each eligible pre-target pass must complete before the target workflow and any target-native stage begins; its result becomes input context for the target. Each pass returns a concise summary (under 500 words). These summaries become conversation context that the target skill benefits from naturally. Record the goal as completed so no later pass repeats it.
 
 For conditionally exploring targets such as `to-spec` and `to-tickets`, absence of prior exploration is never enough to add an Ultra code pass. The profile must name an independent lens and an objective task condition that makes its evidence distinct from the target's optional exploration.
 

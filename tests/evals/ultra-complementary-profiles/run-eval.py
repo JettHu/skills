@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -25,11 +26,68 @@ PREPARE = HERE / "prepare-fixture.py"
 GRADER = HERE / "grade-run.py"
 PAIR_VERDICT = HERE / "pair_verdict.py"
 QODER_REQUIRED_AGENTS = ("Explore", "general-purpose")
+POLICY_PATH = HERE / "acceptance-policy-v1.json"
+POLICY_COMMIT = "55be4b2fd07f8d4177480559ce7f6883b2f2bf64"
+POLICY_SHA256 = "4c9da992f2caad5575c221875c0bb222f8e75165146b990b1bf0b0fa71d8c0db"
+POLICY_STATE_DIR = ROOT / ".evals/ultra-complementary-profiles/policy-v1-state"
 
 
 def write(path: Path, value: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(value, encoding="utf-8")
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def policy_manifest_path(output: Path, run_id: str) -> Path:
+    return output / run_id / "policy-manifest.json"
+
+
+def policy_cell_key(args: argparse.Namespace, ref_shas: dict[str, str], variant: str) -> str:
+    identity = {
+        "policy_commit_sha": POLICY_COMMIT,
+        "runtime": args.runtime,
+        "model": args.model,
+        "reasoning_effort": args.reasoning_effort or "default",
+        "context_window": args.context_window,
+        "scenario": args.scenario,
+        "variant": variant,
+        "treatment_ref": ref_shas["treatment"],
+        "ablation_ref": ref_shas["ablation"],
+    }
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+
+def write_once(path: Path, value: str) -> None:
+    """Atomically create an append-only policy evidence record."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
+    except FileExistsError:
+        raise SystemExit(f"prospective policy evidence already exists: {path}") from None
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        stream.write(value)
+        stream.flush()
+
+
+def reserve_policy_cell(
+    args: argparse.Namespace, ref_shas: dict[str, str], variant: str, attempt_root: Path,
+) -> None:
+    """Atomically reserve a policy cell; raises SystemExit if already started."""
+    key = policy_cell_key(args, ref_shas, variant)
+    receipt_path = POLICY_STATE_DIR / "started-cells" / f"{key}.json"
+    receipt = {
+        "policy_commit_sha": POLICY_COMMIT,
+        "run_id": args.run_id,
+        "model": args.model,
+        "scenario": args.scenario,
+        "variant": variant,
+        "attempt_root": str(attempt_root),
+        "reserved_at": datetime.now(timezone.utc).isoformat(),
+    }
+    write_once(receipt_path, json.dumps(receipt, indent=2) + "\n")
 
 
 def next_attempt(root: Path) -> int:
@@ -217,6 +275,11 @@ def main() -> None:
         action="store_true",
         help="write a durable identity-checked verdict for an ordinary treatment/ablation pair",
     )
+    parser.add_argument(
+        "--acceptance-policy",
+        type=Path,
+        help="enforce prospective acceptance policy for this run",
+    )
     args = parser.parse_args()
     output = args.output.resolve()
     if args.runtime == "qoder" and args.context_window is None:
@@ -233,9 +296,37 @@ def main() -> None:
         "ablation": resolve_ref(args.ablation_ref),
     }
 
+    prospective_policy = None
+    if args.acceptance_policy:
+        policy_file = args.acceptance_policy.resolve()
+        if not policy_file.is_file():
+            raise SystemExit(f"acceptance policy not found: {policy_file}")
+        file_digest = hashlib.sha256(policy_file.read_bytes()).hexdigest()
+        if file_digest != POLICY_SHA256:
+            raise SystemExit(
+                f"acceptance policy SHA-256 mismatch: expected {POLICY_SHA256}, got {file_digest}"
+            )
+        manifest_path = policy_manifest_path(output, args.run_id)
+        prospective_policy = {
+            "policy_commit_sha": POLICY_COMMIT,
+            "policy_file_sha256": POLICY_SHA256,
+            "run_ids": [args.run_id],
+            "models": [args.model],
+            "scenarios": [args.scenario],
+            "timeout": args.timeout,
+        }
+        if manifest_path.is_file():
+            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if existing.get("run_ids") != [args.run_id]:
+                raise SystemExit(
+                    f"policy manifest run_id mismatch: {existing.get('run_ids')} vs [{args.run_id}]"
+                )
+        else:
+            write(manifest_path, json.dumps(prospective_policy, indent=2) + "\n")
+
     failed = False
     pair_results: dict[str, dict] = {}
-    pair_id = uuid.uuid4().hex if len(variants) == 2 else None
+    pair_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{args.run_id}/{args.scenario}").hex if len(variants) == 2 else None
     pair_attempt_roots: dict[str, Path] = {}
     for variant in variants:
         variant_root = output / args.run_id / args.scenario / variant
@@ -376,13 +467,17 @@ def main() -> None:
             },
             "started_at": datetime.now(timezone.utc).isoformat(),
             "preflight": {"authentication_available": None, "exit_code": None},
+            "model_started": False,
             "errors": runtime_errors,
         }
+        if prospective_policy is not None:
+            invocation["prospective_policy"] = prospective_policy
         write(attempt_root / "invocation.json", json.dumps(invocation, indent=2) + "\n")
         timed_out = False
         run_exit = 125
         stdout = ""
         stderr = ""
+        policy_blocked = False
         try:
             if runtime_errors:
                 version_exit, version_stdout, version_stderr = 125, "", "runtime startup failed"
@@ -452,7 +547,15 @@ def main() -> None:
                             "exit_code": skill_exit,
                         })
             if not runtime_errors:
-                if primary_adapter is not None:
+                if prospective_policy is not None:
+                    try:
+                        reserve_policy_cell(args, ref_shas, variant, attempt_root)
+                    except SystemExit:
+                        policy_blocked = True
+                if not policy_blocked:
+                    invocation["model_started"] = True
+                    write(attempt_root / "invocation.json", json.dumps(invocation, indent=2) + "\n")
+                if not policy_blocked and primary_adapter is not None:
                     result = primary_adapter.execute(
                         prompt,
                         stdout_path=attempt_root / "raw-stdout.log",
@@ -467,14 +570,14 @@ def main() -> None:
                             "code": result.error_code,
                             "exit_code": run_exit,
                         })
-                else:
+                elif not policy_blocked:
                     result = subprocess.run(
                         command, cwd=runtime_repo, env=runtime_env, text=True, capture_output=True,
                         timeout=args.timeout,
                     )
                     run_exit = result.returncode
                     stdout, stderr = result.stdout, result.stderr
-                if run_exit != 0:
+                if not policy_blocked and run_exit != 0:
                     if not runtime_errors or runtime_errors[-1].get("phase") != "execution":
                         runtime_errors.append({"phase": "execution", "code": "runtime_exit_nonzero", "exit_code": run_exit})
         except subprocess.TimeoutExpired as exc:
@@ -503,13 +606,16 @@ def main() -> None:
                     )
             else:
                 try:
-                    if runtime_repo.exists() or runtime_repo.is_symlink():
+                    if not policy_blocked and (runtime_repo.exists() or runtime_repo.is_symlink()):
                         shutil.move(str(runtime_repo), repo)
                 except OSError:
                     runtime_errors.append({"phase": "cleanup", "code": "runtime_workspace_restore_failed"})
                     repo.mkdir(parents=True, exist_ok=True)
                 shutil.rmtree(runtime_root, ignore_errors=True)
                 shutil.rmtree(workspace_root, ignore_errors=True)
+        if policy_blocked:
+            subprocess.run(["rm", "-rf", str(attempt_root)], capture_output=True)
+            raise SystemExit(f"prospective policy cell already started for {args.scenario}/{variant}")
         write(attempt_root / "raw-stdout.log", stdout)
         write(attempt_root / "raw-stderr.log", stderr)
         if runtime_errors:

@@ -91,7 +91,7 @@ SCENARIOS = {
     },
     "long-stale-context": {
         "target": "to-spec",
-        "task": "Produce a cross-system Spec. HISTORY.md is long but predates ADR-0001 and lacks a current validation path.",
+        "task": "Produce a cross-system Spec for a requested change that affects both Order Router and Audit Writer. HISTORY.md is long but predates ADR-0001 and lacks a current validation path.",
         "native": "Explore when current understanding is absent, then produce the Spec.",
         "events": ["ultra-independent-code", "target-native-explore", "target-artifact", "ultra-fresh-review", "validation"],
         "artifact": "artifacts/spec.md",
