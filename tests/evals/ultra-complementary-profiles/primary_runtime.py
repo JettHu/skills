@@ -51,42 +51,57 @@ class PrimaryRuntimeAdapter:
         self.codex_home: Path | None = None
         self.workspace_root: Path | None = None
         self.runtime_repo: Path | None = None
+        self.backup_repo: Path | None = None
         self.env: dict[str, str] | None = None
         self.initial_codex_home_entries: list[str] = []
         self.auth_bridge_present = False
         self.cleanup_succeeded: bool | None = None
         self.cleanup_errors: list[str] = []
+        self.started = False
+        self.start_error_code: str | None = None
+        self.start_error_detail: str | None = None
+        self.preserved_workspace_path: str | None = None
+        self.preserved_baseline_path: str | None = None
+        self._cleanup_complete = False
 
     def start(self) -> "PrimaryRuntimeAdapter":
         if self.runtime_root is not None:
             raise RuntimeError("Primary runtime already started")
-        self.runtime_root = Path(tempfile.mkdtemp(prefix="primary-eval-runtime-"))
-        self.runtime_home = self.runtime_root / "home"
-        self.codex_home = self.runtime_root / "codex-home"
-        self.runtime_home.mkdir()
-        self.codex_home.mkdir()
-        self.workspace_root = Path(tempfile.mkdtemp(prefix="agent-workspace-"))
-        self.runtime_repo = self.workspace_root / f"workspace-{uuid.uuid4().hex[:12]}"
-        shutil.move(str(self.evidence_repo), self.runtime_repo)
+        try:
+            self.runtime_root = Path(tempfile.mkdtemp(prefix="primary-eval-runtime-"))
+            self.runtime_home = self.runtime_root / "home"
+            self.codex_home = self.runtime_root / "codex-home"
+            self.runtime_home.mkdir()
+            self.codex_home.mkdir()
+            self.backup_repo = self.runtime_root / "evaluator-owned-repo-backup"
+            shutil.copytree(self.evidence_repo, self.backup_repo, symlinks=True)
+            self.workspace_root = Path(tempfile.mkdtemp(prefix="agent-workspace-"))
+            self.runtime_repo = self.workspace_root / f"workspace-{uuid.uuid4().hex[:12]}"
+            shutil.move(str(self.evidence_repo), self.runtime_repo)
 
-        ambient_home = Path(self.ambient_env.get("HOME", str(Path.home())))
-        ambient_codex_home = Path(
-            self.ambient_env.get("CODEX_HOME", str(ambient_home / ".codex"))
-        )
-        ambient_auth = ambient_codex_home / "auth.json"
-        if ambient_auth.is_file():
-            (self.codex_home / "auth.json").symlink_to(ambient_auth)
-            self.auth_bridge_present = True
-        self.initial_codex_home_entries = sorted(
-            path.name for path in self.codex_home.iterdir()
-        )
-        self.env = self.ambient_env.copy()
-        self.env["HOME"] = str(self.runtime_home)
-        self.env["CODEX_HOME"] = str(self.codex_home)
+            ambient_home = Path(self.ambient_env.get("HOME", str(Path.home())))
+            ambient_codex_home = Path(
+                self.ambient_env.get("CODEX_HOME", str(ambient_home / ".codex"))
+            )
+            ambient_auth = ambient_codex_home / "auth.json"
+            if ambient_auth.is_file():
+                (self.codex_home / "auth.json").symlink_to(ambient_auth)
+                self.auth_bridge_present = True
+            self.initial_codex_home_entries = sorted(
+                path.name for path in self.codex_home.iterdir()
+            )
+            self.env = self.ambient_env.copy()
+            self.env["HOME"] = str(self.runtime_home)
+            self.env["CODEX_HOME"] = str(self.codex_home)
+            self.started = True
+        except (OSError, shutil.Error) as exc:
+            self.start_error_code = "primary_runtime_start_failed"
+            self.start_error_detail = exc.__class__.__name__
+            self.cleanup()
         return self
 
     def _require_started(self) -> tuple[Path, dict[str, str]]:
-        if self.runtime_repo is None or self.env is None:
+        if not self.started or self.runtime_repo is None or self.env is None:
             raise RuntimeError("Primary runtime is not started")
         return self.runtime_repo, self.env
 
@@ -161,29 +176,81 @@ class PrimaryRuntimeAdapter:
         return evidence
 
     def cleanup(self) -> list[str]:
-        if self.runtime_root is None:
-            return []
-        try:
-            if self.runtime_repo is not None and (
-                self.runtime_repo.exists() or self.runtime_repo.is_symlink()
-            ):
+        if self._cleanup_complete:
+            return list(self.cleanup_errors)
+        self._cleanup_complete = True
+
+        normal_restore_succeeded = False
+        runtime_repo_exists = self.runtime_repo is not None and (
+            self.runtime_repo.exists() or self.runtime_repo.is_symlink()
+        )
+        if runtime_repo_exists:
+            try:
+                if self.evidence_repo.exists() or self.evidence_repo.is_symlink():
+                    raise FileExistsError(str(self.evidence_repo))
                 shutil.move(str(self.runtime_repo), self.evidence_repo)
-            elif not self.evidence_repo.exists():
+                runtime_repo_exists = False
+                normal_restore_succeeded = True
+            except (OSError, shutil.Error):
                 self.cleanup_errors.append("runtime_workspace_restore_failed")
-                self.evidence_repo.mkdir(parents=True, exist_ok=True)
-        except OSError:
+                recovery_repo = self.evidence_repo.with_name(
+                    self.evidence_repo.name + "-runtime-recovery"
+                )
+                try:
+                    if recovery_repo.exists() or recovery_repo.is_symlink():
+                        raise FileExistsError(str(recovery_repo))
+                    shutil.move(str(self.runtime_repo), recovery_repo)
+                    self.preserved_workspace_path = str(recovery_repo)
+                    runtime_repo_exists = False
+                except (OSError, shutil.Error):
+                    self.preserved_workspace_path = str(self.runtime_repo)
+        elif self.runtime_repo is not None and self.started:
             self.cleanup_errors.append("runtime_workspace_restore_failed")
-            self.evidence_repo.mkdir(parents=True, exist_ok=True)
+
+        if self.backup_repo is not None and self.backup_repo.exists():
+            if normal_restore_succeeded:
+                shutil.rmtree(self.backup_repo, ignore_errors=True)
+            elif not self.evidence_repo.exists():
+                try:
+                    shutil.copytree(self.backup_repo, self.evidence_repo, symlinks=True)
+                    shutil.rmtree(self.backup_repo, ignore_errors=True)
+                except (OSError, shutil.Error):
+                    self.cleanup_errors.append("runtime_evidence_backup_restore_failed")
+            elif self.runtime_repo is None or not self.started:
+                shutil.rmtree(self.backup_repo, ignore_errors=True)
+            else:
+                baseline_recovery = self.evidence_repo.with_name(
+                    self.evidence_repo.name + "-baseline-recovery"
+                )
+                try:
+                    if baseline_recovery.exists() or baseline_recovery.is_symlink():
+                        raise FileExistsError(str(baseline_recovery))
+                    shutil.move(str(self.backup_repo), baseline_recovery)
+                    self.preserved_baseline_path = str(baseline_recovery)
+                except (OSError, shutil.Error):
+                    self.cleanup_errors.append("runtime_evidence_backup_restore_failed")
+                    self.preserved_baseline_path = str(self.backup_repo)
 
         runtime_root = self.runtime_root
         workspace_root = self.workspace_root
-        shutil.rmtree(runtime_root, ignore_errors=True)
-        if workspace_root is not None:
+        if runtime_root is not None:
+            preserve_runtime_root = self.backup_repo is not None and self.backup_repo.exists()
+            if preserve_runtime_root:
+                if self.runtime_home is not None:
+                    shutil.rmtree(self.runtime_home, ignore_errors=True)
+                if self.codex_home is not None:
+                    shutil.rmtree(self.codex_home, ignore_errors=True)
+            else:
+                shutil.rmtree(runtime_root, ignore_errors=True)
+            if runtime_root.exists():
+                self.cleanup_errors.append("runtime_home_cleanup_failed")
+        if workspace_root is not None and not runtime_repo_exists:
             shutil.rmtree(workspace_root, ignore_errors=True)
-        if runtime_root.exists():
-            self.cleanup_errors.append("runtime_home_cleanup_failed")
         if workspace_root is not None and workspace_root.exists():
             self.cleanup_errors.append("runtime_workspace_cleanup_failed")
+            if self.preserved_workspace_path is None and self.runtime_repo is not None:
+                self.preserved_workspace_path = str(self.runtime_repo)
+        self.started = False
         self.cleanup_succeeded = not self.cleanup_errors
         return list(self.cleanup_errors)
 

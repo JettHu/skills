@@ -19,6 +19,7 @@ HERE = Path(__file__).resolve().parent
 PROFILE_EVAL = HERE.parent / "ultra-complementary-profiles"
 sys.path.insert(0, str(PROFILE_EVAL))
 from primary_runtime import PrimaryRuntimeAdapter  # noqa: E402
+from trace_evidence import grade_primary_collaboration_canary  # noqa: E402
 
 
 MARKER = "[eval-stage:primary-collaboration-canary]"
@@ -85,20 +86,34 @@ def symlinks(repo: Path) -> list[str]:
 
 
 def repository_evidence(repo: Path, baseline: str) -> dict[str, object]:
-    committed = git(repo, "diff", "--name-status", baseline, "HEAD").splitlines()
-    tracked = list(dict.fromkeys(
-        git(repo, "diff", "--name-status").splitlines()
-        + git(repo, "diff", "--cached", "--name-status").splitlines()
-    ))
-    untracked = git(repo, "ls-files", "--others", "--exclude-standard").splitlines()
-    link_writes = symlinks(repo)
+    try:
+        committed = git(repo, "diff", "--name-status", baseline, "HEAD").splitlines()
+        tracked = list(dict.fromkeys(
+            git(repo, "diff", "--name-status").splitlines()
+            + git(repo, "diff", "--cached", "--name-status").splitlines()
+        ))
+        untracked = git(repo, "ls-files", "--others", "--exclude-standard").splitlines()
+        link_writes = symlinks(repo)
+        final_head = git(repo, "rev-parse", "HEAD").strip()
+    except (OSError, subprocess.CalledProcessError):
+        return {
+            "baseline_commit": baseline,
+            "final_head": None,
+            "tracked_write_set": [],
+            "committed_write_set": [],
+            "untracked_write_set": [],
+            "symlink_write_set": [],
+            "available": False,
+            "clean": False,
+        }
     return {
         "baseline_commit": baseline,
-        "final_head": git(repo, "rev-parse", "HEAD").strip(),
+        "final_head": final_head,
         "tracked_write_set": tracked,
         "committed_write_set": committed,
         "untracked_write_set": untracked,
         "symlink_write_set": link_writes,
+        "available": True,
         "clean": not (tracked or committed or untracked or link_writes),
     }
 
@@ -114,107 +129,25 @@ def classify_features(exit_code: int, stdout: str) -> dict[str, object]:
     if exit_code != 0:
         result["error_code"] = "primary_feature_probe_failed"
         return result
-    candidates = []
+    candidates: list[re.Match[str]] = []
     for line in stdout.splitlines():
-        fields = re.split(r"\s+", line.strip())
-        if fields and fields[0] == "multi_agent":
-            candidates.append(fields)
-    if len(candidates) != 1 or not candidates[0] or candidates[0][-1] not in {"true", "false"}:
+        if not line.strip().startswith("multi_agent"):
+            continue
+        match = re.fullmatch(r"multi_agent\s+experimental\s+(true|false)", line.strip())
+        if match is None:
+            result["error_code"] = "primary_feature_protocol_unrecognized"
+            return result
+        candidates.append(match)
+    if len(candidates) != 1:
         result["error_code"] = "primary_feature_protocol_unrecognized"
         return result
     result["multi_agent_recognized"] = True
-    result["multi_agent_enabled"] = candidates[0][-1] == "true"
+    result["multi_agent_enabled"] = candidates[0].group(1) == "true"
     if result["multi_agent_enabled"] is not True:
         result["error_code"] = "primary_multi_agent_unavailable"
         return result
     result["passed"] = True
     return result
-
-
-def _tool_name(item: dict[str, object]) -> str:
-    return str(item.get("tool") or item.get("name") or item.get("tool_name") or "")
-
-
-def _is_spawn(item: dict[str, object]) -> bool:
-    name = _tool_name(item)
-    return name == "spawn_agent" or name.endswith(".spawn_agent") or name.endswith("__spawn_agent")
-
-
-def _child_status(value: object) -> str:
-    if isinstance(value, dict):
-        value = value.get("status") or value.get("state")
-    return str(value or "unknown").casefold()
-
-
-def grade_trace(raw_path: Path) -> dict[str, object]:
-    merged: dict[str, dict[str, object]] = {}
-    anonymous: list[dict[str, object]] = []
-    for index, line in enumerate(raw_path.read_text(encoding="utf-8").splitlines()):
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(event, dict):
-            continue
-        item = event.get("item")
-        if not isinstance(item, dict) and event.get("type") == "collab_tool_call":
-            item = event
-        if not isinstance(item, dict) or item.get("type") != "collab_tool_call" or not _is_spawn(item):
-            continue
-        call_id = item.get("id") or item.get("call_id")
-        call = merged.setdefault(str(call_id), {}) if call_id else {}
-        for key, value in item.items():
-            if value not in (None, "", [], {}):
-                call[key] = value
-        call["trace_index"] = index
-        event_type = str(event.get("type") or "")
-        if event_type in {"item.completed", "item.failed"}:
-            call["terminal_event"] = True
-        if not call_id:
-            anonymous.append(call)
-    calls = list(merged.values()) + anonymous
-    marker_calls = []
-    for call in calls:
-        arguments = call.get("arguments") or call.get("input") or {}
-        if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments)
-            except json.JSONDecodeError:
-                arguments = {}
-        prompt = call.get("prompt")
-        if not prompt and isinstance(arguments, dict):
-            prompt = arguments.get("prompt") or arguments.get("message")
-        if MARKER in str(prompt or ""):
-            marker_calls.append(call)
-
-    selected = calls[0] if len(calls) == 1 else {}
-    states = selected.get("agents_states") if isinstance(selected.get("agents_states"), dict) else {}
-    receiver_ids = selected.get("receiver_thread_ids")
-    identities = set(str(value) for value in states if str(value))
-    if isinstance(receiver_ids, list):
-        identities.update(str(value) for value in receiver_ids if str(value))
-    child_states = [_child_status(value) for value in states.values()]
-    outer_status = str(selected.get("status") or "unknown").casefold()
-    failure_codes = []
-    if len(calls) != 1:
-        failure_codes.append("primary_spawn_count_invalid")
-    if len(marker_calls) != 1 or len(calls) != 1:
-        failure_codes.append("primary_spawn_marker_invalid")
-    if not selected.get("terminal_event") or outer_status != "completed":
-        failure_codes.append("primary_outer_collaboration_incomplete")
-    if len(identities) != 1:
-        failure_codes.append("primary_child_identity_invalid")
-    if len(states) != 1 or child_states != ["completed"]:
-        failure_codes.append("primary_child_terminal_state_invalid")
-    return {
-        "passed": not failure_codes,
-        "failure_codes": failure_codes,
-        "spawn_count": len(calls),
-        "marked_spawn_count": len(marker_calls),
-        "outer_status": outer_status,
-        "child_identities": sorted(identities),
-        "child_terminal_states": child_states,
-    }
 
 
 def main() -> None:
@@ -249,10 +182,20 @@ def main() -> None:
         model=args.model,
         reasoning_effort=args.reasoning_effort,
         timeout=args.timeout,
-    ).start()
+    )
+    try:
+        adapter.start()
+    except Exception as exc:  # preserve structured evidence for unexpected startup faults
+        adapter.start_error_code = "primary_runtime_start_failed"
+        adapter.start_error_detail = exc.__class__.__name__
+        adapter.cleanup()
+    runtime_started = adapter.started
+    if adapter.start_error_code:
+        errors.append(adapter.start_error_code)
+    command = adapter.command(PROMPT) if runtime_started else []
     invocation = {
-        "argv": adapter.command(PROMPT),
-        "shell": shlex.join(adapter.command(PROMPT)),
+        "argv": command,
+        "shell": shlex.join(command),
         "cwd": str(adapter.runtime_repo),
         "runtime": "primary",
         "model": args.model,
@@ -270,6 +213,10 @@ def main() -> None:
             "neutral_opaque_git_cwd": True,
             "primary_session_persistence": "temporary-codex-home",
             "cleanup_succeeded": None,
+            "startup_succeeded": runtime_started,
+            "startup_error": adapter.start_error_detail,
+            "preserved_workspace_path": None,
+            "preserved_baseline_path": None,
         },
     }
     write_json(attempt_root / "invocation.json", invocation)
@@ -287,36 +234,41 @@ def main() -> None:
         "error_code": "primary_feature_probe_failed",
     }
     try:
-        version = adapter.probe(adapter.version_command())
-        (attempt_root / "runtime-version.txt").write_text(
-            (version.stdout or version.stderr).strip() + "\n", encoding="utf-8"
-        )
-        if version.exit_code != 0:
-            errors.append("runtime_version_failed")
-        else:
-            feature_probe = adapter.probe(adapter.feature_command())
-            (attempt_root / "feature-stdout.log").write_text(
-                feature_probe.stdout, encoding="utf-8"
+        if runtime_started:
+            version = adapter.probe(adapter.version_command())
+            (attempt_root / "runtime-version.txt").write_text(
+                (version.stdout or version.stderr).strip() + "\n", encoding="utf-8"
             )
-            (attempt_root / "feature-stderr.log").write_text(
-                feature_probe.stderr, encoding="utf-8"
-            )
-            feature = classify_features(feature_probe.exit_code, feature_probe.stdout)
-            feature["command"] = adapter.feature_command()
-            feature["cwd"] = str(adapter.runtime_repo)
-            feature["environment"] = "same-as-model-invocation"
-            if feature["error_code"]:
-                errors.append(str(feature["error_code"]))
-            if feature["passed"]:
-                execution = adapter.execute(
-                    PROMPT, stdout_path=raw_path, stderr_path=stderr_path
+            if version.exit_code != 0:
+                errors.append("runtime_version_failed")
+            else:
+                feature_probe = adapter.probe(adapter.feature_command())
+                (attempt_root / "feature-stdout.log").write_text(
+                    feature_probe.stdout, encoding="utf-8"
                 )
-                runtime_exit = execution.exit_code
-                timed_out = execution.timed_out
-                if execution.error_code:
-                    errors.append(execution.error_code)
-                elif runtime_exit != 0:
-                    errors.append("runtime_exit_nonzero")
+                (attempt_root / "feature-stderr.log").write_text(
+                    feature_probe.stderr, encoding="utf-8"
+                )
+                feature = classify_features(feature_probe.exit_code, feature_probe.stdout)
+                feature["command"] = adapter.feature_command()
+                feature["cwd"] = str(adapter.runtime_repo)
+                feature["environment"] = "same-as-model-invocation"
+                if feature["error_code"]:
+                    errors.append(str(feature["error_code"]))
+                if feature["passed"]:
+                    execution = adapter.execute(
+                        PROMPT, stdout_path=raw_path, stderr_path=stderr_path
+                    )
+                    runtime_exit = execution.exit_code
+                    timed_out = execution.timed_out
+                    if execution.error_code:
+                        errors.append(execution.error_code)
+                    elif runtime_exit != 0:
+                        errors.append("runtime_exit_nonzero")
+        else:
+            (attempt_root / "runtime-version.txt").write_text("\n", encoding="utf-8")
+            (attempt_root / "feature-stdout.log").write_text("", encoding="utf-8")
+            (attempt_root / "feature-stderr.log").write_text("", encoding="utf-8")
     finally:
         cleanup_codes = adapter.cleanup()
         errors.extend(cleanup_codes)
@@ -324,7 +276,7 @@ def main() -> None:
     write_json(attempt_root / "feature-preflight.json", feature)
     repository = repository_evidence(evidence_repo, str(control["baseline_commit"]))
     write_json(attempt_root / "repository-evidence.json", repository)
-    trace = grade_trace(raw_path)
+    trace = grade_primary_collaboration_canary(raw_path, MARKER)
     grade = {
         **trace,
         "feature_preflight_passed": feature["passed"],
@@ -335,7 +287,15 @@ def main() -> None:
     }
     grade["failure_codes"] = list(dict.fromkeys(
         [*grade["failure_codes"], *errors]
-        + ([] if repository["clean"] else ["primary_repository_write_set_nonempty"])
+        + (
+            []
+            if repository["clean"]
+            else [
+                "primary_repository_write_set_nonempty"
+                if repository["available"]
+                else "primary_repository_evidence_unavailable"
+            ]
+        )
         + ([] if adapter.cleanup_succeeded else ["primary_cleanup_failed"])
     ))
     grade["passed"] = (
@@ -348,6 +308,8 @@ def main() -> None:
     write_json(attempt_root / "grader-output.json", grade)
     invocation["finished_at"] = datetime.now(timezone.utc).isoformat()
     invocation["runtime_isolation"]["cleanup_succeeded"] = adapter.cleanup_succeeded
+    invocation["runtime_isolation"]["preserved_workspace_path"] = adapter.preserved_workspace_path
+    invocation["runtime_isolation"]["preserved_baseline_path"] = adapter.preserved_baseline_path
     write_json(attempt_root / "invocation.json", invocation)
     result = {
         "run_id": args.run_id,

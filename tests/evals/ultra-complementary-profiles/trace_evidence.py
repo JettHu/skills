@@ -177,6 +177,123 @@ def codex_tool_use(event: dict[str, Any]) -> Optional[dict[str, Any]]:
     }
 
 
+def grade_primary_collaboration_canary(path: Path, marker: str) -> dict[str, Any]:
+    """Strictly grade one Primary spawn lifecycle without trusting payload prose."""
+    protocol_errors: list[str] = []
+    events: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        lines = []
+        protocol_errors.append("primary_trace_protocol_unrecognized")
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            protocol_errors.append("primary_trace_protocol_unrecognized")
+            continue
+        if not isinstance(value, dict):
+            protocol_errors.append("primary_trace_protocol_unrecognized")
+            continue
+        events.append(value)
+
+    calls: dict[str, dict[str, Any]] = {}
+    anonymous_calls: list[dict[str, Any]] = []
+    for event_index, event in enumerate(events):
+        item = event.get("item")
+        if not isinstance(item, dict) and event.get("type") == "collab_tool_call":
+            item = event
+        if not isinstance(item, dict) or item.get("type") != "collab_tool_call":
+            continue
+        name = str(item.get("name") or item.get("tool") or item.get("tool_name") or "")
+        if name not in AGENT_NAMES and not name.endswith((".spawn_agent", "__spawn_agent")):
+            continue
+        call_id = item.get("id") or item.get("call_id")
+        call = (
+            calls.setdefault(str(call_id), {"started_events": 0, "terminal_events": []})
+            if call_id
+            else {"started_events": 0, "terminal_events": []}
+        )
+        if not call_id:
+            anonymous_calls.append(call)
+        for key in ("prompt", "arguments", "input"):
+            value = item.get(key)
+            if value not in (None, "", {}, []):
+                call[key] = value
+        event_type = str(event.get("type") or "")
+        if event_type == "item.started":
+            call["started_events"] += 1
+        if event_type in {"item.completed", "item.failed", "item.cancelled"}:
+            call["terminal_events"].append(
+                {
+                    "event_type": event_type,
+                    "status": str(item.get("status") or "unknown").casefold(),
+                    "agents_states": item.get("agents_states"),
+                    "receiver_thread_ids": item.get("receiver_thread_ids"),
+                    "trace_index": event_index,
+                }
+            )
+
+    all_calls = list(calls.values()) + anonymous_calls
+    marker_calls = []
+    for call in all_calls:
+        arguments = call.get("arguments") or call.get("input") or {}
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                protocol_errors.append("primary_trace_protocol_unrecognized")
+                arguments = {}
+        prompt = call.get("prompt")
+        if not prompt and isinstance(arguments, dict):
+            prompt = arguments.get("prompt") or arguments.get("message")
+        if marker in str(prompt or ""):
+            marker_calls.append(call)
+
+    selected = all_calls[0] if len(all_calls) == 1 else {}
+    started_events = selected.get("started_events", 0)
+    terminal_events = selected.get("terminal_events", [])
+    terminal = terminal_events[0] if len(terminal_events) == 1 else {}
+    states = terminal.get("agents_states") if isinstance(terminal.get("agents_states"), dict) else {}
+    receiver_ids = terminal.get("receiver_thread_ids")
+    identities = {str(value) for value in states if str(value)}
+    if isinstance(receiver_ids, list):
+        identities.update(str(value) for value in receiver_ids if str(value))
+    child_states = agent_terminal_states(states)
+    outer_status = str(terminal.get("status") or "unknown").casefold()
+    terminal_event_type = str(terminal.get("event_type") or "")
+
+    failure_codes = list(dict.fromkeys(protocol_errors))
+    if len(all_calls) == 1 and started_events != 1:
+        failure_codes.append("primary_trace_protocol_unrecognized")
+    if len(all_calls) != 1:
+        failure_codes.append("primary_spawn_count_invalid")
+    if len(marker_calls) != 1 or len(all_calls) != 1:
+        failure_codes.append("primary_spawn_marker_invalid")
+    if (
+        len(terminal_events) != 1
+        or terminal_event_type != "item.completed"
+        or outer_status != "completed"
+    ):
+        failure_codes.append("primary_outer_collaboration_incomplete")
+    if len(identities) != 1:
+        failure_codes.append("primary_child_identity_invalid")
+    if len(states) != 1 or child_states != ["completed"]:
+        failure_codes.append("primary_child_terminal_state_invalid")
+    return {
+        "passed": not failure_codes,
+        "failure_codes": list(dict.fromkeys(failure_codes)),
+        "spawn_count": len(all_calls),
+        "marked_spawn_count": len(marker_calls),
+        "outer_status": outer_status,
+        "outer_terminal_event": terminal_event_type or None,
+        "child_identities": sorted(identities),
+        "child_terminal_states": child_states,
+    }
+
+
 def summarize(path: Path) -> dict[str, Any]:
     events = json_lines(path)
     runtime = "unknown"

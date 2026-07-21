@@ -25,6 +25,13 @@ import sys, time
 
 case = os.environ.get("PRIMARY_CANARY_FAKE_CASE", "happy")
 MARKER = "[eval-stage:primary-collaboration-canary]"
+log_path = os.environ.get("PRIMARY_CANARY_FAKE_LOG")
+if log_path:
+    with open(log_path, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps({
+            "argv": sys.argv[1:], "cwd": str(Path.cwd()),
+            "HOME": os.environ.get("HOME"), "CODEX_HOME": os.environ.get("CODEX_HOME"),
+        }) + "\n")
 if "--version" in sys.argv:
     print("codex-cli 0.fake")
     raise SystemExit(0)
@@ -33,6 +40,14 @@ if sys.argv[1:3] == ["features", "list"]:
         raise SystemExit(17)
     if case == "feature-unknown":
         print("unknown protocol")
+    elif case == "feature-short":
+        print("multi_agent true")
+    elif case == "feature-nonsense":
+        print("multi_agent nonsense true")
+    elif case == "feature-extra-field":
+        print("multi_agent experimental unexpected true")
+    elif case == "feature-duplicate":
+        print("multi_agent experimental true\nmulti_agent experimental true")
     elif case == "feature-false":
         print("multi_agent experimental false")
     else:
@@ -48,6 +63,10 @@ if case == "runtime-timeout":
 if case == "runtime-nonzero":
     print(json.dumps({"type": "error", "message": "fake failure"}))
     raise SystemExit(9)
+if case == "runtime-repo-missing":
+    import shutil
+    shutil.rmtree(cwd)
+    raise SystemExit(0)
 if case == "tracked-write":
     (cwd / "CANARY_INPUT.md").write_text("modified")
 if case == "committed-write":
@@ -77,6 +96,11 @@ if case in {"no-spawn", "prose-only"}:
     print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "I delegated successfully"}}))
     raise SystemExit(0)
 
+if case == "malformed-jsonl":
+    print("{malformed")
+if case == "nonobject-jsonl":
+    print(json.dumps(["not", "an", "event"]))
+
 marker = "[eval-stage:wrong]" if case == "wrong-marker" else MARKER
 terminal_type = "item.failed" if case == "outer-failed" else "item.completed"
 outer = "failed" if case == "outer-failed" else "completed"
@@ -84,10 +108,15 @@ states = {"child-1": {"status": "completed"}}
 receivers = ["child-1"]
 if case == "child-failed": states = {"child-1": {"status": "failed"}}
 if case == "child-running": states = {"child-1": {"status": "running"}}
+if case == "child-cancelled": states = {"child-1": {"status": "cancelled"}}
+if case == "child-timed-out": states = {"child-1": {"status": "timed-out"}}
 if case == "multiple-child":
     states = {"child-1": {"status": "completed"}, "child-2": {"status": "completed"}}
     receivers = ["child-1", "child-2"]
 print(json.dumps(event("item.started", "spawn-1", marker, "in_progress")))
+if case == "duplicate-start-same-id":
+    print(json.dumps(event("item.started", "spawn-1", marker, "in_progress")))
+if case == "item-failed-completed-payload": terminal_type, outer = "item.failed", "completed"
 print(json.dumps(event(terminal_type, "spawn-1", marker, outer, states, receivers)))
 if case == "multiple-spawn":
     print(json.dumps(event("item.completed", "spawn-2", marker, "completed", {"child-2": {"status": "completed"}}, ["child-2"])))
@@ -106,12 +135,14 @@ def invoke(
     run_id: str | None = None,
     timeout: int = 2,
     ambient_codex_home: Path | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     run_id = run_id or case
     env = os.environ.copy()
     env["PRIMARY_CANARY_FAKE_CASE"] = case
     if ambient_codex_home is not None:
         env["CODEX_HOME"] = str(ambient_codex_home)
+    env.update(extra_env or {})
     result = subprocess.run(
         [
             sys.executable, str(RUNNER), "--output", str(root), "--run-id", run_id,
@@ -156,20 +187,31 @@ def main() -> None:
             "feature-nonzero": "primary_feature_probe_failed",
             "feature-unknown": "primary_feature_protocol_unrecognized",
             "feature-false": "primary_multi_agent_unavailable",
+            "feature-short": "primary_feature_protocol_unrecognized",
+            "feature-nonsense": "primary_feature_protocol_unrecognized",
+            "feature-extra-field": "primary_feature_protocol_unrecognized",
+            "feature-duplicate": "primary_feature_protocol_unrecognized",
             "no-spawn": "primary_spawn_count_invalid",
             "wrong-marker": "primary_spawn_marker_invalid",
             "outer-failed": "primary_outer_collaboration_incomplete",
             "child-failed": "primary_child_terminal_state_invalid",
             "child-running": "primary_child_terminal_state_invalid",
+            "child-cancelled": "primary_child_terminal_state_invalid",
+            "child-timed-out": "primary_child_terminal_state_invalid",
             "multiple-child": "primary_child_identity_invalid",
             "multiple-spawn": "primary_spawn_count_invalid",
             "prose-only": "primary_spawn_count_invalid",
             "runtime-nonzero": "runtime_exit_nonzero",
             "runtime-timeout": "runtime_timeout",
+            "malformed-jsonl": "primary_trace_protocol_unrecognized",
+            "nonobject-jsonl": "primary_trace_protocol_unrecognized",
+            "item-failed-completed-payload": "primary_outer_collaboration_incomplete",
+            "duplicate-start-same-id": "primary_trace_protocol_unrecognized",
             "tracked-write": "primary_repository_write_set_nonempty",
             "committed-write": "primary_repository_write_set_nonempty",
             "untracked-write": "primary_repository_write_set_nonempty",
             "symlink-write": "primary_repository_write_set_nonempty",
+            "runtime-repo-missing": "runtime_workspace_restore_failed",
         }
         for case, expected_code in expected.items():
             result, attempt = invoke(
@@ -190,6 +232,17 @@ def main() -> None:
             attempt = root / "evidence" / case / "attempt-001"
             evidence = load(attempt / "repository-evidence.json")
             assert evidence[key], (case, evidence)
+
+        missing_result, missing_attempt = invoke(
+            root / "evidence", root / "missing-codex", "happy", run_id="binary-missing"
+        )
+        assert missing_result.returncode == 1
+        assert "runtime_version_failed" in load(missing_attempt / "result.json")["failure_codes"]
+
+        missing_repo_attempt = root / "evidence/runtime-repo-missing/attempt-001"
+        assert (missing_repo_attempt / "grader-output.json").is_file()
+        assert (missing_repo_attempt / "result.json").is_file()
+        assert (missing_repo_attempt / "fixture/CANARY_INPUT.md").is_file()
 
         secret_auth = "AUTH_SECRET_MUST_NOT_ENTER_EVIDENCE"
         secret_config = "CONFIG_SECRET_MUST_NOT_ENTER_EVIDENCE"
@@ -221,6 +274,131 @@ def main() -> None:
         adapter_source = (PROFILE_RUNNER.parent / "primary_runtime.py").read_text(encoding="utf-8")
         assert adapter_source.count('"--ask-for-approval"') == 1
         assert adapter_source.count('"workspace-write"') == 1
+        canary_source = RUNNER.read_text(encoding="utf-8")
+        assert "from trace_evidence import grade_primary_collaboration_canary" in canary_source
+        assert "def grade_trace(" not in canary_source
+
+        shared_log = root / "shared-adapter-invocations.jsonl"
+        result, shared_canary = invoke(
+            root / "evidence", fake, "happy", run_id="shared-adapter",
+            extra_env={"PRIMARY_CANARY_FAKE_LOG": str(shared_log)},
+        )
+        assert result.returncode == 0
+        profile_output = root / "profile-evidence"
+        profile_env = os.environ.copy()
+        profile_env.update({
+            "PRIMARY_CANARY_FAKE_CASE": "happy",
+            "PRIMARY_CANARY_FAKE_LOG": str(shared_log),
+        })
+        profile = subprocess.run(
+            [
+                sys.executable, str(PROFILE_RUNNER), "--output", str(profile_output),
+                "--run-id", "shared-adapter", "--scenario", "architecture-native-ownership",
+                "--treatment-ref", "HEAD", "--ablation-ref", "HEAD", "--runtime", "primary",
+                "--model", "fake-primary", "--reasoning-effort", "medium", "--timeout", "2",
+                "--primary-bin", str(fake), "--variant", "treatment",
+            ],
+            cwd=ROOT, env=profile_env, text=True, capture_output=True,
+        )
+        assert profile.returncode == 1
+        profile_attempt = profile_output / "shared-adapter/architecture-native-ownership/treatment/attempt-001"
+        canary_argv = load(shared_canary / "invocation.json")["argv"]
+        profile_argv = load(profile_attempt / "invocation.json")["argv"]
+
+        def normalized_command(argv):
+            value = list(argv[:-1])
+            value[value.index("-C") + 1] = "<opaque-fixture>"
+            return value
+
+        assert normalized_command(canary_argv) == normalized_command(profile_argv)
+        model_records = [
+            json.loads(line) for line in shared_log.read_text(encoding="utf-8").splitlines()
+            if "exec" in json.loads(line)["argv"]
+        ]
+        assert len(model_records) == 2
+        for record in model_records:
+            assert Path(record["HOME"]).name == "home"
+            assert Path(record["CODEX_HOME"]).name == "codex-home"
+            assert Path(record["cwd"]).name.startswith("workspace-")
+            assert Path(record["HOME"]).parent == Path(record["CODEX_HOME"]).parent
+
+        def run_with_start_failure(module_path: Path, argv: list[str], expected_result: Path) -> None:
+            import contextlib
+            import importlib.util
+            import io
+            module_name = "startup_failure_" + module_path.stem.replace("-", "_")
+            spec = importlib.util.spec_from_file_location(module_name, module_path)
+            module = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(module)
+            original = module.PrimaryRuntimeAdapter.start
+            original_argv = sys.argv
+            def fail_start(_self):
+                raise OSError("deterministic startup failure")
+            module.PrimaryRuntimeAdapter.start = fail_start
+            sys.argv = [str(module_path), *argv]
+            try:
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    try:
+                        module.main()
+                    except SystemExit as exc:
+                        assert exc.code == 1
+            finally:
+                module.PrimaryRuntimeAdapter.start = original
+                sys.argv = original_argv
+            assert expected_result.is_file(), expected_result
+            result = load(expected_result)
+            codes = result.get("failure_codes", result.get("error_codes", []))
+            assert "primary_runtime_start_failed" in codes
+
+        startup_root = root / "startup-failure"
+        run_with_start_failure(
+            RUNNER,
+            ["--output", str(startup_root), "--run-id", "canary", "--model", "fake",
+             "--timeout", "2", "--primary-bin", str(fake)],
+            startup_root / "canary/attempt-001/result.json",
+        )
+        run_with_start_failure(
+            PROFILE_RUNNER,
+            ["--output", str(startup_root), "--run-id", "profile",
+             "--scenario", "architecture-native-ownership", "--treatment-ref", "HEAD",
+             "--ablation-ref", "HEAD", "--runtime", "primary", "--model", "fake",
+             "--timeout", "2", "--primary-bin", str(fake), "--variant", "treatment"],
+            startup_root / "profile/architecture-native-ownership/treatment/attempt-001/result.json",
+        )
+
+        sys.path.insert(0, str(PROFILE_RUNNER.parent))
+        from primary_runtime import PrimaryRuntimeAdapter
+        missing_repo_adapter = PrimaryRuntimeAdapter(
+            evidence_repo=root / "does-not-exist",
+            primary_bin=str(fake), model="fake", reasoning_effort=None, timeout=2,
+        ).start()
+        assert missing_repo_adapter.start_error_code == "primary_runtime_start_failed"
+        assert missing_repo_adapter.cleanup_succeeded is True
+        if missing_repo_adapter.runtime_root is not None:
+            assert not missing_repo_adapter.runtime_root.exists()
+        if missing_repo_adapter.workspace_root is not None:
+            assert not missing_repo_adapter.workspace_root.exists()
+
+        restore_repo = root / "restore-failure-fixture"
+        subprocess.run(["git", "init", "-q", str(restore_repo)], check=True)
+        (restore_repo / "CANARY_INPUT.md").write_text("baseline\n", encoding="utf-8")
+        restore_adapter = PrimaryRuntimeAdapter(
+            evidence_repo=restore_repo,
+            primary_bin=str(fake), model="fake", reasoning_effort=None, timeout=2,
+        ).start()
+        assert restore_adapter.started is True
+        restore_repo.write_text("blocks normal restore", encoding="utf-8")
+        cleanup_codes = restore_adapter.cleanup()
+        assert "runtime_workspace_restore_failed" in cleanup_codes
+        recovery_path = Path(restore_adapter.preserved_workspace_path)
+        assert recovery_path.parent == restore_repo.parent
+        assert (recovery_path / "CANARY_INPUT.md").is_file()
+        baseline_recovery = Path(restore_adapter.preserved_baseline_path)
+        assert baseline_recovery.parent == restore_repo.parent
+        assert (baseline_recovery / "CANARY_INPUT.md").is_file()
+        assert restore_adapter.workspace_root is not None
+        assert not restore_adapter.workspace_root.exists()
 
     print("primary collaboration canary deterministic fixture: PASS")
 

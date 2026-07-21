@@ -20,11 +20,12 @@ Run the fake-runtime fixture, which consumes no model tokens:
 bash tests/primary-collaboration-canary.sh
 ```
 
-The fixture covers feature-protocol failures, missing or malformed collaboration
-lifecycle evidence, failed or unfinished children, duplicate spawns/children,
-runtime failures and timeouts, every repository write-set class, evidence
-sanitization, append-only attempts, cleanup, and shared-adapter ownership. Existing
-Primary/Qoder profile fixtures remain covered by
+The fixture covers strict feature-protocol failures, malformed/non-object JSONL,
+contradictory terminal events, missing collaboration lifecycle evidence, failed,
+cancelled, timed-out, or unfinished children, duplicate spawns/children, binary and
+runtime startup failures, runtime timeouts, every repository write-set class, evidence
+sanitization, append-only attempts, restore/cleanup failures, and behavioral
+shared-adapter ownership. Existing Primary/Qoder profile fixtures remain covered by
 `bash tests/ultra-complementary-profiles.sh`.
 
 ## Evidence and authority
@@ -40,13 +41,19 @@ are never copied into the attempt.
 PASS requires all of the following external evidence:
 
 - `codex features list` succeeds in the exact model environment and reports
-  `multi_agent ... true` in the recognized protocol;
+  the exact current `multi_agent experimental true` row;
 - raw Codex JSONL has exactly one terminal `spawn_agent` collaboration call carrying
   `[eval-stage:primary-collaboration-canary]`;
 - the outer call and its single real child identity are completed, with no failed,
   cancelled, timed-out, or running child;
 - runtime exit is zero, tracked/committed/untracked/symlink write sets are empty, and
-  all disposable runtime paths are removed.
+  all disposable runtime paths are removed. If standard restore fails, the evaluator
+  preserves the final runtime repository at an attempt-owned recovery path and records
+  a structured failure instead of deleting the only final-state evidence.
+
+Every non-empty stdout line must be a JSON object. Malformed JSON, non-object values,
+multiple terminal events, and `item.failed`/`item.cancelled` events fail closed even if
+their payload claims `status=completed`.
 
 Root prose and model-authored ledgers are ignored. Full child response text is not a
 required trace field.

@@ -253,6 +253,7 @@ def main() -> None:
         control_snapshot = json.loads(control_path.read_text(encoding="utf-8"))
         control_path.unlink()
         prompt = (repo / "EVAL_PROMPT.md").read_text(encoding="utf-8")
+        runtime_errors: list[dict[str, object]] = []
         primary_adapter = None
         if args.runtime == "primary":
             primary_adapter = PrimaryRuntimeAdapter(
@@ -261,15 +262,25 @@ def main() -> None:
                 model=args.model,
                 reasoning_effort=args.reasoning_effort,
                 timeout=args.timeout,
-            ).start()
-            runtime_root = primary_adapter.runtime_root
-            runtime_config = primary_adapter.codex_home
-            runtime_home = primary_adapter.runtime_home
-            workspace_root = primary_adapter.workspace_root
-            runtime_repo = primary_adapter.runtime_repo
-            runtime_env = primary_adapter.env
-            assert runtime_root and runtime_config and runtime_home
-            assert workspace_root and runtime_repo and runtime_env
+            )
+            try:
+                primary_adapter.start()
+            except Exception as exc:
+                primary_adapter.start_error_code = "primary_runtime_start_failed"
+                primary_adapter.start_error_detail = exc.__class__.__name__
+                primary_adapter.cleanup()
+            if primary_adapter.start_error_code:
+                runtime_errors.append({
+                    "phase": "startup",
+                    "code": primary_adapter.start_error_code,
+                    "detail": primary_adapter.start_error_detail,
+                })
+            runtime_root = primary_adapter.runtime_root or attempt_root
+            runtime_config = primary_adapter.codex_home or attempt_root
+            runtime_home = primary_adapter.runtime_home or attempt_root
+            workspace_root = primary_adapter.workspace_root or attempt_root
+            runtime_repo = primary_adapter.runtime_repo or repo
+            runtime_env = primary_adapter.env or os.environ.copy()
         else:
             runtime_root = Path(tempfile.mkdtemp(prefix="ultra-eval-runtime-"))
             runtime_config = runtime_root / "config"
@@ -281,7 +292,6 @@ def main() -> None:
             shutil.move(str(repo), runtime_repo)
             runtime_env = os.environ.copy()
             runtime_env["HOME"] = str(runtime_home)
-        runtime_errors: list[dict[str, object]] = []
         qoder_auth = Path.home() / ".qoder" / ".auth"
         if args.runtime == "qoder":
             if qoder_auth.is_dir():
@@ -308,7 +318,7 @@ def main() -> None:
             ]
         else:
             assert primary_adapter is not None
-            command = primary_adapter.command(prompt)
+            command = primary_adapter.command(prompt) if primary_adapter.started else []
             version_command = primary_adapter.version_command()
             preflight_command = version_command
         if args.runtime == "qoder":
@@ -339,7 +349,11 @@ def main() -> None:
                 "ambient_home_isolated": True,
                 "qoder_auth_bridge_only": args.runtime == "qoder",
                 "qoder_auth_bridge_present": args.runtime == "qoder" and (runtime_config / ".auth").is_symlink(),
-                "initial_runtime_config_entries": sorted(path.name for path in runtime_config.iterdir()),
+                "initial_runtime_config_entries": (
+                    primary_adapter.initial_codex_home_entries
+                    if primary_adapter is not None
+                    else sorted(path.name for path in runtime_config.iterdir())
+                ),
                 "neutral_opaque_cwd": True,
                 **({
                     "primary_session_persistence": "temporary-codex-home",
@@ -370,7 +384,9 @@ def main() -> None:
         stdout = ""
         stderr = ""
         try:
-            if primary_adapter is not None:
+            if runtime_errors:
+                version_exit, version_stdout, version_stderr = 125, "", "runtime startup failed"
+            elif primary_adapter is not None:
                 version_probe = primary_adapter.probe(version_command)
                 version_exit = version_probe.exit_code
                 version_stdout = version_probe.stdout
@@ -477,6 +493,14 @@ def main() -> None:
                 invocation["runtime_isolation"]["primary_session_store_removed"] = (
                     primary_adapter.cleanup_succeeded
                 )
+                if primary_adapter.preserved_workspace_path is not None:
+                    invocation["runtime_isolation"]["primary_workspace_preserved"] = (
+                        primary_adapter.preserved_workspace_path
+                    )
+                if primary_adapter.preserved_baseline_path is not None:
+                    invocation["runtime_isolation"]["primary_baseline_preserved"] = (
+                        primary_adapter.preserved_baseline_path
+                    )
             else:
                 try:
                     if runtime_repo.exists() or runtime_repo.is_symlink():
