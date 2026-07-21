@@ -40,8 +40,10 @@ are never copied into the attempt.
 
 PASS requires all of the following external evidence:
 
-- `codex features list` succeeds in the exact model environment and reports
-  the exact current `multi_agent experimental true` row;
+- `codex features list` succeeds in the exact model environment, every non-empty row
+  matches the Codex feature protocol, and the exact `multi_agent` entry is enabled.
+  Codex 0.144.4 reports `multi_agent stable true`; similarly prefixed sibling entries
+  such as `multi_agent_mode` and `multi_agent_v2` are parsed independently;
 - raw Codex JSONL has exactly one terminal `spawn_agent` collaboration call carrying
   `[eval-stage:primary-collaboration-canary]`;
 - the outer call and its single real child identity are completed, with no failed,

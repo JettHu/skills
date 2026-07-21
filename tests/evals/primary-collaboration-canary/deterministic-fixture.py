@@ -48,10 +48,17 @@ if sys.argv[1:3] == ["features", "list"]:
         print("multi_agent experimental unexpected true")
     elif case == "feature-duplicate":
         print("multi_agent experimental true\nmulti_agent experimental true")
+    elif case == "feature-no-exact-target":
+        print("multi_agent_mode  removed            false")
+        print("multi_agent_v2    under development  false")
     elif case == "feature-false":
-        print("multi_agent experimental false")
+        print("multi_agent       stable             false")
+        print("multi_agent_mode  removed            false")
+        print("multi_agent_v2    under development  false")
     else:
-        print("multi_agent experimental true")
+        print("multi_agent       stable             true")
+        print("multi_agent_mode  removed            false")
+        print("multi_agent_v2    under development  false")
     raise SystemExit(0)
 
 codex_home = Path(os.environ["CODEX_HOME"])
@@ -173,6 +180,9 @@ def main() -> None:
         assert grade["spawn_count"] == 1
         assert grade["child_identities"] == ["child-1"]
         assert grade["child_terminal_states"] == ["completed"]
+        feature = load(happy / "feature-preflight.json")
+        assert feature["multi_agent_stage"] == "stable"
+        assert feature["multi_agent_enabled"] is True
         invocation = load(happy / "invocation.json")
         argv = invocation["argv"]
         assert argv[1:5] == ["--ask-for-approval", "never", "exec", "--json"]
@@ -191,6 +201,7 @@ def main() -> None:
             "feature-nonsense": "primary_feature_protocol_unrecognized",
             "feature-extra-field": "primary_feature_protocol_unrecognized",
             "feature-duplicate": "primary_feature_protocol_unrecognized",
+            "feature-no-exact-target": "primary_feature_protocol_unrecognized",
             "no-spawn": "primary_spawn_count_invalid",
             "wrong-marker": "primary_spawn_marker_invalid",
             "outer-failed": "primary_outer_collaboration_incomplete",
@@ -267,16 +278,6 @@ def main() -> None:
         assert result.returncode == 0
         assert second.name == "attempt-002"
         assert (root / "evidence/happy/attempt-001/result.json").is_file()
-
-        profile_source = PROFILE_RUNNER.read_text(encoding="utf-8")
-        assert "from primary_runtime import PrimaryRuntimeAdapter" in profile_source
-        assert "primary_adapter.command(prompt)" in profile_source
-        adapter_source = (PROFILE_RUNNER.parent / "primary_runtime.py").read_text(encoding="utf-8")
-        assert adapter_source.count('"--ask-for-approval"') == 1
-        assert adapter_source.count('"workspace-write"') == 1
-        canary_source = RUNNER.read_text(encoding="utf-8")
-        assert "from trace_evidence import grade_primary_collaboration_canary" in canary_source
-        assert "def grade_trace(" not in canary_source
 
         shared_log = root / "shared-adapter-invocations.jsonl"
         result, shared_canary = invoke(

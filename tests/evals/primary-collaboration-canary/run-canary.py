@@ -23,6 +23,11 @@ from trace_evidence import grade_primary_collaboration_canary  # noqa: E402
 
 
 MARKER = "[eval-stage:primary-collaboration-canary]"
+FEATURE_LINE = re.compile(
+    r"(?P<name>[a-z][a-z0-9_]*)\s+"
+    r"(?P<stage>stable|experimental|removed|under\s+development)\s+"
+    r"(?P<enabled>true|false)"
+)
 PROMPT = f"""You are the Root Agent in an isolated Primary collaboration runtime canary.
 
 This task is self-contained. Do exactly the following:
@@ -131,18 +136,20 @@ def classify_features(exit_code: int, stdout: str) -> dict[str, object]:
         return result
     candidates: list[re.Match[str]] = []
     for line in stdout.splitlines():
-        if not line.strip().startswith("multi_agent"):
+        if not line.strip():
             continue
-        match = re.fullmatch(r"multi_agent\s+experimental\s+(true|false)", line.strip())
+        match = FEATURE_LINE.fullmatch(line.strip())
         if match is None:
             result["error_code"] = "primary_feature_protocol_unrecognized"
             return result
-        candidates.append(match)
+        if match.group("name") == "multi_agent":
+            candidates.append(match)
     if len(candidates) != 1:
         result["error_code"] = "primary_feature_protocol_unrecognized"
         return result
     result["multi_agent_recognized"] = True
-    result["multi_agent_enabled"] = candidates[0].group(1) == "true"
+    result["multi_agent_stage"] = " ".join(candidates[0].group("stage").split())
+    result["multi_agent_enabled"] = candidates[0].group("enabled") == "true"
     if result["multi_agent_enabled"] is not True:
         result["error_code"] = "primary_multi_agent_unavailable"
         return result
