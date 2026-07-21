@@ -43,7 +43,9 @@ PASS requires all of the following external evidence:
 - `codex features list` succeeds in the exact model environment, every non-empty row
   matches the Codex feature protocol, and the exact `multi_agent` entry is enabled.
   Codex 0.144.4 reports `multi_agent stable true`; similarly prefixed sibling entries
-  such as `multi_agent_mode` and `multi_agent_v2` are parsed independently;
+  such as `multi_agent_mode` and `multi_agent_v2` are parsed independently. Recognized
+  lifecycle values are `stable`, `experimental`, `removed`, `deprecated`, and
+  `under development`; unknown lifecycle values fail closed;
 - raw Codex JSONL has exactly one terminal `spawn_agent` collaboration call carrying
   `[eval-stage:primary-collaboration-canary]`;
 - the outer call and its single real child identity are completed, with no failed,
@@ -59,6 +61,10 @@ their payload claims `status=completed`.
 
 Root prose and model-authored ledgers are ignored. Full child response text is not a
 required trace field.
+
+The complete token-free Codex 0.144.4 feature snapshot used to verify this parser is
+kept in `.evals/primary-collaboration-canary/20260721-codex-0144-features-full.txt`;
+the fake fixture includes representative rows from every observed lifecycle category.
 
 ## Gated real invocation
 

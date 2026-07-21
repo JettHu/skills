@@ -44,6 +44,8 @@ if sys.argv[1:3] == ["features", "list"]:
         print("multi_agent true")
     elif case == "feature-nonsense":
         print("multi_agent nonsense true")
+    elif case == "feature-unknown-lifecycle":
+        print("multi_agent       future            true")
     elif case == "feature-extra-field":
         print("multi_agent experimental unexpected true")
     elif case == "feature-duplicate":
@@ -59,6 +61,9 @@ if sys.argv[1:3] == ["features", "list"]:
         print("multi_agent       stable             true")
         print("multi_agent_mode  removed            false")
         print("multi_agent_v2    under development  false")
+        print("use_legacy_landlock    deprecated false")
+        print("web_search_cached      deprecated false")
+        print("web_search_request     deprecated false")
     raise SystemExit(0)
 
 codex_home = Path(os.environ["CODEX_HOME"])
@@ -199,6 +204,7 @@ def main() -> None:
             "feature-false": "primary_multi_agent_unavailable",
             "feature-short": "primary_feature_protocol_unrecognized",
             "feature-nonsense": "primary_feature_protocol_unrecognized",
+            "feature-unknown-lifecycle": "primary_feature_protocol_unrecognized",
             "feature-extra-field": "primary_feature_protocol_unrecognized",
             "feature-duplicate": "primary_feature_protocol_unrecognized",
             "feature-no-exact-target": "primary_feature_protocol_unrecognized",

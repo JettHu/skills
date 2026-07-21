@@ -25,7 +25,7 @@ from trace_evidence import grade_primary_collaboration_canary  # noqa: E402
 MARKER = "[eval-stage:primary-collaboration-canary]"
 FEATURE_LINE = re.compile(
     r"(?P<name>[a-z][a-z0-9_]*)\s+"
-    r"(?P<stage>stable|experimental|removed|under\s+development)\s+"
+    r"(?P<stage>stable|experimental|removed|deprecated|under\s+development)\s+"
     r"(?P<enabled>true|false)"
 )
 PROMPT = f"""You are the Root Agent in an isolated Primary collaboration runtime canary.
