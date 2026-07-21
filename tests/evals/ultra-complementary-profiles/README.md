@@ -1,5 +1,31 @@
 # Ultra Complementary Profiles Eval Harness
 
+## Prospective acceptance policy
+
+Ticket 20's required model-adherence gate is frozen in
+[`acceptance-policy-v1.json`](acceptance-policy-v1.json). Version 1 is prospective
+only: attempts that began before the Git commit containing that byte-identical policy
+are diagnostic evidence and cannot satisfy its gate. Any policy change requires a new
+version and new run IDs; results do not migrate between policy versions.
+
+Before the first model call, write a durable pre-run manifest that pins the accepted
+policy commit and file hash, the independently reviewed treatment ref, the policy's
+fixed ablation ref, all run IDs, models, settings, scenarios, and timeout. The manifest
+does not amend the policy. A behavioral attempt is never retried after its model has
+started. A failure before model start may be retried only under a new attempt ID while
+preserving the failed attempt.
+
+The reference model must pass every declared treatment. The three heterogeneous
+sentinels exercise the highest-risk ownership and context-sufficiency scenarios; two
+of three must pass each scenario in addition to the reference pass. This prospective
+quorum tolerates one model-specific limitation while requiring a majority across all
+preselected sentinels. Every sentinel still runs and remains evidence. The phase order
+and stop rule prevent later cells from being used to rescue an earlier failed gate.
+
+The policy's Codex CLI classification is an exclusion caused by an unavailable
+delegation capability, not a passing result. Version 1 supports Qoder adherence claims
+only and cannot be cited as evidence for Codex CLI delegation behavior.
+
 ## Practical threat model and authority boundary
 
 This harness evaluates a cooperative-but-fallible Agent. The Agent may inspect files

@@ -7,12 +7,95 @@ trap 'rm -rf "$TMP"' EXIT
 
 python3 - "$REPO_ROOT" <<'PY'
 from pathlib import Path
+import json
 import importlib.util
 import sys
 
 repo = Path(sys.argv[1])
 core = (repo / "skills/engineering/ultra/SKILL.md").read_text(encoding="utf-8")
 profiles = (repo / "skills/engineering/ultra/PROFILES.md").read_text(encoding="utf-8")
+policy_path = repo / "tests/evals/ultra-complementary-profiles/acceptance-policy-v1.json"
+policy = json.loads(policy_path.read_text(encoding="utf-8"))
+assert policy["schema_version"] == 1
+assert policy["policy_id"] == "ticket-20-qoder-prospective-v1"
+assert policy["effective_scope"] == {
+    "mode": "prospective-only",
+    "starts_after": "git-commit-containing-this-policy",
+    "historical_attempts": "diagnostic-only-non-gating",
+    "change_rule": "new-policy-version-and-new-run-ids",
+}
+assert policy["runtime"]["required"] == "qoder"
+assert policy["runtime"]["codex_cli"] == {
+    "status": "unavailable-for-delegation-evaluation",
+    "counts_as_pass": False,
+    "claim_delegation_coverage": False,
+    "reentry_gate": "dedicated-capability-canary-must-pass",
+}
+assert policy["refs"] == {
+    "ablation": "b196b40def10579a17326b3b8a0fbc04cb513907",
+    "treatment": "pin-independently-reviewed-implementation-sha-in-pre-run-manifest",
+}
+assert policy["reference"] == {
+    "model": "Qwen3.8-Max-Preview",
+    "reasoning_effort": "default",
+    "context_window": 1000000,
+    "treatments": [
+        "architecture-native-ownership",
+        "diagnosis-feedback-loop-first",
+        "spec-independent-code-trigger",
+        "tickets-review-publication",
+        "short-evidence-complete",
+        "long-stale-context",
+    ],
+    "ablations": ["architecture-native-ownership"],
+}
+assert policy["sentinels"] == [
+    {"model": "Qwen3.7-Plus", "reasoning_effort": "default", "context_window": 1000000},
+    {"model": "DeepSeek-V4-Flash", "reasoning_effort": "max", "context_window": 1000000},
+    {"model": "MiniMax-M3", "reasoning_effort": "default", "context_window": 1000000},
+]
+assert policy["sentinel_treatments"] == [
+    "architecture-native-ownership",
+    "short-evidence-complete",
+    "long-stale-context",
+]
+assert policy["gates"]["reference_all_treatments_must_pass"] is True
+assert policy["gates"]["sentinel_quorum"] == {
+    "required": 2,
+    "total": 3,
+    "applies_per_scenario": True,
+    "reference_must_also_pass": True,
+}
+assert policy["gates"]["architecture_attribution"] == {
+    "required": True,
+    "treatment_must_pass": True,
+    "ablation_final_state_must_be_valid": True,
+    "repository_artifact_validation_tracker_and_write_set_must_pass": True,
+    "required_difference": "extra_exploration_call",
+    "allowed_ablation_failure_codes": [
+        "duplicate_evidence_goal", "extra_exploration_call",
+    ],
+    "no_other_failures": True,
+}
+assert policy["attempt_policy"]["model_started_attempts_per_cell"] == 1
+assert policy["attempt_policy"]["retry_after_model_start"] is False
+assert policy["attempt_policy"]["pre_model_infrastructure_retry"] == {
+    "allowed": True,
+    "requires_new_attempt_id": True,
+    "preserve_failed_attempt": True,
+}
+assert policy["execution_order"] == [
+    "reference-architecture-treatment-and-ablation",
+    "sentinel-architecture-treatments",
+    "reference-and-sentinel-long-stale-treatments",
+    "reference-and-sentinel-short-complete-treatments",
+    "remaining-reference-core-treatments",
+]
+assert policy["stop_after_failed_phase"] is True
+assert policy["timeout_seconds"] == 1800
+assert policy["evidence"]["pre_run_manifest_required"] is True
+assert policy["evidence"]["historical_attempts_may_satisfy_gate"] is False
+assert policy["optional_non_gating_models"] == ["Peach-07-17-DogFooding"]
 prepare_path = repo / "tests/evals/ultra-complementary-profiles/prepare-fixture.py"
 prepare_source = prepare_path.read_text(encoding="utf-8")
 spec = importlib.util.spec_from_file_location("complementary_prepare", prepare_path)
