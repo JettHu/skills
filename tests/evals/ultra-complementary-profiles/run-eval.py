@@ -268,9 +268,16 @@ def main() -> None:
 
     policy_manifest: dict | None = None
     policy_cells: dict[str, dict] = {}
+    policy_state_root: Path | None = None
     if args.canonical_manifest:
+        canonical_manifest_path = args.canonical_manifest.resolve()
+        policy_state_root = args.policy_state.resolve()
+        if canonical_manifest_path != output.parent / "canonical-manifest.json":
+            raise SystemExit("canonical policy manifest must be the authority for this runs directory")
+        if policy_state_root != output.parent / "attempt-state":
+            raise SystemExit("policy state must be the canonical manifest sibling attempt-state directory")
         try:
-            policy_manifest = json.loads(args.canonical_manifest.read_text(encoding="utf-8"))
+            policy_manifest = json.loads(canonical_manifest_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise SystemExit("cannot read canonical policy manifest") from exc
         if not isinstance(policy_manifest, dict):
@@ -524,13 +531,13 @@ def main() -> None:
                 if policy_manifest is not None:
                     try:
                         reserve_cell(
-                            args.policy_state.resolve(), policy_manifest, policy_cells[variant],
+                            policy_state_root, policy_manifest, policy_cells[variant],
                             variant, attempt_root,
                         )
                     except ValueError as exc:
                         raise SystemExit(str(exc)) from exc
                     append_attempt_state(
-                        args.policy_state.resolve(), policy_manifest, policy_cells[variant], variant,
+                        policy_state_root, policy_manifest, policy_cells[variant], variant,
                         "runtime_invoked", runtime_invoked=True, model_started=False,
                     )
                 invocation["runtime_invoked"] = True
@@ -599,10 +606,17 @@ def main() -> None:
         )
         if policy_manifest is not None and invocation["runtime_invoked"]:
             append_attempt_state(
-                args.policy_state.resolve(), policy_manifest, policy_cells[variant], variant,
+                policy_state_root, policy_manifest, policy_cells[variant], variant,
                 "runtime_finished",
                 runtime_invoked=True,
                 model_started=invocation["model_started"],
+            )
+        elif policy_manifest is not None:
+            append_attempt_state(
+                policy_state_root, policy_manifest, policy_cells[variant], variant,
+                "runtime_preflight_failed",
+                runtime_invoked=False,
+                model_started=False,
             )
         if runtime_errors:
             write(attempt_root / "error.json", json.dumps({"errors": runtime_errors}, indent=2) + "\n")
@@ -641,7 +655,15 @@ def main() -> None:
             "trace_passed": grade_result.get("trace_grade", {}).get("passed", False),
             "passed": not runtime_errors and run_exit == 0 and grade.returncode == 0,
             "finished_at": datetime.now(timezone.utc).isoformat(),
-            "recovery": f"rerun the same command; a new attempt directory will be created after attempt-{attempt:03d}",
+            "recovery": (
+                "cell-consumed-no-retry: runtime_invoked=true; do not create a new run ID"
+                if policy_manifest is not None and invocation["runtime_invoked"]
+                else (
+                    "pre-runtime-retry-allowed: retry the same canonical manifest after infrastructure recovery"
+                    if policy_manifest is not None
+                    else f"rerun the same command; a new attempt directory will be created after attempt-{attempt:03d}"
+                )
+            ),
         }
         write(attempt_root / "result.json", json.dumps(result_record, indent=2) + "\n")
         print(json.dumps(result_record))

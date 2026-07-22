@@ -1962,8 +1962,17 @@ for invalid_code in ("repository_validation", "scenario_write_set", "tracker_sta
         },
     }
     invalid_pair = pair_module.classify_pair(
-        run_ok,
-        {"result": {"run_exit_code": 0}, "grade": invalid_ablation_grade},
+        {
+            **run_ok,
+            "invocation": {"runtime_invoked": True, "model_started": True},
+            "trace_model_event": True,
+        },
+        {
+            "result": {"run_exit_code": 0},
+            "invocation": {"runtime_invoked": True, "model_started": True},
+            "trace_model_event": True,
+            "grade": invalid_ablation_grade,
+        },
         ["extra_exploration_call"],
         ["extra_exploration_call"],
     )
@@ -2001,9 +2010,15 @@ for variant, attempt_root, grade_value in (
             "selected_contract": pair_refs[variant],
         },
         "started_at": f"2026-07-20T00:00:0{0 if variant == 'treatment' else 1}+00:00",
+        "runtime_invoked": True,
+        "model_started": True,
     }
     (attempt_root / "invocation.json").write_text(
         json.dumps(invocation, indent=2) + "\n", encoding="utf-8"
+    )
+    (attempt_root / "raw-stdout.log").write_text(
+        '{"type":"assistant","message":{"model":"fixture-model"}}\n',
+        encoding="utf-8",
     )
     (attempt_root / "result.json").write_text(
         json.dumps({"variant": variant, "attempt": 1, "run_exit_code": 0}, indent=2) + "\n",

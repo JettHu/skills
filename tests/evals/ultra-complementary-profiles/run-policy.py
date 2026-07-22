@@ -15,6 +15,7 @@ from prospective_policy import (
     build_phase_verdict,
     cell_runtime_invoked,
     ensure_canonical_manifest,
+    first_unfinished_phase,
     load_policy,
     phase_may_start,
     validate_manifest,
@@ -79,6 +80,17 @@ def _write_pair_verdict(output: Path, cell: dict) -> None:
         raise ValueError(result.stderr or result.stdout or "cannot write phase 1 pair verdict")
 
 
+def _completed_phase_results(output: Path, cells: list[dict]) -> dict[str, dict]:
+    """Rehydrate the exact durable evidence needed by subsequent phase gates."""
+    results: dict[str, dict] = {}
+    for cell in cells:
+        if cell["variants"] == ["treatment", "ablation"]:
+            results[cell["run_id"]] = _pair_result(output, cell)
+        else:
+            results[cell["run_id"]] = _treatment_result(output, cell)
+    return results
+
+
 def _run_variant(args: argparse.Namespace, manifest_path: Path, cell: dict, variant: str) -> None:
     command = [
         sys.executable, str(EVAL_RUNNER),
@@ -129,10 +141,18 @@ def main() -> None:
     args.manifest = _read_json(manifest_path)
     validate_manifest(policy, args.manifest)
     results: dict[str, dict] = {}
+    resume_from = first_unfinished_phase(args.output, args.manifest, policy)
+    completed_phases = (
+        policy["execution_order"]
+        if resume_from is None
+        else policy["execution_order"][:policy["execution_order"].index(resume_from)]
+    )
     for phase in policy["execution_order"]:
-        phase_may_start(args.output, args.manifest, policy, phase)
         phase_cells = [cell for cell in args.manifest["cells"] if cell["phase"] == phase]
-        pre_model_failures: list[str] = []
+        if phase in completed_phases:
+            results.update(_completed_phase_results(args.output, phase_cells))
+            continue
+        phase_may_start(args.output, args.manifest, policy, phase)
         for cell in phase_cells:
             for variant in cell["variants"]:
                 if cell_runtime_invoked(
@@ -143,13 +163,10 @@ def main() -> None:
                 if not cell_runtime_invoked(
                     args.output / "attempt-state", args.manifest, cell, variant,
                 ):
-                    pre_model_failures.append(f"{cell['run_id']}/{variant}")
-                    break
-        if pre_model_failures:
-            raise SystemExit(
-                "pre-model infrastructure failure; retry with the same canonical manifest: "
-                + ", ".join(pre_model_failures)
-            )
+                    raise SystemExit(
+                        "pre-model infrastructure failure; retry with the same canonical manifest: "
+                        f"{cell['run_id']}/{variant}"
+                    )
         for cell in phase_cells:
             if cell["variants"] == ["treatment", "ablation"]:
                 _write_pair_verdict(args.output, cell)

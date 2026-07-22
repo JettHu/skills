@@ -11,12 +11,14 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 from typing import Any
 
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 MANIFEST_NAME = "canonical-manifest.json"
+CANONICAL_POLICY_PATH = HERE / "acceptance-policy-v2.json"
 _SHA = re.compile(r"[0-9a-f]{40}")
 
 
@@ -39,8 +41,11 @@ def _read_object(path: Path, label: str) -> dict[str, Any]:
 
 
 def _policy_commit(path: Path) -> str:
+    if path != CANONICAL_POLICY_PATH:
+        raise ValueError("policy path must be the canonical tracked acceptance-policy-v2.json")
+    relative = str(path.relative_to(ROOT))
     result = subprocess.run(
-        ["git", "log", "-1", "--format=%H", "--", str(path.relative_to(ROOT))],
+        ["git", "log", "-1", "--format=%H", "--", relative],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -48,12 +53,29 @@ def _policy_commit(path: Path) -> str:
     commit = result.stdout.strip()
     if not _SHA.fullmatch(commit):
         raise ValueError("policy file must be committed before a canonical manifest can be created")
+    status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--", relative],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    if status.returncode or status.stdout.strip():
+        raise ValueError("canonical policy bytes must be clean before a canonical manifest can be created")
+    blob = subprocess.run(
+        ["git", "show", f"{commit}:{relative}"],
+        cwd=ROOT,
+        capture_output=True,
+    )
+    if blob.returncode or blob.stdout != path.read_bytes():
+        raise ValueError("canonical policy bytes do not match the pinned policy commit")
     return commit
 
 
 def load_policy(path: Path) -> dict[str, Any]:
     """Load a tracked policy, retaining its immutable identity out of band."""
     path = path.resolve()
+    if path != CANONICAL_POLICY_PATH:
+        raise ValueError("policy path must be the canonical tracked acceptance-policy-v2.json")
     policy = _read_object(path, "acceptance policy")
     if policy.get("schema_version") != 2:
         raise ValueError("acceptance policy schema_version must be 2")
@@ -130,10 +152,25 @@ def _phase_plan(policy: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def _resolve_commit(ref: str, label: str) -> str:
+    if not isinstance(ref, str) or not _SHA.fullmatch(ref):
+        raise ValueError(f"{label} ref must be a committed SHA")
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    resolved = result.stdout.strip()
+    if result.returncode or resolved != ref:
+        raise ValueError(f"cannot resolve {label} ref to a commit")
+    return resolved
+
+
 def build_canonical_manifest(policy: dict[str, Any], treatment_ref: str) -> dict[str, Any]:
     """Materialize the only authority allowed to launch a v2 model cell."""
-    if not _SHA.fullmatch(treatment_ref):
-        raise ValueError("treatment ref must be a committed SHA")
+    treatment_ref = _resolve_commit(treatment_ref, "treatment")
+    ablation_ref = _resolve_commit(policy.get("refs", {}).get("ablation"), "ablation")
     cells = _phase_plan(policy)
     return {
         "schema_version": 2,
@@ -146,7 +183,7 @@ def build_canonical_manifest(policy: dict[str, Any], treatment_ref: str) -> dict
         "runtime": policy["runtime"]["required"],
         "refs": {
             "treatment": treatment_ref,
-            "ablation": policy["refs"]["ablation"],
+            "ablation": ablation_ref,
         },
         "run_ids": [cell["run_id"] for cell in cells],
         "timeout_seconds": policy["timeout_seconds"],
@@ -188,10 +225,48 @@ def _write_exclusive(path: Path, text: str) -> None:
         os.fsync(stream.fileno())
 
 
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_atomic_no_replace(path: Path, text: str) -> None:
+    """Publish a complete manifest with a no-replace link in its target directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    published = False
+    try:
+        os.fchmod(descriptor, 0o444)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError as exc:
+            raise ValueError(f"append-only evidence already exists: {path}") from exc
+        published = True
+        _fsync_directory(path.parent)
+    finally:
+        if not published or temporary.exists():
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+
+
 def write_canonical_manifest(output: Path, manifest: dict[str, Any]) -> Path:
     path = output / MANIFEST_NAME
     try:
-        _write_exclusive(path, _canonical_json(manifest))
+        _write_atomic_no_replace(path, _canonical_json(manifest))
     except ValueError as exc:
         raise ValueError("canonical manifest already exists and cannot be overwritten") from exc
     return path
@@ -224,6 +299,63 @@ def _cell_state_path(state_root: Path, manifest: dict[str, Any], cell: dict[str,
     return state_root / "cells" / f"{_cell_token(manifest, cell, variant)}.jsonl"
 
 
+def _reservation_path(state_root: Path, manifest: dict[str, Any], cell: dict[str, Any], variant: str) -> Path:
+    return state_root / "reservations" / f"{_cell_token(manifest, cell, variant)}.json"
+
+
+def _cell_runtime_finished(
+    state_root: Path, manifest: dict[str, Any], cell: dict[str, Any], variant: str,
+) -> bool:
+    return any(
+        receipt.get("event") == "runtime_finished"
+        and receipt.get("runtime_invoked") is True
+        for receipt in _state_receipts(state_root, manifest, cell, variant)
+    )
+
+
+def _assert_prior_phase_verdicts(authority_root: Path, manifest: dict[str, Any], phase_name: str) -> None:
+    execution_order = manifest.get("execution_order")
+    if not isinstance(execution_order, list) or phase_name not in execution_order:
+        raise ValueError("policy phase is not authorized by the canonical manifest")
+    for index, previous_phase in enumerate(execution_order):
+        if previous_phase == phase_name:
+            return
+        previous = _read_object(_phase_file(authority_root, previous_phase), "previous phase verdict")
+        if (
+            previous.get("manifest_sha256") != _digest(manifest)
+            or previous.get("phase") != previous_phase
+            or previous.get("phase_index") != index
+        ):
+            raise ValueError("previous phase verdict belongs to another manifest")
+        if previous.get("passed") is not True:
+            raise ValueError("policy stop rule blocks this phase after a failed phase")
+
+
+def _assert_cell_startable(
+    state_root: Path, manifest: dict[str, Any], cell: dict[str, Any], variant: str,
+) -> None:
+    authority_root = state_root.resolve().parent
+    manifest_path = authority_root / MANIFEST_NAME
+    existing_manifest = _read_object(manifest_path, "canonical manifest")
+    if existing_manifest != manifest:
+        raise ValueError("reservation state is not bound to this canonical manifest")
+    cells = manifest.get("cells")
+    if not isinstance(cells, list) or sum(candidate == cell for candidate in cells) != 1:
+        raise ValueError("cell is not authorized by the canonical manifest")
+    if variant not in cell.get("variants", []):
+        raise ValueError("variant is not authorized by the canonical cell")
+    _assert_prior_phase_verdicts(authority_root, manifest, cell.get("phase"))
+    for planned_cell in cells:
+        if planned_cell.get("phase") != cell.get("phase"):
+            continue
+        for planned_variant in planned_cell.get("variants", []):
+            if planned_cell == cell and planned_variant == variant:
+                return
+            if not _cell_runtime_finished(state_root, manifest, planned_cell, planned_variant):
+                raise ValueError("policy cell order blocks this runtime invocation")
+    raise ValueError("policy cell is not reachable from the canonical execution plan")
+
+
 def reserve_cell(
     state_root: Path,
     manifest: dict[str, Any],
@@ -232,25 +364,31 @@ def reserve_cell(
     attempt_path: Path,
 ) -> Path:
     """Reserve the model cell at the last safe point before invoking the runtime."""
-    if variant not in cell.get("variants", []):
-        raise ValueError("variant is not authorized by the canonical cell")
-    token = _cell_token(manifest, cell, variant)
-    path = state_root / "reservations" / f"{token}.json"
-    receipt = {
-        "schema_version": 2,
-        "kind": "cell_reserved",
-        "manifest_sha256": _digest(manifest),
-        "run_id": cell["run_id"],
-        "scenario": cell["scenario"],
-        "variant": variant,
-        "attempt_path": str(attempt_path),
-        "recorded_at": datetime.now(timezone.utc).isoformat(),
-    }
-    try:
-        _write_exclusive(path, _canonical_json(receipt))
-    except ValueError as exc:
-        raise ValueError("policy cell already reserved; a new run ID cannot retry it") from exc
-    return path
+    state_root = state_root.resolve()
+    lock_path = state_root / "reservation.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            _assert_cell_startable(state_root, manifest, cell, variant)
+            path = _reservation_path(state_root, manifest, cell, variant)
+            receipt = {
+                "schema_version": 2,
+                "kind": "cell_reserved",
+                "manifest_sha256": _digest(manifest),
+                "run_id": cell["run_id"],
+                "scenario": cell["scenario"],
+                "variant": variant,
+                "attempt_path": str(attempt_path),
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            }
+            try:
+                _write_exclusive(path, _canonical_json(receipt))
+            except ValueError as exc:
+                raise ValueError("policy cell already reserved; a new run ID cannot retry it") from exc
+            return path
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def append_attempt_state(
@@ -463,13 +601,43 @@ def write_phase_verdict(output: Path, verdict: dict[str, Any]) -> Path:
     return path
 
 
+def _read_completed_phase_verdict(
+    output: Path, manifest: dict[str, Any], phase_name: str, phase_index: int,
+) -> dict[str, Any] | None:
+    path = _phase_file(output, phase_name)
+    if not path.exists():
+        return None
+    verdict = _read_object(path, "phase verdict")
+    if (
+        verdict.get("manifest_sha256") != _digest(manifest)
+        or verdict.get("phase") != phase_name
+        or verdict.get("phase_index") != phase_index
+    ):
+        raise ValueError("phase verdict belongs to another manifest")
+    return verdict
+
+
+def first_unfinished_phase(output: Path, manifest: dict[str, Any], policy: dict[str, Any]) -> str | None:
+    """Return the first resumable phase after validating every durable predecessor."""
+    execution_order = policy.get("execution_order")
+    if execution_order != manifest.get("execution_order"):
+        raise ValueError("canonical manifest phase order is not policy-authorized")
+    missing_phase: str | None = None
+    for index, phase_name in enumerate(execution_order):
+        verdict = _read_completed_phase_verdict(output, manifest, phase_name, index)
+        if verdict is None:
+            if missing_phase is None:
+                missing_phase = phase_name
+            continue
+        if missing_phase is not None:
+            raise ValueError("later phase verdict exists before an unfinished phase")
+        if verdict.get("passed") is not True:
+            raise ValueError("policy stop rule blocks resumption after a failed phase")
+    return missing_phase
+
+
 def phase_may_start(output: Path, manifest: dict[str, Any], policy: dict[str, Any], phase_name: str) -> bool:
-    index = policy["execution_order"].index(phase_name)
-    if index == 0:
-        return True
-    previous = _read_object(_phase_file(output, policy["execution_order"][index - 1]), "previous phase verdict")
-    if previous.get("manifest_sha256") != _digest(manifest):
-        raise ValueError("previous phase verdict belongs to another manifest")
-    if previous.get("passed") is not True:
-        raise ValueError("policy stop rule blocks this phase after a failed phase")
+    if phase_name not in policy.get("execution_order", []):
+        raise ValueError("phase is not authorized by the policy")
+    _assert_prior_phase_verdicts(output, manifest, phase_name)
     return True

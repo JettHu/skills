@@ -75,6 +75,16 @@ def main(tmp: Path) -> None:
     }
     assert policy["evidence"]["v1_evidence"] == "permanently-non-gating"
 
+    # The runner may load only the tracked, canonical v2 authority.  A byte-for-byte
+    # copy elsewhere cannot inherit its run IDs or commit identity.
+    foreign_policy = tmp / "acceptance-policy-v2.json"
+    foreign_policy.parent.mkdir(parents=True, exist_ok=True)
+    foreign_policy.write_text(policy_path.read_text(encoding="utf-8"), encoding="utf-8")
+    expect_rejected(
+        lambda: policy_runner.load_policy(foreign_policy),
+        "canonical",
+    )
+
     treatment = "3a3e22dac7e0fdff508d5dbf4f36963381af2f40"
     manifest = policy_runner.build_canonical_manifest(policy, treatment)
     policy_runner.validate_manifest(policy, manifest)
@@ -96,6 +106,10 @@ def main(tmp: Path) -> None:
     assert len(manifest["run_ids"]) == len(set(manifest["run_ids"])) == 15
     assert all(cell["run_id"] in manifest["run_ids"] for cell in manifest["cells"])
     assert all(cell["runtime"] == "qoder" for cell in manifest["cells"])
+    expect_rejected(
+        lambda: policy_runner.build_canonical_manifest(policy, "f" * 40),
+        "cannot resolve",
+    )
 
     wrong_runtime = copy_value(manifest)
     wrong_runtime["runtime"] = "primary"
@@ -120,9 +134,28 @@ def main(tmp: Path) -> None:
     expect_rejected(lambda: policy_runner.write_canonical_manifest(output, manifest), "already exists")
     assert json.loads(manifest_path.read_text(encoding="utf-8")) == manifest
 
+    interrupted_publish = tmp / "interrupted-publish"
+    original_link = policy_runner.os.link
+
+    def fail_publish(source, destination):
+        raise OSError("simulated interrupted publish")
+
+    policy_runner.os.link = fail_publish
+    try:
+        try:
+            policy_runner.write_canonical_manifest(interrupted_publish, manifest)
+        except OSError as exc:
+            assert "interrupted publish" in str(exc)
+        else:
+            raise AssertionError("manifest publication unexpectedly succeeded")
+    finally:
+        policy_runner.os.link = original_link
+    assert not (interrupted_publish / "canonical-manifest.json").exists()
+    assert not list(interrupted_publish.glob(".canonical-manifest.json.*.tmp"))
+
     changed = copy_value(manifest)
     changed["refs"]["treatment"] = "f" * 40
-    expect_rejected(lambda: policy_runner.ensure_canonical_manifest(output, policy, changed), "already exists")
+    expect_rejected(lambda: policy_runner.ensure_canonical_manifest(output, policy, changed), "cannot resolve")
 
     no_model_trace = tmp / "no-model.jsonl"
     no_model_trace.write_text('{"type":"system","model":"runtime"}\n', encoding="utf-8")
@@ -134,7 +167,9 @@ def main(tmp: Path) -> None:
     assert policy_runner.trace_has_model_event(no_model_trace) is False
     assert policy_runner.trace_has_model_event(model_trace) is True
 
-    state = tmp / "state"
+    state_authority = tmp / "state-authority"
+    policy_runner.write_canonical_manifest(state_authority, manifest)
+    state = state_authority / "attempt-state"
     cell = manifest["cells"][0]
     policy_runner.reserve_cell(state, manifest, cell, "treatment", tmp / "attempt-preflight")
     policy_runner.append_attempt_state(
@@ -150,7 +185,9 @@ def main(tmp: Path) -> None:
     assert policy_runner.retry_allowed(state, manifest, cell, "treatment") is False
     assert policy_runner.cell_runtime_invoked(state, manifest, cell, "treatment") is True
 
-    started_state = tmp / "started-state"
+    started_authority = tmp / "started-authority"
+    policy_runner.write_canonical_manifest(started_authority, manifest)
+    started_state = started_authority / "attempt-state"
     policy_runner.reserve_cell(started_state, manifest, cell, "treatment", tmp / "attempt-started")
     policy_runner.append_attempt_state(
         started_state, manifest, cell, "treatment", "runtime_finished", runtime_invoked=True,
@@ -162,8 +199,10 @@ def main(tmp: Path) -> None:
         "already reserved",
     )
 
-    concurrent_state = tmp / "concurrent-state"
-    concurrent_cell = manifest["cells"][1]
+    concurrent_authority = tmp / "concurrent-authority"
+    policy_runner.write_canonical_manifest(concurrent_authority, manifest)
+    concurrent_state = concurrent_authority / "attempt-state"
+    concurrent_cell = cell
     barrier = threading.Barrier(2)
     outcomes: list[bool] = []
 
@@ -195,6 +234,44 @@ def main(tmp: Path) -> None:
     unexpected["ablation_profile_failure_codes"].append("required_stage_order")
     assert policy_runner.evaluate_architecture_pair(unexpected, allowed)["passed"] is False
 
+    pair_verdict = load_module(HERE / "pair_verdict.py", "pair_verdict")
+    no_model_treatment = {
+        "result": {"run_exit_code": 0},
+        "invocation": {"runtime_invoked": False, "model_started": False},
+        "grade": {"repository_grade": {"passed": True}, "profile_grade": {"passed": True}},
+    }
+    no_model_ablation = {
+        "result": {"run_exit_code": 0},
+        "invocation": {"runtime_invoked": False, "model_started": False},
+        "grade": {
+            "repository_grade": {"passed": True, "failure_codes": []},
+            "profile_grade": {"failure_codes": ["duplicate_evidence_goal"]},
+            "trace_grade": {"failure_codes": ["extra_exploration_call"]},
+        },
+    }
+    no_model_pair = pair_verdict.classify_pair(
+        no_model_treatment,
+        no_model_ablation,
+        allowed["allowed_ablation_failure_codes"],
+        [allowed["required_difference"]],
+    )
+    assert no_model_pair["treatment_correct"] is False
+    assert no_model_pair["ablation_evidence_valid"] is False
+
+    trace_spoof_treatment = copy_value(no_model_treatment)
+    trace_spoof_ablation = copy_value(no_model_ablation)
+    for attempt in (trace_spoof_treatment, trace_spoof_ablation):
+        attempt["invocation"] = {"runtime_invoked": True, "model_started": True}
+        attempt["trace_model_event"] = False
+    trace_spoof_pair = pair_verdict.classify_pair(
+        trace_spoof_treatment,
+        trace_spoof_ablation,
+        allowed["allowed_ablation_failure_codes"],
+        [allowed["required_difference"]],
+    )
+    assert trace_spoof_pair["treatment_correct"] is False
+    assert trace_spoof_pair["ablation_evidence_valid"] is False
+
     phase_one = policy_runner.build_phase_verdict(
         manifest,
         policy,
@@ -206,6 +283,7 @@ def main(tmp: Path) -> None:
     assert phase_path.is_file()
     expect_rejected(lambda: policy_runner.write_phase_verdict(output, phase_one), "already exists")
     assert policy_runner.phase_may_start(output, manifest, policy, "sentinel-architecture-treatments")
+    assert policy_runner.first_unfinished_phase(output, manifest, policy) == "sentinel-architecture-treatments"
 
     failed_output = tmp / "failed-phase"
     failed_pair = clean_pair(manifest["cells"][0]["run_id"])
@@ -279,9 +357,127 @@ def main(tmp: Path) -> None:
     assert [attempt.name for attempt in attempts] == ["attempt-001", "attempt-002"]
     for attempt in attempts:
         invocation = json.loads((attempt / "invocation.json").read_text(encoding="utf-8"))
+        result = json.loads((attempt / "result.json").read_text(encoding="utf-8"))
         assert invocation["runtime_invoked"] is False
         assert invocation["model_started"] is False
+        assert result["recovery"].startswith("pre-runtime-retry-allowed")
     assert not (pre_model_output / "phase-verdicts").exists()
+
+    # A completed Phase 1 is reused.  The first new pre-runtime failure stops the
+    # phase before later sentinel cells can consume their one permitted invocation.
+    resumed_output = tmp / "resumed-policy"
+    policy_runner.write_canonical_manifest(resumed_output, manifest)
+    policy_runner.write_phase_verdict(resumed_output, phase_one)
+    resumed_pair_root = (
+        resumed_output / "runs/ticket-20-v2-reference-architecture"
+        "/architecture-native-ownership"
+    )
+    resumed_pair_root.mkdir(parents=True)
+    (resumed_pair_root / "pair-verdict-resumed.json").write_text(
+        json.dumps(pair),
+        encoding="utf-8",
+    )
+    resumed = subprocess.run(
+        [
+            sys.executable, str(run_policy), "--output", str(resumed_output), "--execute",
+            "--qoder-bin", str(fake_qoder),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert resumed.returncode != 0
+    assert "pre-model infrastructure failure" in resumed.stderr
+    phase_one_attempts = list((
+        resumed_output / "runs/ticket-20-v2-reference-architecture"
+        "/architecture-native-ownership/treatment"
+    ).glob("attempt-*"))
+    assert not phase_one_attempts
+    sentinel_attempts = [
+        sorted((resumed_output / "runs" / cell["run_id"] / cell["scenario"] / "treatment").glob("attempt-*"))
+        for cell in sentinel_cells
+    ]
+    assert [len(attempts) for attempts in sentinel_attempts] == [1, 0, 0]
+
+    # Direct generic-runner calls carry the same reservation authority: neither a
+    # Phase 2 cell nor the Phase 1 ablation may cross into the runtime first.
+    marker = tmp / "generic-runtime-marker"
+    direct_qoder = tmp / "direct-qoder"
+    direct_qoder.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "from pathlib import Path\n"
+        "import sys\n"
+        f"marker = Path({str(marker)!r})\n"
+        "if '--version' in sys.argv:\n"
+        "    print('fake-qoder 1.0')\n"
+        "elif 'status' in sys.argv:\n"
+        "    print(json.dumps({'logged_in': True}))\n"
+        "elif 'agents' in sys.argv:\n"
+        "    print('2 active agents\\n\\nBuilt-in:\\n  Explore · Builtin\\n  general-purpose · Builtin')\n"
+        "elif 'skills' in sys.argv:\n"
+        "    print('No skills discovered.')\n"
+        "elif '-p' in sys.argv:\n"
+        "    marker.write_text('invoked', encoding='utf-8')\n"
+        "    print(json.dumps({'type': 'assistant', 'message': {'model': 'fake', 'content': []}}))\n"
+        "else:\n"
+        "    raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    direct_qoder.chmod(0o755)
+
+    def direct_command(authority: Path, direct_cell: dict, variant: str) -> list[str]:
+        return [
+            sys.executable, str(HERE / "run-eval.py"),
+            "--output", str(authority / "runs"),
+            "--run-id", direct_cell["run_id"],
+            "--scenario", direct_cell["scenario"],
+            "--treatment-ref", manifest["refs"]["treatment"],
+            "--ablation-ref", manifest["refs"]["ablation"],
+            "--runtime", direct_cell["runtime"],
+            "--model", direct_cell["model"],
+            "--reasoning-effort", direct_cell["reasoning_effort"],
+            "--context-window", str(direct_cell["context_window"]),
+            "--timeout", str(manifest["timeout_seconds"]),
+            "--qoder-bin", str(direct_qoder),
+            "--variant", variant,
+            "--policy-state", str(authority / "attempt-state"),
+            "--canonical-manifest", str(authority / "canonical-manifest.json"),
+        ]
+
+    phase_two_authority = tmp / "phase-two-direct"
+    policy_runner.write_canonical_manifest(phase_two_authority, manifest)
+    phase_two_cell = next(cell for cell in manifest["cells"] if cell["phase"] == sentinel_phase)
+    phase_two = subprocess.run(
+        direct_command(phase_two_authority, phase_two_cell, "treatment"),
+        capture_output=True,
+        text=True,
+    )
+    assert phase_two.returncode != 0
+    assert not marker.exists()
+
+    ablation_authority = tmp / "ablation-direct"
+    policy_runner.write_canonical_manifest(ablation_authority, manifest)
+    ablation = subprocess.run(
+        direct_command(ablation_authority, manifest["cells"][0], "ablation"),
+        capture_output=True,
+        text=True,
+    )
+    assert ablation.returncode != 0
+    assert not marker.exists()
+
+    treatment_authority = tmp / "treatment-direct"
+    policy_runner.write_canonical_manifest(treatment_authority, manifest)
+    treatment_run = subprocess.run(
+        direct_command(treatment_authority, manifest["cells"][0], "treatment"),
+        capture_output=True,
+        text=True,
+    )
+    assert treatment_run.returncode != 0
+    treatment_result = json.loads(next((
+        treatment_authority / "runs/ticket-20-v2-reference-architecture"
+        "/architecture-native-ownership/treatment"
+    ).glob("attempt-*/result.json")).read_text(encoding="utf-8"))
+    assert treatment_result["recovery"].startswith("cell-consumed-no-retry")
 
 
 if __name__ == "__main__":

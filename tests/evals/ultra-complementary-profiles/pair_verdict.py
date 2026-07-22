@@ -101,6 +101,8 @@ def classify_pair(
 ) -> dict[str, Any]:
     treatment_grade = treatment.get("grade", {})
     ablation_grade = ablation.get("grade", {})
+    treatment_invocation = treatment.get("invocation", {})
+    ablation_invocation = ablation.get("invocation", {})
     ablation_repository = ablation_grade.get("repository_grade", {})
     repository_codes = ablation_repository.get("failure_codes", [])
     if not isinstance(repository_codes, list):
@@ -117,11 +119,17 @@ def classify_pair(
     }
     treatment_correct = (
         treatment.get("result", {}).get("run_exit_code") == 0
+        and treatment_invocation.get("runtime_invoked") is True
+        and treatment_invocation.get("model_started") is True
+        and treatment.get("trace_model_event") is True
         and treatment_grade.get("repository_grade", {}).get("passed") is True
         and treatment_grade.get("profile_grade", {}).get("passed") is True
     )
     ablation_evidence_valid = (
         ablation.get("result", {}).get("run_exit_code") == 0
+        and ablation_invocation.get("runtime_invoked") is True
+        and ablation_invocation.get("model_started") is True
+        and ablation.get("trace_model_event") is True
         and all(mechanical_final_state.values())
     )
     ablation_failure_codes = list(dict.fromkeys([
@@ -178,6 +186,28 @@ def _read_grade(path: Path) -> dict[str, Any]:
     return value[0]
 
 
+def _trace_has_model_event(path: Path) -> bool:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return False
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        message = event.get("message") if isinstance(event, dict) else None
+        if (
+            isinstance(event, dict)
+            and event.get("type") == "assistant"
+            and isinstance(message, dict)
+            and isinstance(message.get("model"), str)
+            and message["model"].strip()
+        ):
+            return True
+    return False
+
+
 def load_attempt(path: Path, variant: str) -> dict[str, Any]:
     invocation = _read_json(path / "invocation.json")
     result = _read_json(path / "result.json")
@@ -208,6 +238,7 @@ def load_attempt(path: Path, variant: str) -> dict[str, Any]:
         "grade": grade,
         "control": control,
         "manifest": manifest,
+        "trace_model_event": _trace_has_model_event(path / "raw-stdout.log"),
     }
 
 
