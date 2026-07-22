@@ -13,6 +13,7 @@ from prospective_policy import (
     MANIFEST_NAME,
     build_canonical_manifest,
     build_phase_verdict,
+    cell_runtime_invoked,
     ensure_canonical_manifest,
     load_policy,
     phase_may_start,
@@ -23,6 +24,7 @@ from prospective_policy import (
 
 HERE = Path(__file__).resolve().parent
 EVAL_RUNNER = HERE / "run-eval.py"
+PAIR_VERDICT = HERE / "pair_verdict.py"
 
 
 def _read_json(path: Path) -> dict:
@@ -32,8 +34,16 @@ def _read_json(path: Path) -> dict:
     return value
 
 
+def _latest_attempt(output: Path, cell: dict, variant: str) -> Path:
+    root = output / "runs" / cell["run_id"] / cell["scenario"] / variant
+    attempts = sorted(root.glob("attempt-[0-9][0-9][0-9]"))
+    if not attempts:
+        raise ValueError(f"missing {variant} attempt for policy cell {cell['run_id']}")
+    return attempts[-1]
+
+
 def _treatment_result(output: Path, cell: dict) -> dict:
-    attempt = output / "runs" / cell["run_id"] / cell["scenario"] / "treatment" / "attempt-001"
+    attempt = _latest_attempt(output, cell, "treatment")
     invocation = _read_json(attempt / "invocation.json")
     result = _read_json(attempt / "result.json")
     grade = json.loads((attempt / "grader-stdout.json").read_text(encoding="utf-8"))[0]
@@ -56,7 +66,20 @@ def _pair_result(output: Path, cell: dict) -> dict:
     return {"run_id": cell["run_id"], **_read_json(verdicts[0])}
 
 
-def _run_cell(args: argparse.Namespace, manifest_path: Path, cell: dict) -> None:
+def _write_pair_verdict(output: Path, cell: dict) -> None:
+    root = output / "runs" / cell["run_id"] / cell["scenario"]
+    command = [
+        sys.executable, str(PAIR_VERDICT),
+        "--treatment-attempt", str(_latest_attempt(output, cell, "treatment")),
+        "--ablation-attempt", str(_latest_attempt(output, cell, "ablation")),
+        "--output", str(root),
+    ]
+    result = subprocess.run(command, text=True, capture_output=True)
+    if result.returncode:
+        raise ValueError(result.stderr or result.stdout or "cannot write phase 1 pair verdict")
+
+
+def _run_variant(args: argparse.Namespace, manifest_path: Path, cell: dict, variant: str) -> None:
     command = [
         sys.executable, str(EVAL_RUNNER),
         "--output", str(args.output / "runs"),
@@ -70,12 +93,10 @@ def _run_cell(args: argparse.Namespace, manifest_path: Path, cell: dict) -> None
         "--context-window", str(cell["context_window"]),
         "--timeout", str(args.manifest["timeout_seconds"]),
         "--qoder-bin", args.qoder_bin,
-        "--variant", "both" if cell["variants"] == ["treatment", "ablation"] else "treatment",
+        "--variant", variant,
         "--policy-state", str(args.output / "attempt-state"),
         "--canonical-manifest", str(manifest_path),
     ]
-    if cell["variants"] == ["treatment", "ablation"]:
-        command.append("--pair-verdict")
     subprocess.run(command, check=False)
 
 
@@ -111,9 +132,27 @@ def main() -> None:
     for phase in policy["execution_order"]:
         phase_may_start(args.output, args.manifest, policy, phase)
         phase_cells = [cell for cell in args.manifest["cells"] if cell["phase"] == phase]
+        pre_model_failures: list[str] = []
         for cell in phase_cells:
-            _run_cell(args, manifest_path, cell)
+            for variant in cell["variants"]:
+                if cell_runtime_invoked(
+                    args.output / "attempt-state", args.manifest, cell, variant,
+                ):
+                    continue
+                _run_variant(args, manifest_path, cell, variant)
+                if not cell_runtime_invoked(
+                    args.output / "attempt-state", args.manifest, cell, variant,
+                ):
+                    pre_model_failures.append(f"{cell['run_id']}/{variant}")
+                    break
+        if pre_model_failures:
+            raise SystemExit(
+                "pre-model infrastructure failure; retry with the same canonical manifest: "
+                + ", ".join(pre_model_failures)
+            )
+        for cell in phase_cells:
             if cell["variants"] == ["treatment", "ablation"]:
+                _write_pair_verdict(args.output, cell)
                 results[cell["run_id"]] = _pair_result(args.output, cell)
             else:
                 results[cell["run_id"]] = _treatment_result(args.output, cell)

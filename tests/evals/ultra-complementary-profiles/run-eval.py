@@ -24,8 +24,10 @@ sys.path.insert(0, str(HERE))
 from primary_runtime import PrimaryRuntimeAdapter  # noqa: E402
 from prospective_policy import (  # noqa: E402
     append_attempt_state,
+    load_policy,
     reserve_cell,
     text_has_model_event,
+    validate_manifest,
 )
 PREPARE = HERE / "prepare-fixture.py"
 GRADER = HERE / "grade-run.py"
@@ -273,6 +275,11 @@ def main() -> None:
             raise SystemExit("cannot read canonical policy manifest") from exc
         if not isinstance(policy_manifest, dict):
             raise SystemExit("canonical policy manifest must be an object")
+        try:
+            policy = load_policy(HERE / "acceptance-policy-v2.json")
+            validate_manifest(policy, policy_manifest)
+        except ValueError as exc:
+            raise SystemExit(f"canonical policy manifest is not authoritative: {exc}") from exc
         for variant in variants:
             matches = [
                 cell for cell in policy_manifest.get("cells", [])
@@ -296,7 +303,7 @@ def main() -> None:
 
     failed = False
     pair_results: dict[str, dict] = {}
-    pair_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{args.run_id}/{args.scenario}").hex if len(variants) == 2 else None
+    pair_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{args.run_id}/{args.scenario}").hex
     pair_attempt_roots: dict[str, Path] = {}
     for variant in variants:
         variant_root = output / args.run_id / args.scenario / variant

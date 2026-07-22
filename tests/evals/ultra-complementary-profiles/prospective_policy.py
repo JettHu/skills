@@ -310,6 +310,16 @@ def retry_allowed(state_root: Path, manifest: dict[str, Any], cell: dict[str, An
     )
 
 
+def cell_runtime_invoked(
+    state_root: Path, manifest: dict[str, Any], cell: dict[str, Any], variant: str,
+) -> bool:
+    """Return whether this immutable cell crossed the no-retry runtime boundary."""
+    return any(
+        receipt.get("runtime_invoked") is True
+        for receipt in _state_receipts(state_root, manifest, cell, variant)
+    )
+
+
 def text_has_model_event(text: str) -> bool:
     for line in text.splitlines():
         try:

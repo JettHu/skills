@@ -26,6 +26,28 @@ The policy's Codex CLI classification is an exclusion caused by an unavailable
 delegation capability, not a passing result. Version 1 supports Qoder adherence claims
 only and cannot be cited as evidence for Codex CLI delegation behavior.
 
+## Prospective acceptance policy v2
+
+[`acceptance-policy-v2.json`](acceptance-policy-v2.json) supersedes v1 for all future
+gating. It keeps the same Qoder reference/sentinel model matrix, reasoning settings,
+1,000,000-token context window, architecture attribution rule, and per-scenario 2/3
+quorum. Policy v1, its manifests, attempts, receipts, and verdict gaps remain
+diagnostic-only and are permanently non-gating.
+
+Use [`run-policy.py`](run-policy.py) as the only policy entrypoint. Its
+`--create-manifest` mode atomically creates exactly one `canonical-manifest.json` with
+the policy commit/hash, reviewed treatment and ablation refs, all 15 fixed run IDs,
+every model/settings/scenario cell, phase order, and timeout; an existing or incomplete
+manifest fails closed. `--execute` accepts no loose model, ref, scenario, phase, or
+timeout arguments and runs only those cells. It writes append-only state receipts,
+durable architecture pair evidence, and one durable verdict per phase. A failed phase
+prevents the next phase from starting.
+
+`runtime_invoked` is recorded before the runtime CLI is called. `model_started` becomes
+true only when the raw runtime trace contains an assistant model event. A pre-runtime
+failure may create a new attempt directory; after runtime invocation, including a trace
+without a model event, the reserved policy cell cannot be retried under another run ID.
+
 ## Practical threat model and authority boundary
 
 This harness evaluates a cooperative-but-fallible Agent. The Agent may inspect files
