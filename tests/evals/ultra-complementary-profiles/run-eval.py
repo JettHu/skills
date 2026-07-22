@@ -22,14 +22,15 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
 from primary_runtime import PrimaryRuntimeAdapter  # noqa: E402
+from prospective_policy import (  # noqa: E402
+    append_attempt_state,
+    reserve_cell,
+    text_has_model_event,
+)
 PREPARE = HERE / "prepare-fixture.py"
 GRADER = HERE / "grade-run.py"
 PAIR_VERDICT = HERE / "pair_verdict.py"
 QODER_REQUIRED_AGENTS = ("Explore", "general-purpose")
-POLICY_PATH = HERE / "acceptance-policy-v1.json"
-POLICY_COMMIT = "55be4b2fd07f8d4177480559ce7f6883b2f2bf64"
-POLICY_SHA256 = "4c9da992f2caad5575c221875c0bb222f8e75165146b990b1bf0b0fa71d8c0db"
-POLICY_STATE_DIR = ROOT / ".evals/ultra-complementary-profiles/policy-v1-state"
 
 
 def write(path: Path, value: str) -> None:
@@ -39,55 +40,6 @@ def write(path: Path, value: str) -> None:
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def policy_manifest_path(output: Path, run_id: str) -> Path:
-    return output / run_id / "policy-manifest.json"
-
-
-def policy_cell_key(args: argparse.Namespace, ref_shas: dict[str, str], variant: str) -> str:
-    identity = {
-        "policy_commit_sha": POLICY_COMMIT,
-        "runtime": args.runtime,
-        "model": args.model,
-        "reasoning_effort": args.reasoning_effort or "default",
-        "context_window": args.context_window,
-        "scenario": args.scenario,
-        "variant": variant,
-        "treatment_ref": ref_shas["treatment"],
-        "ablation_ref": ref_shas["ablation"],
-    }
-    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
-
-
-def write_once(path: Path, value: str) -> None:
-    """Atomically create an append-only policy evidence record."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
-    except FileExistsError:
-        raise SystemExit(f"prospective policy evidence already exists: {path}") from None
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        stream.write(value)
-        stream.flush()
-
-
-def reserve_policy_cell(
-    args: argparse.Namespace, ref_shas: dict[str, str], variant: str, attempt_root: Path,
-) -> None:
-    """Atomically reserve a policy cell; raises SystemExit if already started."""
-    key = policy_cell_key(args, ref_shas, variant)
-    receipt_path = POLICY_STATE_DIR / "started-cells" / f"{key}.json"
-    receipt = {
-        "policy_commit_sha": POLICY_COMMIT,
-        "run_id": args.run_id,
-        "model": args.model,
-        "scenario": args.scenario,
-        "variant": variant,
-        "attempt_root": str(attempt_root),
-        "reserved_at": datetime.now(timezone.utc).isoformat(),
-    }
-    write_once(receipt_path, json.dumps(receipt, indent=2) + "\n")
 
 
 def next_attempt(root: Path) -> int:
@@ -278,7 +230,17 @@ def main() -> None:
     parser.add_argument(
         "--acceptance-policy",
         type=Path,
-        help="enforce prospective acceptance policy for this run",
+        help="deprecated: v1 evidence is permanently non-gating",
+    )
+    parser.add_argument(
+        "--policy-state",
+        type=Path,
+        help="append-only v2 policy state root; requires --canonical-manifest",
+    )
+    parser.add_argument(
+        "--canonical-manifest",
+        type=Path,
+        help="the v2 canonical manifest selected by run-policy.py",
     )
     args = parser.parse_args()
     output = args.output.resolve()
@@ -291,38 +253,46 @@ def main() -> None:
         parser.error("--pair-verdict requires --variant both")
     if args.pair_verdict and args.canary_gate:
         parser.error("use --canary-gate or --pair-verdict, not both")
+    if args.acceptance_policy:
+        raise SystemExit(
+            "policy v1 is permanently non-gating; use run-policy.py with acceptance-policy-v2.json"
+        )
+    if bool(args.policy_state) != bool(args.canonical_manifest):
+        parser.error("--policy-state and --canonical-manifest must be used together")
     ref_shas = {
         "treatment": resolve_ref(args.treatment_ref),
         "ablation": resolve_ref(args.ablation_ref),
     }
 
-    prospective_policy = None
-    if args.acceptance_policy:
-        policy_file = args.acceptance_policy.resolve()
-        if not policy_file.is_file():
-            raise SystemExit(f"acceptance policy not found: {policy_file}")
-        file_digest = hashlib.sha256(policy_file.read_bytes()).hexdigest()
-        if file_digest != POLICY_SHA256:
-            raise SystemExit(
-                f"acceptance policy SHA-256 mismatch: expected {POLICY_SHA256}, got {file_digest}"
-            )
-        manifest_path = policy_manifest_path(output, args.run_id)
-        prospective_policy = {
-            "policy_commit_sha": POLICY_COMMIT,
-            "policy_file_sha256": POLICY_SHA256,
-            "run_ids": [args.run_id],
-            "models": [args.model],
-            "scenarios": [args.scenario],
-            "timeout": args.timeout,
-        }
-        if manifest_path.is_file():
-            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if existing.get("run_ids") != [args.run_id]:
-                raise SystemExit(
-                    f"policy manifest run_id mismatch: {existing.get('run_ids')} vs [{args.run_id}]"
-                )
-        else:
-            write(manifest_path, json.dumps(prospective_policy, indent=2) + "\n")
+    policy_manifest: dict | None = None
+    policy_cells: dict[str, dict] = {}
+    if args.canonical_manifest:
+        try:
+            policy_manifest = json.loads(args.canonical_manifest.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SystemExit("cannot read canonical policy manifest") from exc
+        if not isinstance(policy_manifest, dict):
+            raise SystemExit("canonical policy manifest must be an object")
+        for variant in variants:
+            matches = [
+                cell for cell in policy_manifest.get("cells", [])
+                if isinstance(cell, dict)
+                and cell.get("run_id") == args.run_id
+                and cell.get("runtime") == args.runtime
+                and cell.get("model") == args.model
+                and cell.get("reasoning_effort") == (args.reasoning_effort or "default")
+                and cell.get("context_window") == args.context_window
+                and cell.get("scenario") == args.scenario
+                and variant in cell.get("variants", [])
+            ]
+            if len(matches) != 1:
+                raise SystemExit("runtime arguments are not authorized by the canonical policy manifest")
+            policy_cells[variant] = matches[0]
+        manifest_refs = policy_manifest.get("refs", {})
+        if manifest_refs != ref_shas:
+            raise SystemExit("runtime refs are not authorized by the canonical policy manifest")
+        if policy_manifest.get("timeout_seconds") != args.timeout:
+            raise SystemExit("runtime timeout is not authorized by the canonical policy manifest")
 
     failed = False
     pair_results: dict[str, dict] = {}
@@ -467,17 +437,14 @@ def main() -> None:
             },
             "started_at": datetime.now(timezone.utc).isoformat(),
             "preflight": {"authentication_available": None, "exit_code": None},
+            "runtime_invoked": False,
             "model_started": False,
             "errors": runtime_errors,
         }
-        if prospective_policy is not None:
-            invocation["prospective_policy"] = prospective_policy
-        write(attempt_root / "invocation.json", json.dumps(invocation, indent=2) + "\n")
         timed_out = False
         run_exit = 125
         stdout = ""
         stderr = ""
-        policy_blocked = False
         try:
             if runtime_errors:
                 version_exit, version_stdout, version_stderr = 125, "", "runtime startup failed"
@@ -547,15 +514,20 @@ def main() -> None:
                             "exit_code": skill_exit,
                         })
             if not runtime_errors:
-                if prospective_policy is not None:
+                if policy_manifest is not None:
                     try:
-                        reserve_policy_cell(args, ref_shas, variant, attempt_root)
-                    except SystemExit:
-                        policy_blocked = True
-                if not policy_blocked:
-                    invocation["model_started"] = True
-                    write(attempt_root / "invocation.json", json.dumps(invocation, indent=2) + "\n")
-                if not policy_blocked and primary_adapter is not None:
+                        reserve_cell(
+                            args.policy_state.resolve(), policy_manifest, policy_cells[variant],
+                            variant, attempt_root,
+                        )
+                    except ValueError as exc:
+                        raise SystemExit(str(exc)) from exc
+                    append_attempt_state(
+                        args.policy_state.resolve(), policy_manifest, policy_cells[variant], variant,
+                        "runtime_invoked", runtime_invoked=True, model_started=False,
+                    )
+                invocation["runtime_invoked"] = True
+                if primary_adapter is not None:
                     result = primary_adapter.execute(
                         prompt,
                         stdout_path=attempt_root / "raw-stdout.log",
@@ -570,14 +542,14 @@ def main() -> None:
                             "code": result.error_code,
                             "exit_code": run_exit,
                         })
-                elif not policy_blocked:
+                else:
                     result = subprocess.run(
                         command, cwd=runtime_repo, env=runtime_env, text=True, capture_output=True,
                         timeout=args.timeout,
                     )
                     run_exit = result.returncode
                     stdout, stderr = result.stdout, result.stderr
-                if not policy_blocked and run_exit != 0:
+                if run_exit != 0:
                     if not runtime_errors or runtime_errors[-1].get("phase") != "execution":
                         runtime_errors.append({"phase": "execution", "code": "runtime_exit_nonzero", "exit_code": run_exit})
         except subprocess.TimeoutExpired as exc:
@@ -606,18 +578,25 @@ def main() -> None:
                     )
             else:
                 try:
-                    if not policy_blocked and (runtime_repo.exists() or runtime_repo.is_symlink()):
+                    if runtime_repo.exists() or runtime_repo.is_symlink():
                         shutil.move(str(runtime_repo), repo)
                 except OSError:
                     runtime_errors.append({"phase": "cleanup", "code": "runtime_workspace_restore_failed"})
                     repo.mkdir(parents=True, exist_ok=True)
                 shutil.rmtree(runtime_root, ignore_errors=True)
                 shutil.rmtree(workspace_root, ignore_errors=True)
-        if policy_blocked:
-            subprocess.run(["rm", "-rf", str(attempt_root)], capture_output=True)
-            raise SystemExit(f"prospective policy cell already started for {args.scenario}/{variant}")
         write(attempt_root / "raw-stdout.log", stdout)
         write(attempt_root / "raw-stderr.log", stderr)
+        invocation["model_started"] = (
+            invocation["runtime_invoked"] and text_has_model_event(stdout)
+        )
+        if policy_manifest is not None and invocation["runtime_invoked"]:
+            append_attempt_state(
+                args.policy_state.resolve(), policy_manifest, policy_cells[variant], variant,
+                "runtime_finished",
+                runtime_invoked=True,
+                model_started=invocation["model_started"],
+            )
         if runtime_errors:
             write(attempt_root / "error.json", json.dumps({"errors": runtime_errors}, indent=2) + "\n")
         grader_control = attempt_root / "grader-control.json"

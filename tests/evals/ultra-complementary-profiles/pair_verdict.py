@@ -101,6 +101,20 @@ def classify_pair(
 ) -> dict[str, Any]:
     treatment_grade = treatment.get("grade", {})
     ablation_grade = ablation.get("grade", {})
+    ablation_repository = ablation_grade.get("repository_grade", {})
+    repository_codes = ablation_repository.get("failure_codes", [])
+    if not isinstance(repository_codes, list):
+        repository_codes = ["repository_grade_malformed"]
+    mechanical_final_state = {
+        "repository": ablation_repository.get("passed") is True,
+        "artifact": not any(code.startswith("artifact_") for code in repository_codes),
+        "validation": not any(
+            code in {"repository_result", "repository_validation"}
+            for code in repository_codes
+        ),
+        "tracker": "tracker_status" not in repository_codes,
+        "write_set": "scenario_write_set" not in repository_codes,
+    }
     treatment_correct = (
         treatment.get("result", {}).get("run_exit_code") == 0
         and treatment_grade.get("repository_grade", {}).get("passed") is True
@@ -108,11 +122,12 @@ def classify_pair(
     )
     ablation_evidence_valid = (
         ablation.get("result", {}).get("run_exit_code") == 0
-        and ablation_grade.get("repository_grade", {}).get("passed") is True
+        and all(mechanical_final_state.values())
     )
-    ablation_failure_codes = ablation_grade.get(
-        "profile_grade", {}
-    ).get("failure_codes", [])
+    ablation_failure_codes = list(dict.fromkeys([
+        *ablation_grade.get("profile_grade", {}).get("failure_codes", []),
+        *ablation_grade.get("trace_grade", {}).get("failure_codes", []),
+    ]))
     attributable_difference = (
         treatment_correct
         and ablation_evidence_valid
@@ -133,6 +148,7 @@ def classify_pair(
     return {
         "treatment_correct": treatment_correct,
         "ablation_evidence_valid": ablation_evidence_valid,
+        "mechanical_final_state": mechanical_final_state,
         "ablation_profile_failure_codes": ablation_failure_codes,
         "allowed_ablation_failure_codes": allowed_ablation_failure_codes,
         "required_ablation_difference_codes": required_ablation_difference_codes,
