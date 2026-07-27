@@ -18,6 +18,7 @@ These tests verify that:
 from __future__ import annotations
 
 import json
+import importlib.util
 from pathlib import Path
 import sys
 import tempfile
@@ -179,11 +180,23 @@ def workflow_runtime_artifacts(
             "agentType": child["agent_type"],
             "state": child.get("state", "done"),
             "attempts": 1,
+            "transcriptPath": (
+                f"/tmp/config/projects/fixture-project/{session_id}/subagents/"
+                f"agent-{child['agent_id']}.jsonl"
+            ),
         })
     _write_json(wf_dir, "manifest.json", {
         "runId": run_id,
         "workflowName": "test-workflow",
         "status": overall_status,
+        "scriptPath": (
+            f"/tmp/workspace/.qoder/sessions/{session_id}/workflows/"
+            f"scripts/test-workflow-{run_id}.js"
+        ),
+        "outputPath": (
+            f"/tmp/workspace/.qoder/sessions/{session_id}/workflows/"
+            f"runs/{run_id}/output.json"
+        ),
         "agents": manifest_agents,
     })
 
@@ -198,7 +211,14 @@ def workflow_runtime_artifacts(
             if child.get("has_terminal", True):
                 journal_events.append({"type": "result", "key": key,
                                        "agentId": child["agent_id"],
-                                       "result": {"content": "{}"}})
+                                       "result": {
+                                           "content": "{}",
+                                           "transcriptPath": (
+                                               f"/tmp/config/projects/fixture-project/"
+                                               f"{session_id}/subagents/"
+                                               f"agent-{child['agent_id']}.jsonl"
+                                           ),
+                                       }})
         if corrupt_journal:
             _write_text(wf_dir, "journal.jsonl", "NOT-VALID-JSON\n{{bad\n")
         else:
@@ -211,8 +231,37 @@ def workflow_runtime_artifacts(
             "taskId": task_id,
             "workflowName": "test-workflow",
             "status": overall_status,
+            "transcriptDir": (
+                f"/tmp/workspace/.qoder/sessions/{session_id}/workflows/runs/{run_id}"
+            ),
+            "scriptPath": (
+                f"/tmp/workspace/.qoder/sessions/{session_id}/workflows/"
+                f"scripts/test-workflow-{run_id}.js"
+            ),
             "result": {},
         })
+
+    transcript_root = (
+        runtime_dir / "config-projects" / "fixture-project" / session_id / "subagents"
+    )
+    transcript_root.mkdir(parents=True, exist_ok=True)
+    for child in children:
+        transcript_path = transcript_root / f"agent-{child['agent_id']}.jsonl"
+        _write_jsonl(transcript_path.parent, transcript_path.name, [
+            {
+                "type": "user",
+                "message": {"content": child.get("marker_text", child["label"])},
+                "session_id": session_id,
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "model": f"child-model-{child['agent_id'][:8]}",
+                    "content": [],
+                },
+                "session_id": session_id,
+            },
+        ])
 
     return wf_dir
 
@@ -250,6 +299,10 @@ def workflow_trace_events(
         "taskId": task_id,
         "runId": run_id,
         "transcriptDir": f"/tmp/workspace/.qoder/sessions/{session_id}/workflows/runs/{run_id}",
+        "scriptPath": (
+            f"/tmp/workspace/.qoder/sessions/{session_id}/workflows/"
+            f"scripts/test-workflow-{run_id}.js"
+        ),
     })
     events.append({
         "type": "user",
@@ -296,6 +349,10 @@ def workflow_trace_events(
         "task_id": task_id,
         "tool_use_id": wf_tool_use_id,
         "status": overall_status,
+        "output_file": (
+            f"/tmp/workspace/.qoder/sessions/{session_id}/workflows/"
+            f"runs/{run_id}/output.json"
+        ),
         "session_id": session_id,
     })
     # Validation command
@@ -1154,6 +1211,11 @@ def test_background_task_id_not_model_proof(tmp: Path) -> None:
     import json as _json
     payload = _json.dumps({
         "status": "async_launched", "taskId": task_id, "runId": rid,
+        "transcriptDir": f"/tmp/workspace/.qoder/sessions/{sid}/workflows/runs/{rid}",
+        "scriptPath": (
+            f"/tmp/workspace/.qoder/sessions/{sid}/workflows/scripts/"
+            f"test-workflow-{rid}.js"
+        ),
     })
     events.append({
         "type": "user",
@@ -1185,7 +1247,11 @@ def test_background_task_id_not_model_proof(tmp: Path) -> None:
     events.append({
         "type": "system", "subtype": "task_notification",
         "task_id": task_id, "tool_use_id": "call_bgt_wf",
-        "status": "completed", "session_id": sid,
+        "status": "completed",
+        "output_file": (
+            f"/tmp/workspace/.qoder/sessions/{sid}/workflows/runs/{rid}/output.json"
+        ),
+        "session_id": sid,
     })
     events.append({
         "type": "assistant",
@@ -1355,6 +1421,13 @@ class WorkflowFixture:
             "status": "async_launched",
             "taskId": task_id,
             "runId": run_id,
+            "transcriptDir": (
+                f"/tmp/workspace/.qoder/sessions/{session_id}/workflows/runs/{run_id}"
+            ),
+            "scriptPath": (
+                f"/tmp/workspace/.qoder/sessions/{session_id}/workflows/"
+                f"scripts/test-workflow-{run_id}.js"
+            ),
         })
         events.append({
             "type": "user",
@@ -1399,6 +1472,10 @@ class WorkflowFixture:
                 "type": "system", "subtype": "task_notification",
                 "task_id": task_id, "tool_use_id": wf_tool_use_id,
                 "status": notification_status,
+                "output_file": (
+                    f"/tmp/workspace/.qoder/sessions/{session_id}/workflows/"
+                    f"runs/{run_id}/output.json"
+                ),
                 "session_id": session_id,
             })
         # Validation command
@@ -1425,6 +1502,20 @@ class WorkflowFixture:
         events = self.build_events()
         trace = _write_jsonl(self.tmp / "traces", f"fixture{self.suffix}.jsonl", events)
         return summarize(trace, workflow_runtime_root=runtime_dir)
+
+    def summarize_events(self, events: list[dict], runtime_dir: Path | None = None) -> dict:
+        """Grade one focused trace mutation through the public summarize seam."""
+        runtime_dir = runtime_dir or self.build_artifacts()
+        trace = _write_jsonl(
+            self.tmp / "traces", f"fixture{self.suffix}-mutated.jsonl", events,
+        )
+        return summarize(trace, workflow_runtime_root=runtime_dir)
+
+    def artifact_dir(self, runtime_dir: Path) -> Path:
+        return (
+            runtime_dir / ".qoder" / "sessions" / self.session_id
+            / "workflows" / "runs" / self.run_id
+        )
 
 
 # -- New [P0] red-first tests: output gating, cross-session, per-child model ---
@@ -1573,6 +1664,13 @@ def test_workflow_duplicate_journal_key_fails(tmp: Path) -> None:
         })
     _write_json(wf_dir, "manifest.json", {
         "runId": rid, "workflowName": "test", "status": "completed",
+        "scriptPath": (
+            f"/tmp/workspace/.qoder/sessions/{sid}/workflows/scripts/"
+            f"test-workflow-{rid}.js"
+        ),
+        "outputPath": (
+            f"/tmp/workspace/.qoder/sessions/{sid}/workflows/runs/{rid}/output.json"
+        ),
         "agents": manifest_agents,
     })
     # Build journal with DUPLICATE result key
@@ -1591,7 +1689,15 @@ def test_workflow_duplicate_journal_key_fails(tmp: Path) -> None:
     _write_jsonl(wf_dir, "journal.jsonl", journal_events)
     _write_json(wf_dir, "output.json", {
         "runId": rid, "taskId": _TASK_ID,
-        "workflowName": "test", "status": "completed", "result": {},
+        "workflowName": "test", "status": "completed",
+        "transcriptDir": (
+            f"/tmp/workspace/.qoder/sessions/{sid}/workflows/runs/{rid}"
+        ),
+        "scriptPath": (
+            f"/tmp/workspace/.qoder/sessions/{sid}/workflows/scripts/"
+            f"test-workflow-{rid}.js"
+        ),
+        "result": {},
     })
 
     trace = _write_jsonl(tmp / "traces", "dup-journal.jsonl",
@@ -1631,7 +1737,14 @@ def test_workflow_conflicting_terminal_event_fails(tmp: Path) -> None:
          "session_id": sid},
     ]
     import json as _json
-    payload = _json.dumps({"status": "async_launched", "taskId": task_id, "runId": rid})
+    payload = _json.dumps({
+        "status": "async_launched", "taskId": task_id, "runId": rid,
+        "transcriptDir": f"/tmp/workspace/.qoder/sessions/{sid}/workflows/runs/{rid}",
+        "scriptPath": (
+            f"/tmp/workspace/.qoder/sessions/{sid}/workflows/scripts/"
+            f"test-workflow-{rid}.js"
+        ),
+    })
     events.append({
         "type": "user", "message": {"content": [
             {"type": "tool_result", "tool_use_id": wf_tool_use_id,
@@ -1673,7 +1786,11 @@ def test_workflow_conflicting_terminal_event_fails(tmp: Path) -> None:
     events.append({
         "type": "system", "subtype": "task_notification",
         "task_id": task_id, "tool_use_id": wf_tool_use_id,
-        "status": "completed", "session_id": sid,
+        "status": "completed",
+        "output_file": (
+            f"/tmp/workspace/.qoder/sessions/{sid}/workflows/runs/{rid}/output.json"
+        ),
+        "session_id": sid,
     })
     events.append({
         "type": "assistant",
@@ -1806,6 +1923,294 @@ def test_workflow_output_missing_task_id_fails(tmp: Path) -> None:
     assert summary["agent_call_count"] == 0
 
 
+def test_workflow_tool_result_missing_session_fails(tmp: Path) -> None:
+    """Workflow tool_result without session identity must fail closed."""
+    fx = WorkflowFixture(tmp, "-result-no-session")
+    runtime_dir = fx.build_artifacts()
+    events = fx.build_events()
+    result_event = next(
+        event for event in events
+        if any(
+            item.get("type") == "tool_result"
+            and item.get("tool_use_id") == fx.wf_tool_use_id
+            for item in event.get("message", {}).get("content", [])
+            if isinstance(item, dict)
+        )
+    )
+    result_event.pop("session_id")
+    summary = fx.summarize_events(events, runtime_dir)
+    assert "workflow_tool_result_session_missing" in summary["workflow_protocol_failures"]
+    assert summary["agent_call_count"] == 0
+
+
+def test_workflow_notification_binding_is_unique_and_complete(tmp: Path) -> None:
+    """Missing/wrong/duplicate Workflow notifications must fail closed."""
+    mutations = {
+        "missing-session": lambda event: event.pop("session_id"),
+        "wrong-tool": lambda event: event.__setitem__("tool_use_id", "other-workflow"),
+    }
+    for suffix, mutate in mutations.items():
+        fx = WorkflowFixture(tmp / suffix, f"-notif-{suffix}")
+        fx.tmp.mkdir()
+        runtime_dir = fx.build_artifacts()
+        events = fx.build_events()
+        notification = next(
+            event for event in events if event.get("subtype") == "task_notification"
+        )
+        mutate(notification)
+        summary = fx.summarize_events(events, runtime_dir)
+        assert summary["workflow_protocol_failures"], suffix
+        assert summary["agent_call_count"] == 0
+
+    fx = WorkflowFixture(tmp / "duplicate", "-notif-duplicate")
+    fx.tmp.mkdir()
+    runtime_dir = fx.build_artifacts()
+    events = fx.build_events()
+    notification = next(
+        event for event in events if event.get("subtype") == "task_notification"
+    )
+    events.insert(events.index(notification) + 1, dict(notification))
+    summary = fx.summarize_events(events, runtime_dir)
+    assert "workflow_notification_count_2" in summary["workflow_protocol_failures"]
+    assert summary["agent_call_count"] == 0
+
+
+def test_workflow_duplicate_tool_result_fails(tmp: Path) -> None:
+    """A Workflow invocation has exactly one identity-bearing tool_result."""
+    fx = WorkflowFixture(tmp, "-duplicate-result")
+    runtime_dir = fx.build_artifacts()
+    events = fx.build_events()
+    result_event = next(
+        event for event in events
+        if any(
+            item.get("type") == "tool_result"
+            and item.get("tool_use_id") == fx.wf_tool_use_id
+            for item in event.get("message", {}).get("content", [])
+            if isinstance(item, dict)
+        )
+    )
+    events.insert(events.index(result_event) + 1, dict(result_event))
+    summary = fx.summarize_events(events, runtime_dir)
+    assert "workflow_tool_result_count_2" in summary["workflow_protocol_failures"]
+    assert summary["agent_call_count"] == 0
+
+
+def test_workflow_journal_requires_unique_ordered_started_and_result(tmp: Path) -> None:
+    """Every manifest journalKey has one started before one result."""
+    mutations = {
+        "missing-started": lambda rows, key: rows.__setitem__(
+            slice(None), [row for row in rows if not (
+                row.get("type") == "started" and row.get("key") == key
+            )],
+        ),
+        "duplicate-started": lambda rows, key: rows.insert(
+            1, {"type": "started", "key": key, "timestamp": 1001},
+        ),
+        "result-before-started": lambda rows, key: rows.sort(
+            key=lambda row: (
+                0 if row.get("type") == "result" and row.get("key") == key
+                else 1 if row.get("type") == "started" and row.get("key") == key
+                else 2
+            ),
+        ),
+    }
+    for suffix, mutate in mutations.items():
+        case_root = tmp / suffix
+        case_root.mkdir()
+        fx = WorkflowFixture(case_root, f"-journal-{suffix}")
+        runtime_dir = fx.build_artifacts()
+        journal_path = fx.artifact_dir(runtime_dir) / "journal.jsonl"
+        rows = [
+            json.loads(line)
+            for line in journal_path.read_text(encoding="utf-8").splitlines()
+        ]
+        mutate(rows, fx.children[0]["journal_key"])
+        _write_jsonl(journal_path.parent, journal_path.name, rows)
+        summary = fx.summarize_events(fx.build_events(), runtime_dir)
+        assert summary["workflow_protocol_failures"], suffix
+        assert summary["agent_call_count"] == 0
+
+
+def test_workflow_manifest_child_identity_fields_are_unique(tmp: Path) -> None:
+    """agentId/index/label/journalKey each identify exactly one child."""
+    for field in ("agentId", "index", "label", "journalKey"):
+        case_root = tmp / field
+        case_root.mkdir()
+        fx = WorkflowFixture(case_root, f"-identity-{field}")
+        runtime_dir = fx.build_artifacts()
+        manifest_path = fx.artifact_dir(runtime_dir) / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["agents"][1][field] = manifest["agents"][0][field]
+        _write_json(manifest_path.parent, manifest_path.name, manifest)
+        summary = fx.summarize_events(fx.build_events(), runtime_dir)
+        assert summary["workflow_protocol_failures"], field
+        assert summary["agent_call_count"] == 0
+
+
+def test_main_trace_corrupt_jsonl_fails_closed(tmp: Path) -> None:
+    """One malformed main-trace line invalidates the complete invocation."""
+    fx = WorkflowFixture(tmp, "-corrupt-main-trace")
+    runtime_dir = fx.build_artifacts()
+    trace = _write_jsonl(tmp / "traces", "corrupt-main.jsonl", fx.build_events())
+    lines = trace.read_text(encoding="utf-8").splitlines()
+    trace.write_text("\n".join([lines[0], "NOT-JSON", *lines[1:]]) + "\n",
+                     encoding="utf-8")
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    assert "main_trace_malformed_jsonl" in summary["workflow_protocol_failures"]
+    assert summary["agent_call_count"] == 0
+
+
+def test_workflow_invocation_id_must_be_nonempty_and_unique(tmp: Path) -> None:
+    """Empty, duplicate, and cross-session Workflow IDs are ambiguous."""
+    for suffix, replacement_id, replacement_session in (
+        ("empty", "", None),
+        ("duplicate", None, None),
+        ("cross-session", None, "other-session"),
+    ):
+        case = tmp / suffix
+        case.mkdir()
+        fx = WorkflowFixture(case, f"-invocation-{suffix}")
+        runtime_dir = fx.build_artifacts()
+        events = fx.build_events()
+        invocation = next(
+            event for event in events
+            if any(item.get("name") == "Workflow"
+                   for item in event.get("message", {}).get("content", [])
+                   if isinstance(item, dict))
+        )
+        duplicate = json.loads(json.dumps(invocation))
+        if replacement_id is not None:
+            duplicate["message"]["content"][0]["id"] = replacement_id
+        if replacement_session is not None:
+            duplicate["session_id"] = replacement_session
+        events.insert(events.index(invocation) + 1, duplicate)
+        summary = fx.summarize_events(events, runtime_dir)
+        assert summary["workflow_protocol_failures"], suffix
+        assert summary["agent_call_count"] == 0, suffix
+
+
+def test_workflow_artifact_symlink_fails_closed(tmp: Path) -> None:
+    """Concrete manifest/journal/output symlinks stay outside the trust boundary."""
+    for artifact in ("manifest.json", "journal.jsonl", "output.json"):
+        case = tmp / artifact.replace(".", "-")
+        case.mkdir()
+        fx = WorkflowFixture(case, f"-symlink-{artifact.split('.')[0]}")
+        runtime_dir = fx.build_artifacts()
+        path = fx.artifact_dir(runtime_dir) / artifact
+        target = case / f"outside-{artifact}"
+        path.rename(target)
+        path.symlink_to(target)
+        summary = fx.summarize_events(fx.build_events(), runtime_dir)
+        assert "workflow_artifact_symlink" in summary["workflow_protocol_failures"], artifact
+        assert summary["agent_call_count"] == 0, artifact
+
+
+def test_workflow_manifest_label_and_journal_kind_are_bound(tmp: Path) -> None:
+    """Labels bind evaluator markers; journal nested event kinds are closed."""
+    for suffix, mutate in (
+        ("label", lambda manifest, rows: manifest["agents"][0].__setitem__(
+            "label", "invented-stage"
+        )),
+        ("kind", lambda manifest, rows: rows[1]["event"].__setitem__(
+            "kind", "unknown_future_kind"
+        )),
+    ):
+        case = tmp / suffix
+        case.mkdir()
+        fx = WorkflowFixture(case, f"-binding-{suffix}")
+        runtime_dir = fx.build_artifacts()
+        artifact_dir = fx.artifact_dir(runtime_dir)
+        manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
+        rows = [json.loads(line) for line in
+                (artifact_dir / "journal.jsonl").read_text(encoding="utf-8").splitlines()]
+        mutate(manifest, rows)
+        _write_json(artifact_dir, "manifest.json", manifest)
+        _write_jsonl(artifact_dir, "journal.jsonl", rows)
+        summary = fx.summarize_events(fx.build_events(), runtime_dir)
+        assert summary["workflow_protocol_failures"], suffix
+        assert summary["agent_call_count"] == 0, suffix
+
+
+def test_workflow_calls_follow_runtime_start_order(tmp: Path) -> None:
+    """Normalized Workflow calls follow runtime starts, never manifest order."""
+    fx = WorkflowFixture(tmp, "-runtime-order")
+    runtime_dir = fx.build_artifacts()
+    events = fx.build_events()
+    child_events = events[3:12]
+    events[3:12] = child_events[3:6] + child_events[0:3] + child_events[6:9]
+    summary = fx.summarize_events(events, runtime_dir)
+    assert summary["workflow_protocol_failures"]
+    assert summary["agent_call_count"] == 0
+
+
+def test_workflow_transport_paths_must_cross_bind(tmp: Path) -> None:
+    """Transport, manifest, notification, and output paths are one identity."""
+    for suffix, mutate in (
+        ("transcript", lambda payload, notification, manifest, output:
+         payload.__setitem__("transcriptDir", "/tmp/other/run")),
+        ("script", lambda payload, notification, manifest, output:
+         manifest.__setitem__("scriptPath", "/tmp/other/script.js")),
+        ("output", lambda payload, notification, manifest, output:
+         notification.__setitem__("output_file", "/tmp/other/output.json")),
+    ):
+        case = tmp / suffix
+        case.mkdir()
+        fx = WorkflowFixture(case, f"-path-{suffix}")
+        runtime_dir = fx.build_artifacts()
+        events = fx.build_events()
+        result_event = next(event for event in events if event.get("tool_use_result"))
+        payload = json.loads(result_event["tool_use_result"]["payload"])
+        notification = next(event for event in events
+                            if event.get("subtype") == "task_notification")
+        artifact_dir = fx.artifact_dir(runtime_dir)
+        manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
+        output = json.loads((artifact_dir / "output.json").read_text(encoding="utf-8"))
+        mutate(payload, notification, manifest, output)
+        result_event["tool_use_result"]["payload"] = json.dumps(payload)
+        _write_json(artifact_dir, "manifest.json", manifest)
+        _write_json(artifact_dir, "output.json", output)
+        summary = fx.summarize_events(events, runtime_dir)
+        assert summary["workflow_protocol_failures"], suffix
+        assert summary["agent_call_count"] == 0, suffix
+
+
+def test_real_protocol_uses_journal_lifecycle_and_child_transcripts(tmp: Path) -> None:
+    """Qoder 1.0.48 need not repeat every child lifecycle in the root trace."""
+    fx = WorkflowFixture(tmp, "-real-child-transcripts")
+    runtime_dir = fx.build_artifacts()
+    events = fx.build_events(include_children=False)
+    summary = fx.summarize_events(events, runtime_dir)
+    assert summary["workflow_protocol_failures"] == []
+    assert summary["agent_call_count"] == 3
+    assert [call["task_name"] for call in summary["agent_calls"]] == [
+        child["label"] for child in fx.children
+    ]
+    assert all(call["delegated_models"] for call in summary["agent_calls"])
+
+
+def test_snapshot_preserves_symlink_and_scrubs_qoder_from_scored_repo(tmp: Path) -> None:
+    """Snapshot exposes symlink tampering and removes all Qoder write-set noise."""
+    spec = importlib.util.spec_from_file_location("run_eval_fixture", HERE / "run-eval.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    runtime_repo = tmp / "repo"
+    run_dir = runtime_repo / ".qoder/sessions/sess/workflows/runs/run"
+    run_dir.mkdir(parents=True)
+    outside = tmp / "outside.json"
+    outside.write_text("{}\n", encoding="utf-8")
+    (run_dir / "manifest.json").symlink_to(outside)
+    script = runtime_repo / ".qoder/sessions/sess/workflows/scripts/generated.js"
+    script.parent.mkdir(parents=True)
+    script.write_text("// runtime\n", encoding="utf-8")
+    evidence_root = tmp / "runtime-evidence"
+    assert module.snapshot_qoder_repo_evidence(runtime_repo, evidence_root)
+    assert (
+        evidence_root / ".qoder/sessions/sess/workflows/runs/run/manifest.json"
+    ).is_symlink()
+    assert not (runtime_repo / ".qoder").exists()
+
+
 # -- Runner -------------------------------------------------------------------
 
 def main() -> None:
@@ -1855,6 +2260,20 @@ def main() -> None:
         test_workflow_conflicting_terminal_event_fails,
         test_direct_agent_missing_role_fails,
         test_workflow_output_missing_task_id_fails,
+        # Red-first: transport and child identity must be one-to-one
+        test_workflow_tool_result_missing_session_fails,
+        test_workflow_notification_binding_is_unique_and_complete,
+        test_workflow_duplicate_tool_result_fails,
+        test_workflow_journal_requires_unique_ordered_started_and_result,
+        test_workflow_manifest_child_identity_fields_are_unique,
+        test_main_trace_corrupt_jsonl_fails_closed,
+        test_workflow_invocation_id_must_be_nonempty_and_unique,
+        test_workflow_artifact_symlink_fails_closed,
+        test_workflow_manifest_label_and_journal_kind_are_bound,
+        test_workflow_calls_follow_runtime_start_order,
+        test_workflow_transport_paths_must_cross_bind,
+        test_real_protocol_uses_journal_lifecycle_and_child_transcripts,
+        test_snapshot_preserves_symlink_and_scrubs_qoder_from_scored_repo,
     ]
     for test in tests:
         with tempfile.TemporaryDirectory(prefix="workflow-evidence-") as td:

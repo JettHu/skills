@@ -48,17 +48,20 @@ true only when the raw runtime trace contains an assistant model event. A pre-ru
 failure may create a new attempt directory; after runtime invocation, including a trace
 without a model event, the reserved policy cell cannot be retried under another run ID.
 
-## Prospective acceptance policy v3
+## Prospective acceptance policy v4
 
-[`acceptance-policy-v3.json`](acceptance-policy-v3.json) supersedes v2 for all future
-gating. Version 2 Phase 1 permanently failed (`passed=false`); its evidence, verdicts,
-and run IDs are permanently non-gating and must not be re-run, re-graded, or retried.
+[`acceptance-policy-v4.json`](acceptance-policy-v4.json) supersedes v3 for all future
+gating. Policies v1, v2, and v3 and all of their evidence remain permanently
+non-gating. Version 2 Phase 1 permanently failed (`passed=false`); its evidence,
+verdicts, and run IDs must not be re-run, re-graded, retried, or retrospectively
+accepted.
 
-Policy v3 keeps the same Qoder reference/sentinel model matrix, reasoning settings,
+Policy v4 keeps the same Qoder reference/sentinel model matrix, reasoning settings,
 1,000,000-token context window, architecture attribution rule, per-scenario 2/3 quorum,
-phase order, stop rule, and timeout as v2. All 15 run IDs are fresh `ticket-20-v3-*`
-identifiers. The only substantive change is Workflow evidence transport and
-normalization.
+phase order, stop rule, and timeout as v2. All 15 run IDs are fresh `ticket-20-v4-*`
+identifiers relative to all prior policies. The only substantive changes from v2/v3
+are the Workflow evidence transport/normalization and policy version/run IDs. Any
+future policy change requires Policy v5 and another completely fresh run-ID set.
 
 ### Workflow as a capability-equivalent delegation surface
 
@@ -68,11 +71,16 @@ child agents as equivalent to direct Agent calls for grading purposes, provided 
 Workflow supplies authoritative runtime evidence.
 
 **Authoritative runtime artifacts** (trust as runtime-owned evidence):
-- `journal.jsonl` — records each child agent's started event (agent_type, task_id,
-  prompt, stage_markers) and terminal event (completed/failed, delegated_models).
-- `transcript.jsonl` — corroborates journal agent IDs; missing transcript fails closed.
-- `output.json` — records overall status and child completion.
-- `manifest.json` — records workflow_id, session_id, run_id, and stage plan.
+- `.qoder/sessions/<session-id>/workflows/runs/<run-id>/manifest.json`
+- `.qoder/sessions/<session-id>/workflows/runs/<run-id>/journal.jsonl`
+- `.qoder/sessions/<session-id>/workflows/runs/<run-id>/output.json`
+
+The manifest and journal prove child identity and lifecycle. The raw runtime trace,
+including the strictly parsed runtime-owned child transcript captured under
+`runtime-evidence/config-projects/`, proves invocation/session binding, stage markers,
+delegated model starts, and observed ordering. Child transcript paths must agree
+between manifest and journal. A top-level Workflow completion or model-written script
+is never sufficient.
 
 **Non-authoritative model declarations** (never used as sole evidence):
 - Model-written workflow JavaScript/TypeScript scripts.
@@ -80,7 +88,7 @@ Workflow supplies authoritative runtime evidence.
 - Model response prose claiming delegation occurred.
 
 **Fail-closed conditions** (never guess or infer from prose):
-- Missing, corrupt, or unparseable journal, transcript, output, or manifest.
+- Missing, corrupt, unparseable, or symlinked manifest, journal, output, or raw trace.
 - Child agent without a terminal event in the journal (Workflow overall completed
   alone cannot substitute).
 - Runtime unavailable, trace incomplete, or parser unknown.
@@ -89,11 +97,10 @@ Workflow supplies authoritative runtime evidence.
 stage model. Stage markers, roles, execution order, command calls, and reconciliation
 with the stage ledger are graded identically regardless of delegation surface.
 
-**Write-set isolation**: Only `.qoder/sessions/<session-id>/workflows/<workflow-id>/`
-paths that match a Workflow detected in the runtime trace are excluded from the
-scenario write-set check. Any other `.qoder/**` file still triggers
-`scenario_write_set`. Workflow runtime artifacts should be snapshotted to an
-attempt-owned runtime-evidence directory outside the fixture repository when possible.
+**Write-set isolation**: Workflow metadata is snapshotted, with symlinks preserved, to
+the attempt-owned `runtime-evidence/` directory before cleanup. It is then removed
+from the fixture repository before repository/write-set grading. The grader never
+globally ignores `.qoder/**`.
 
 ## Practical threat model and authority boundary
 

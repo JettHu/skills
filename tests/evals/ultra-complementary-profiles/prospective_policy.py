@@ -20,6 +20,7 @@ ROOT = HERE.parents[2]
 MANIFEST_NAME = "canonical-manifest.json"
 CANONICAL_POLICY_PATH = HERE / "acceptance-policy-v4.json"
 _SHA = re.compile(r"[0-9a-f]{40}")
+_V4_POLICY_SHA256 = "62328f0c3bb1d23f3b65ea87ed9e64f1d1217a41bc155239e61ec8c5935f7555"
 
 
 def _canonical_json(value: object) -> str:
@@ -71,26 +72,48 @@ def _policy_commit(path: Path) -> str:
     return commit
 
 
-def load_policy(path: Path) -> dict[str, Any]:
-    """Load a tracked policy, retaining its immutable identity out of band."""
-    path = path.resolve()
-    if path != CANONICAL_POLICY_PATH:
-        raise ValueError("policy path must be the canonical tracked acceptance-policy-v4.json")
-    policy = _read_object(path, "acceptance policy")
+def validate_policy_authority(policy: dict[str, Any]) -> None:
+    """Reject any weakening or in-place revision of prospective Policy v4."""
     if policy.get("schema_version") != 4:
         raise ValueError("acceptance policy schema_version must be 4")
     if policy.get("policy_id") != "ticket-20-qoder-prospective-v4":
         raise ValueError("unrecognized prospective acceptance policy")
     if policy.get("runtime", {}).get("required") != "qoder":
         raise ValueError("policy must require the qoder runtime")
-    if policy.get("evidence", {}).get("v1_evidence") != "permanently-non-gating":
-        raise ValueError("policy must permanently exclude v1 evidence from gating")
-    if policy.get("effective_scope", {}).get("v2_evidence") != "permanently-non-gating":
-        raise ValueError("policy must permanently exclude v2 evidence from gating")
+    scope = policy.get("effective_scope", {})
+    evidence = policy.get("evidence", {})
+    if scope.get("mode") != "prospective-only":
+        raise ValueError("policy must remain prospective-only")
+    if scope.get("historical_attempts") != "diagnostic-only-non-gating":
+        raise ValueError("historical attempts must remain non-gating")
+    if scope.get("v2_phase_1_verdict") != "passed=false-non-retry-non-gating":
+        raise ValueError("v2 Phase 1 must remain failed, non-retry, and non-gating")
+    if scope.get("change_rule") != "new-policy-version-and-new-run-ids":
+        raise ValueError("policy changes require a new version and new run IDs")
+    for version in ("v1", "v2", "v3"):
+        field = f"{version}_evidence"
+        if scope.get(field) != "permanently-non-gating":
+            raise ValueError(f"policy must permanently exclude {version} evidence from gating")
+        if evidence.get(field) != "permanently-non-gating":
+            raise ValueError(f"evidence must permanently exclude {version} from gating")
+    if evidence.get("historical_attempts_may_satisfy_gate") is not False:
+        raise ValueError("historical attempts may not satisfy a gate")
+
+
+def load_policy(path: Path) -> dict[str, Any]:
+    """Load a tracked policy, retaining its immutable identity out of band."""
+    path = path.resolve()
+    if path != CANONICAL_POLICY_PATH:
+        raise ValueError("policy path must be the canonical tracked acceptance-policy-v4.json")
+    policy = _read_object(path, "acceptance policy")
+    validate_policy_authority(policy)
+    file_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    if file_sha256 != _V4_POLICY_SHA256:
+        raise ValueError("Policy v4 is immutable; publish Policy v5 with new run IDs")
     return {
         **policy,
         "_path": path,
-        "_file_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "_file_sha256": file_sha256,
         "_commit_sha": _policy_commit(path),
     }
 

@@ -75,7 +75,30 @@ def main(tmp: Path) -> None:
     }
     assert policy["evidence"]["v1_evidence"] == "permanently-non-gating"
 
-    # The runner may load only the tracked, canonical v3 authority.  A byte-for-byte
+    authority_mutations = (
+        ("prospective-only", ("effective_scope", "mode"), "retroactive"),
+        ("historical attempts", ("effective_scope", "historical_attempts"), "gating"),
+        ("v1 evidence", ("effective_scope", "v1_evidence"), "gating"),
+        ("v2 evidence", ("effective_scope", "v2_evidence"), "gating"),
+        ("v3 evidence", ("effective_scope", "v3_evidence"), "gating"),
+        ("v1", ("evidence", "v1_evidence"), "gating"),
+        ("v2", ("evidence", "v2_evidence"), "gating"),
+        ("v3", ("evidence", "v3_evidence"), "gating"),
+        ("v2 Phase 1", ("effective_scope", "v2_phase_1_verdict"), "retryable"),
+        ("new version", ("effective_scope", "change_rule"), "edit-in-place"),
+        ("historical attempts", ("evidence", "historical_attempts_may_satisfy_gate"), True),
+    )
+    for expected_error, path, replacement in authority_mutations:
+        weakened = copy_value({
+            key: value for key, value in policy.items() if not key.startswith("_")
+        })
+        weakened[path[0]][path[1]] = replacement
+        expect_rejected(
+            lambda value=weakened: policy_runner.validate_policy_authority(value),
+            expected_error,
+        )
+
+    # The runner may load only the tracked, canonical v4 authority.  A byte-for-byte
     # copy elsewhere cannot inherit its run IDs or commit identity.
     foreign_policy = tmp / "acceptance-policy-v4.json"
     foreign_policy.parent.mkdir(parents=True, exist_ok=True)
