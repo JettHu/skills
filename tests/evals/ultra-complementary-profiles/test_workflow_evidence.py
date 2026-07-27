@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import importlib.util
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 
@@ -162,6 +163,7 @@ def workflow_runtime_artifacts(
     missing_journal: bool = False,
     missing_output: bool = False,
     task_id: str = _TASK_ID,
+    wf_tool_use_id: str = _WF_TOOL_USE_ID,
 ) -> Path:
     """Write real-protocol workflow artifacts to workflows/runs/<runId>/."""
     wf_dir = runtime_dir / ".qoder" / "sessions" / session_id / "workflows" / "runs" / run_id
@@ -213,11 +215,25 @@ def workflow_runtime_artifacts(
                                        "agentId": child["agent_id"],
                                        "result": {
                                            "content": "{}",
+                                           "state": "done",
+                                           "agentId": child["agent_id"],
+                                           "agentType": child["agent_type"],
                                            "transcriptPath": (
                                                f"/tmp/config/projects/fixture-project/"
                                                f"{session_id}/subagents/"
                                                f"agent-{child['agent_id']}.jsonl"
                                            ),
+                                           "rawResult": {
+                                               "kind": "result",
+                                               "agentId": child["agent_id"],
+                                               "agentType": child["agent_type"],
+                                               "state": "completed",
+                                               "transcriptPath": (
+                                                   f"/tmp/config/projects/fixture-project/"
+                                                   f"{session_id}/subagents/"
+                                                   f"agent-{child['agent_id']}.jsonl"
+                                               ),
+                                           },
                                        }})
         if corrupt_journal:
             _write_text(wf_dir, "journal.jsonl", "NOT-VALID-JSON\n{{bad\n")
@@ -238,7 +254,7 @@ def workflow_runtime_artifacts(
                 f"/tmp/workspace/.qoder/sessions/{session_id}/workflows/"
                 f"scripts/test-workflow-{run_id}.js"
             ),
-            "result": {},
+            "result": {"state": overall_status, "runId": run_id, "taskId": task_id},
         })
 
     transcript_root = (
@@ -252,6 +268,11 @@ def workflow_runtime_artifacts(
                 "type": "user",
                 "message": {"content": child.get("marker_text", child["label"])},
                 "session_id": session_id,
+                "task_id": child["agent_id"],
+                "parent_tool_use_id": wf_tool_use_id,
+                "tool_use_id": wf_tool_use_id,
+                "agent_id": child["agent_id"],
+                "agent_type": child["agent_type"],
             },
             {
                 "type": "assistant",
@@ -260,6 +281,33 @@ def workflow_runtime_artifacts(
                     "content": [],
                 },
                 "session_id": session_id,
+                "task_id": child["agent_id"],
+                "parent_tool_use_id": wf_tool_use_id,
+                "tool_use_id": wf_tool_use_id,
+                "agent_id": child["agent_id"],
+                "agent_type": child["agent_type"],
+            },
+            {
+                "type": "system",
+                "subtype": "task_started",
+                "session_id": session_id,
+                "task_id": child["agent_id"],
+                "parent_tool_use_id": wf_tool_use_id,
+                "tool_use_id": wf_tool_use_id,
+                "agent_id": child["agent_id"],
+                "agent_type": child["agent_type"],
+                "description": child.get("marker_text", child["label"]),
+            },
+            {
+                "type": "system",
+                "subtype": "task_completed",
+                "session_id": session_id,
+                "task_id": child["agent_id"],
+                "parent_tool_use_id": wf_tool_use_id,
+                "tool_use_id": wf_tool_use_id,
+                "agent_id": child["agent_id"],
+                "agent_type": child["agent_type"],
+                "description": child.get("marker_text", child["label"]),
             },
         ])
 
@@ -1386,7 +1434,7 @@ class WorkflowFixture:
         }
         workflow_runtime_artifacts(
             runtime_dir, self.session_id, self.run_id,
-            self.children, **kwargs,
+            self.children, wf_tool_use_id=self.wf_tool_use_id, **kwargs,
         )
         return runtime_dir
 
@@ -2208,7 +2256,209 @@ def test_snapshot_preserves_symlink_and_scrubs_qoder_from_scored_repo(tmp: Path)
     assert (
         evidence_root / ".qoder/sessions/sess/workflows/runs/run/manifest.json"
     ).is_symlink()
-    assert not (runtime_repo / ".qoder").exists()
+    assert (runtime_repo / ".qoder").is_dir()
+
+
+# -- Preserved Qoder 1.0.48 protocol fixture and Ticket 20 regressions -------
+
+PRESERVED_FIXTURE = HERE / "fixtures" / "qoder-1.0.48-workflow"
+
+
+def _copy_preserved_fixture(tmp: Path) -> tuple[Path, Path]:
+    """Copy the committed, de-identified Qoder fixture into an isolated root."""
+    runtime = tmp / "runtime"
+    shutil.copytree(PRESERVED_FIXTURE / "runtime", runtime, symlinks=True)
+    trace = tmp / "traces" / "qoder-1.0.48-workflow.jsonl"
+    trace.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(PRESERVED_FIXTURE / "trace.jsonl", trace)
+    return trace, runtime
+
+
+def _preserved_expected() -> dict:
+    expected = json.loads(json.dumps(ARCHITECTURE_TRACE_EXPECTED))
+    expected["extra_exploration_calls"]["max"] = 1
+    expected["timeline_sequence"] = [
+        {"kind": "agent_marker", "value": "ultra-code-explore"},
+        {"kind": "agent_marker", "value": "target-native-explore"},
+        {"kind": "agent_marker", "value": "ultra-post-review"},
+        {"kind": "command", "value": "python3 scripts/check.py", "status": "completed"},
+    ]
+    return expected
+
+
+def test_preserved_qoder_1_0_48_fixture_passes(tmp: Path) -> None:
+    """The de-identified real-protocol fixture is a positive deterministic case."""
+    trace, runtime = _copy_preserved_fixture(tmp)
+    summary = summarize(trace, workflow_runtime_root=runtime)
+    assert summary["runtime"] == "qoder"
+    assert summary["workflow_protocol_failures"] == []
+    assert summary["agent_call_count"] == 4
+    assert all(call["delegated_models"] for call in summary["agent_calls"])
+    _, failures, codes = grade(summary, _preserved_expected())
+    assert not failures, f"preserved fixture should pass: {codes} {failures}"
+
+
+def test_workflow_manifest_output_notification_status_must_agree(tmp: Path) -> None:
+    """A successful child set cannot repair a conflicting Workflow terminal state."""
+    trace, runtime = _copy_preserved_fixture(tmp)
+    artifact = runtime / ".qoder/sessions/fixture-session/workflows/runs/fixture-run"
+    manifest = json.loads((artifact / "manifest.json").read_text())
+    manifest["status"] = "failed"
+    _write_json(artifact, "manifest.json", manifest)
+    summary = summarize(trace, workflow_runtime_root=runtime)
+    assert any("status" in failure for failure in summary["workflow_protocol_failures"])
+    assert summary["agent_call_count"] == 0
+
+
+def test_workflow_journal_result_and_raw_result_identity_must_agree(tmp: Path) -> None:
+    """Journal result and result.rawResult are both authoritative child evidence."""
+    trace, runtime = _copy_preserved_fixture(tmp)
+    journal = runtime / ".qoder/sessions/fixture-session/workflows/runs/fixture-run/journal.jsonl"
+    rows = [json.loads(line) for line in journal.read_text().splitlines()]
+    result = next(row for row in rows if row.get("type") == "result")
+    result["result"]["rawResult"]["agentType"] = "wrong-role"
+    _write_jsonl(journal.parent, journal.name, rows)
+    summary = summarize(trace, workflow_runtime_root=runtime)
+    assert any("agentType" in failure or "raw_result" in failure
+               for failure in summary["workflow_protocol_failures"])
+    assert summary["agent_call_count"] == 0
+
+
+def test_workflow_stale_renamed_or_cross_session_child_transcript_fails(tmp: Path) -> None:
+    """Transcript identity is exact; stale, renamed, and cross-session paths are rejected."""
+    for mutation in ("stale", "renamed", "cross-session"):
+        case = tmp / mutation
+        case.mkdir()
+        trace, runtime = _copy_preserved_fixture(case)
+        artifact = runtime / ".qoder/sessions/fixture-session/workflows/runs/fixture-run"
+        manifest = json.loads((artifact / "manifest.json").read_text())
+        first = manifest["agents"][0]
+        agent_id = first["agentId"]
+        if mutation == "stale":
+            first["transcriptPath"] = first["transcriptPath"].replace(
+                "/fixture-session/", "/old-session/"
+            )
+        elif mutation == "renamed":
+            first["transcriptPath"] = first["transcriptPath"].replace(
+                f"agent-{agent_id}.jsonl",
+                "agent-renamed.jsonl",
+            )
+        else:
+            first["transcriptPath"] = first["transcriptPath"].replace(
+                "/fixture-session/", "/other-session/"
+            )
+        _write_json(artifact, "manifest.json", manifest)
+        summary = summarize(trace, workflow_runtime_root=runtime)
+        assert summary["workflow_protocol_failures"], mutation
+        assert summary["agent_call_count"] == 0, mutation
+
+
+def test_validation_before_workflow_fails_unified_timeline(tmp: Path) -> None:
+    """Validation order uses main-trace positions, never journal enumerate indexes."""
+    trace, runtime = _copy_preserved_fixture(tmp)
+    events = [json.loads(line) for line in trace.read_text().splitlines()]
+    validation = [
+        event for event in events
+        if event.get("type") == "assistant"
+        and any(item.get("name") == "Bash" for item in event.get("message", {}).get("content", [])
+                if isinstance(item, dict))
+    ]
+    validation_result = [
+        event for event in events
+        if any(item.get("tool_use_id") == "fixture-validation"
+               for item in event.get("message", {}).get("content", [])
+               if isinstance(item, dict))
+    ]
+    assert validation and validation_result
+    for event in (*validation, *validation_result):
+        events.remove(event)
+    invocation = next(event for event in events if event.get("tool_use_result"))
+    events.insert(events.index(invocation), validation_result[0])
+    events.insert(events.index(invocation), validation[0])
+    _write_jsonl(trace.parent, trace.name, events)
+    summary = summarize(trace, workflow_runtime_root=runtime)
+    _, failures, codes = grade(summary, _preserved_expected())
+    assert "trace_event_order" in codes, (codes, failures)
+
+
+def test_bad_workflow_does_not_delete_independent_valid_workflow_children(tmp: Path) -> None:
+    """Invocation isolation keeps valid children while the overall grade fails."""
+    trace, runtime = _copy_preserved_fixture(tmp)
+    events = [json.loads(line) for line in trace.read_text().splitlines()]
+    bad = json.loads(json.dumps(events[1:4]))
+    # A second Workflow has its own identity but points at an invalid run.
+    bad[0]["message"]["content"][0]["id"] = "fixture-bad-workflow"
+    bad[1]["message"]["content"][0]["tool_use_id"] = "fixture-bad-workflow"
+    bad[1]["tool_use_result"]["payload"] = json.dumps({
+        "status": "async_launched", "taskId": "bad-task", "runId": "missing-run",
+        "transcriptDir": "/fixture/.qoder/sessions/fixture-session/workflows/runs/missing-run",
+        "scriptPath": "/fixture/.qoder/sessions/fixture-session/workflows/scripts/bad.js",
+    })
+    bad_notification = {
+        "type": "system", "subtype": "task_notification", "task_id": "bad-task",
+        "tool_use_id": "fixture-bad-workflow", "status": "completed",
+        "output_file": "/fixture/.qoder/sessions/fixture-session/workflows/runs/missing-run/output.json",
+        "session_id": "fixture-session",
+    }
+    events[0:0] = [bad[0], bad[1], bad_notification]
+    _write_jsonl(trace.parent, trace.name, events)
+    summary = summarize(trace, workflow_runtime_root=runtime)
+    assert summary["agent_call_count"] == 4
+    assert summary["workflow_protocol_failures"]
+    _, failures, codes = grade(summary, _preserved_expected())
+    assert "workflow_protocol_failure" in codes
+    assert failures
+
+
+def test_snapshot_rejects_qoder_sessions_and_config_projects_root_symlinks(tmp: Path) -> None:
+    """Snapshot refuses symlinked roots before any runtime cleanup."""
+    spec = importlib.util.spec_from_file_location("run_eval_fixture", HERE / "run-eval.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    for root in (".qoder", ".qoder/sessions"):
+        repo = tmp / root.replace("/", "-") / "repo"
+        target = tmp / root.replace("/", "-") / "target"
+        target.mkdir(parents=True)
+        repo.mkdir(parents=True)
+        if root == ".qoder":
+            (repo / ".qoder").symlink_to(target, target_is_directory=True)
+        else:
+            (repo / ".qoder").mkdir()
+            (repo / ".qoder" / "sessions").symlink_to(target, target_is_directory=True)
+        assert module.snapshot_qoder_repo_evidence(repo, tmp / (root.replace("/", "-") + "-evidence")) is False
+
+    config_root = tmp / "config-projects-root"
+    config_root.mkdir()
+    config_target = tmp / "config-projects-target"
+    config_target.mkdir()
+    (config_root / "projects").symlink_to(config_target, target_is_directory=True)
+    assert module.snapshot_config_projects_evidence(
+        config_root, tmp / "config-projects-evidence"
+    ) is False
+
+
+def test_snapshot_preserves_unbound_qoder_and_exact_bound_script(tmp: Path) -> None:
+    """Bound run/script exclusion is exact; siblings and unknown scripts remain visible."""
+    from trace_evidence import classify_workflow_write_set
+    paths = {
+        ".qoder/sessions/fixture-session/workflows/runs/fixture-run/manifest.json",
+        ".qoder/sessions/fixture-session/workflows/scripts/fixture.js",
+        ".qoder/sessions/fixture-session/workflows/scripts/unknown.js",
+        ".qoder/sessions/fixture-session/workflows/runs/sibling/journal.jsonl",
+    }
+    bound = classify_workflow_write_set(
+        paths, "fixture-session", "fixture-run",
+        "/fixture/.qoder/sessions/fixture-session/workflows/scripts/fixture.js",
+    )
+    assert bound == {
+        ".qoder/sessions/fixture-session/workflows/runs/fixture-run/manifest.json",
+        ".qoder/sessions/fixture-session/workflows/scripts/fixture.js",
+    }
+    assert paths - bound == {
+        ".qoder/sessions/fixture-session/workflows/scripts/unknown.js",
+        ".qoder/sessions/fixture-session/workflows/runs/sibling/journal.jsonl",
+    }
 
 
 # -- Runner -------------------------------------------------------------------
@@ -2274,6 +2524,14 @@ def main() -> None:
         test_workflow_transport_paths_must_cross_bind,
         test_real_protocol_uses_journal_lifecycle_and_child_transcripts,
         test_snapshot_preserves_symlink_and_scrubs_qoder_from_scored_repo,
+        test_preserved_qoder_1_0_48_fixture_passes,
+        test_workflow_manifest_output_notification_status_must_agree,
+        test_workflow_journal_result_and_raw_result_identity_must_agree,
+        test_workflow_stale_renamed_or_cross_session_child_transcript_fails,
+        test_validation_before_workflow_fails_unified_timeline,
+        test_bad_workflow_does_not_delete_independent_valid_workflow_children,
+        test_snapshot_rejects_qoder_sessions_and_config_projects_root_symlinks,
+        test_snapshot_preserves_unbound_qoder_and_exact_bound_script,
     ]
     for test in tests:
         with tempfile.TemporaryDirectory(prefix="workflow-evidence-") as td:

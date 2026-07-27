@@ -509,6 +509,8 @@ def grade(
             if session_id and run_id:
                 bound = classify_workflow_write_set(
                     set(unexpected_paths), session_id, run_id,
+                    wf_session.get("script_path")
+                    if wf_session.get("evidence_valid") else None,
                 )
                 if bound:
                     unexpected_paths = sorted(set(unexpected_paths) - bound)

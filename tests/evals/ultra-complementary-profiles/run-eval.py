@@ -45,23 +45,39 @@ def sha256(path: Path) -> str:
 
 
 def snapshot_qoder_repo_evidence(runtime_repo: Path, evidence_root: Path) -> bool:
-    """Preserve runtime metadata without dereferencing links, then scrub the repo."""
+    """Preserve all Qoder metadata without dereferencing or deleting it."""
     repo_qoder_root = runtime_repo / ".qoder"
     repo_sessions = repo_qoder_root / "sessions"
-    if not repo_sessions.is_dir():
+    if repo_qoder_root.is_symlink() or repo_sessions.is_symlink():
+        return False
+    if not repo_qoder_root.exists():
         return True
     try:
         shutil.copytree(
-            repo_sessions,
-            evidence_root / ".qoder" / "sessions",
+            repo_qoder_root,
+            evidence_root / ".qoder",
             symlinks=True,
         )
     except (OSError, shutil.Error):
         return False
-    if repo_qoder_root.is_symlink():
-        repo_qoder_root.unlink()
-    elif repo_qoder_root.exists():
-        shutil.rmtree(repo_qoder_root)
+    return True
+
+
+def snapshot_config_projects_evidence(runtime_config: Path, evidence_root: Path) -> bool:
+    """Snapshot config-project transcripts while rejecting a symlinked root."""
+    config_projects = runtime_config / "projects"
+    if config_projects.is_symlink():
+        return False
+    if not config_projects.exists():
+        return True
+    try:
+        shutil.copytree(
+            config_projects,
+            evidence_root / "config-projects",
+            symlinks=True,
+        )
+    except (OSError, shutil.Error):
+        return False
     return True
 
 
@@ -622,24 +638,16 @@ def main() -> None:
                         "phase": "evidence-snapshot",
                         "code": "workflow_artifact_snapshot_failed",
                     })
-                # Also snapshot config-level transcripts if present
-                config_projects = runtime_config / "projects"
-                if config_projects.is_dir():
-                    try:
-                        shutil.copytree(
-                            config_projects,
-                            evidence_root / "config-projects",
-                            symlinks=True,
-                        )
-                    except (OSError, shutil.Error):
-                        runtime_errors.append({
-                            "phase": "evidence-snapshot",
-                            "code": "workflow_transcript_snapshot_failed",
-                        })
-                # Runtime metadata is evidence, not scenario output.  Preserve
-                # it above, then remove it from the repo restored for grading
-                # so Qoder-created scripts and run metadata cannot pollute the
-                # evaluator-owned repository/write-set gate.
+                # Also snapshot config-level transcripts if present.  Keep
+                # internal links intact so the grader can reject them.
+                if not snapshot_config_projects_evidence(runtime_config, evidence_root):
+                    runtime_errors.append({
+                        "phase": "evidence-snapshot",
+                        "code": "workflow_transcript_snapshot_failed",
+                    })
+                # Runtime metadata is evidence and remains in the isolated
+                # runtime workspace.  The grader decides which exact,
+                # cross-bound artifacts are legitimate write-set paths.
                 try:
                     if runtime_repo.exists() or runtime_repo.is_symlink():
                         shutil.move(str(runtime_repo), repo)

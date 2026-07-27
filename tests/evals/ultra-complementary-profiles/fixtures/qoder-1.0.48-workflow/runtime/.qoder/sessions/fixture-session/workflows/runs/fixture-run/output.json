@@ -1,0 +1,9 @@
+{
+  "runId": "fixture-run",
+  "taskId": "fixture-task",
+  "workflowName": "improve-codebase-architecture-ultra",
+  "status": "completed",
+  "transcriptDir": "/fixture/repo/.qoder/sessions/fixture-session/workflows/runs/fixture-run",
+  "scriptPath": "/fixture/repo/.qoder/sessions/fixture-session/workflows/scripts/fixture-workflow.js",
+  "result": {"state": "completed", "runId": "fixture-run", "taskId": "fixture-task", "agentCount": 4}
+}
