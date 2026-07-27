@@ -48,6 +48,53 @@ true only when the raw runtime trace contains an assistant model event. A pre-ru
 failure may create a new attempt directory; after runtime invocation, including a trace
 without a model event, the reserved policy cell cannot be retried under another run ID.
 
+## Prospective acceptance policy v3
+
+[`acceptance-policy-v3.json`](acceptance-policy-v3.json) supersedes v2 for all future
+gating. Version 2 Phase 1 permanently failed (`passed=false`); its evidence, verdicts,
+and run IDs are permanently non-gating and must not be re-run, re-graded, or retried.
+
+Policy v3 keeps the same Qoder reference/sentinel model matrix, reasoning settings,
+1,000,000-token context window, architecture attribution rule, per-scenario 2/3 quorum,
+phase order, stop rule, and timeout as v2. All 15 run IDs are fresh `ticket-20-v3-*`
+identifiers. The only substantive change is Workflow evidence transport and
+normalization.
+
+### Workflow as a capability-equivalent delegation surface
+
+Qoder Workflow is a supported capability-equivalent delegation surface. When the model
+uses a Workflow to orchestrate multiple `agent()` calls, the evaluator treats those
+child agents as equivalent to direct Agent calls for grading purposes, provided the
+Workflow supplies authoritative runtime evidence.
+
+**Authoritative runtime artifacts** (trust as runtime-owned evidence):
+- `journal.jsonl` — records each child agent's started event (agent_type, task_id,
+  prompt, stage_markers) and terminal event (completed/failed, delegated_models).
+- `transcript.jsonl` — corroborates journal agent IDs; missing transcript fails closed.
+- `output.json` — records overall status and child completion.
+- `manifest.json` — records workflow_id, session_id, run_id, and stage plan.
+
+**Non-authoritative model declarations** (never used as sole evidence):
+- Model-written workflow JavaScript/TypeScript scripts.
+- Model-authored stage ledger entries.
+- Model response prose claiming delegation occurred.
+
+**Fail-closed conditions** (never guess or infer from prose):
+- Missing, corrupt, or unparseable journal, transcript, output, or manifest.
+- Child agent without a terminal event in the journal (Workflow overall completed
+  alone cannot substitute).
+- Runtime unavailable, trace incomplete, or parser unknown.
+
+**Normalized stage model**: both direct Agent and Workflow use the same normalized
+stage model. Stage markers, roles, execution order, command calls, and reconciliation
+with the stage ledger are graded identically regardless of delegation surface.
+
+**Write-set isolation**: Only `.qoder/sessions/<session-id>/workflows/<workflow-id>/`
+paths that match a Workflow detected in the runtime trace are excluded from the
+scenario write-set check. Any other `.qoder/**` file still triggers
+`scenario_write_set`. Workflow runtime artifacts should be snapshotted to an
+attempt-owned runtime-evidence directory outside the fixture repository when possible.
+
 ## Practical threat model and authority boundary
 
 This harness evaluates a cooperative-but-fallible Agent. The Agent may inspect files

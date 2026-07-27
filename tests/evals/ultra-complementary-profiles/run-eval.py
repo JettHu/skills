@@ -601,6 +601,19 @@ def main() -> None:
                 shutil.rmtree(workspace_root, ignore_errors=True)
         write(attempt_root / "raw-stdout.log", stdout)
         write(attempt_root / "raw-stderr.log", stderr)
+        # Snapshot Qoder Workflow runtime artifacts to attempt evidence.
+        # These are runtime-owned files that the grader needs to resolve
+        # child agent lifecycles.  They are copied verbatim before grading.
+        qoder_sessions = repo / ".qoder" / "sessions"
+        if qoder_sessions.is_dir():
+            evidence_sessions = attempt_root / "runtime-evidence" / ".qoder" / "sessions"
+            try:
+                shutil.copytree(qoder_sessions, evidence_sessions)
+            except (OSError, shutil.Error):
+                runtime_errors.append({
+                    "phase": "evidence-snapshot",
+                    "code": "workflow_artifact_snapshot_failed",
+                })
         invocation["model_started"] = (
             invocation["runtime_invoked"] and text_has_model_event(stdout)
         )
@@ -622,12 +635,18 @@ def main() -> None:
             write(attempt_root / "error.json", json.dumps({"errors": runtime_errors}, indent=2) + "\n")
         grader_control = attempt_root / "grader-control.json"
         write(grader_control, json.dumps(control_snapshot, indent=2) + "\n")
+        # Pass --workflow-runtime-root when the repo contains Qoder Workflow
+        # runtime artifacts.  The grader uses this to resolve child agent
+        # lifecycles from runtime-owned journal/transcript/output/manifest.
+        grader_command = [
+            sys.executable, str(GRADER), str(repo),
+            "--control", str(grader_control),
+            "--trace", str(attempt_root / "raw-stdout.log"), "--json",
+        ]
+        if (repo / ".qoder" / "sessions").is_dir():
+            grader_command.extend(["--workflow-runtime-root", str(repo)])
         grade = subprocess.run(
-            [
-                sys.executable, str(GRADER), str(repo),
-                "--control", str(grader_control),
-                "--trace", str(attempt_root / "raw-stdout.log"), "--json",
-            ],
+            grader_command,
             text=True,
             capture_output=True,
         )

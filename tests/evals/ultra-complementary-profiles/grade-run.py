@@ -182,7 +182,12 @@ def validate_diagnosis_router(path: Path) -> tuple[bool, str]:
     return valid, error
 
 
-def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = None) -> dict:
+def grade(
+    repo: Path,
+    trace: Optional[Path] = None,
+    control: Optional[Path] = None,
+    workflow_runtime_root: Optional[Path] = None,
+) -> dict:
     (
         expected,
         baseline,
@@ -413,7 +418,14 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
     unexpected_paths: list[str] = []
     if schema_version in {2, 3, 4}:
         paths, paths_ok = changed_paths(repo, baseline)
-        unexpected_paths = sorted(paths - set(expected.get("allowed_changes", [])))
+        write_set_violations = paths - set(expected.get("allowed_changes", []))
+        # Exclude bound Workflow runtime paths from write-set violations.
+        # Only .qoder/sessions/<session>/workflows/<workflow>/ paths that
+        # match a Workflow detected in the runtime trace are allowed.
+        # All other .qoder/** paths remain violations.
+        # trace_summary is not yet computed at this point; the exclusion
+        # is deferred to after trace summarization below.
+        unexpected_paths = sorted(write_set_violations)
         check_repository(paths_ok, "initial fixture baseline is available", "baseline_unavailable")
         check_repository(
             not unexpected_paths,
@@ -456,7 +468,7 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
             trace_failure_codes.append("runtime_trace_supplied")
         else:
             trace_checks.append("runtime trace is supplied for delegation grading")
-            trace_summary = summarize_trace(trace)
+            trace_summary = summarize_trace(trace, workflow_runtime_root=workflow_runtime_root)
             trace_checks, trace_failures, trace_failure_codes = grade_trace(trace_summary, trace_expected)
             trace_checks.insert(0, "runtime trace is supplied for delegation grading")
             marker_to_event = {
@@ -484,6 +496,37 @@ def grade(repo: Path, trace: Optional[Path] = None, control: Optional[Path] = No
                 trace_failure_codes.append("stage_trace_mismatch")
             else:
                 trace_checks.append("stage ledger agrees with completed runtime stage markers")
+
+    # Deferred write-set correction: if the trace summary reveals Workflow
+    # sessions, exclude bound runtime paths from the write-set check.
+    if trace_summary is not None and schema_version in {2, 3, 4}:
+        from trace_evidence import classify_workflow_write_set
+        for wf_session in trace_summary.get("workflow_sessions", []):
+            session_id = wf_session.get("session_id", "")
+            workflow_id = wf_session.get("workflow_id", "")
+            if session_id and workflow_id:
+                bound = classify_workflow_write_set(
+                    set(unexpected_paths), session_id, workflow_id,
+                )
+                if bound:
+                    unexpected_paths = sorted(set(unexpected_paths) - bound)
+                    # Re-evaluate the write-set check
+                    if "scenario_write_set" in repository_failure_codes:
+                        repository_failure_codes.remove("scenario_write_set")
+                        repository_failures[:] = [
+                            f for f in repository_failures
+                            if "scenario write set" not in f
+                        ]
+                    if not unexpected_paths:
+                        repository_checks[:] = [
+                            c for c in repository_checks
+                            if "scenario write set" not in c
+                        ]
+                        repository_checks.append(
+                            "repository changes stay within the scenario write set"
+                            " (Workflow runtime paths excluded)"
+                        )
+
     profile_checks.extend(trace_checks)
     profile_failures.extend(trace_failures)
     profile_failure_codes.extend(trace_failure_codes)
@@ -550,12 +593,20 @@ def main() -> None:
     parser.add_argument("paths", nargs="+", type=Path)
     parser.add_argument("--trace", type=Path)
     parser.add_argument("--control", type=Path)
+    parser.add_argument(
+        "--workflow-runtime-root",
+        type=Path,
+        help="Root directory for Qoder Workflow runtime artifacts (.qoder/sessions/...)",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     repos = find_repos(args.paths)
     if args.trace and len(repos) != 1:
         raise SystemExit("--trace requires exactly one prepared eval repository")
-    results = [grade(repo, args.trace, args.control) for repo in repos]
+    results = [
+        grade(repo, args.trace, args.control, workflow_runtime_root=args.workflow_runtime_root)
+        for repo in repos
+    ]
     if not results:
         raise SystemExit("no prepared eval repositories found")
     if args.json:
