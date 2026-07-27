@@ -499,33 +499,40 @@ def grade(
 
     # Deferred write-set correction: if the trace summary reveals Workflow
     # sessions, exclude bound runtime paths from the write-set check.
+    # Only remove the failure when the final unexpected_paths set is empty
+    # after ALL exclusions; bound + unbound .qoder files must still fail.
     if trace_summary is not None and schema_version in {2, 3, 4}:
         from trace_evidence import classify_workflow_write_set
         for wf_session in trace_summary.get("workflow_sessions", []):
             session_id = wf_session.get("session_id", "")
-            workflow_id = wf_session.get("workflow_id", "")
-            if session_id and workflow_id:
+            run_id = wf_session.get("run_id", "")
+            if session_id and run_id:
                 bound = classify_workflow_write_set(
-                    set(unexpected_paths), session_id, workflow_id,
+                    set(unexpected_paths), session_id, run_id,
                 )
                 if bound:
                     unexpected_paths = sorted(set(unexpected_paths) - bound)
-                    # Re-evaluate the write-set check
-                    if "scenario_write_set" in repository_failure_codes:
-                        repository_failure_codes.remove("scenario_write_set")
-                        repository_failures[:] = [
-                            f for f in repository_failures
-                            if "scenario write set" not in f
-                        ]
-                    if not unexpected_paths:
-                        repository_checks[:] = [
-                            c for c in repository_checks
-                            if "scenario write set" not in c
-                        ]
-                        repository_checks.append(
-                            "repository changes stay within the scenario write set"
-                            " (Workflow runtime paths excluded)"
-                        )
+        # Re-evaluate the write-set check ONLY when all violations are cleared
+        if "scenario_write_set" in repository_failure_codes and not unexpected_paths:
+            repository_failure_codes.remove("scenario_write_set")
+            repository_failures[:] = [
+                f for f in repository_failures
+                if "scenario write set" not in f
+            ]
+            repository_checks[:] = [
+                c for c in repository_checks
+                if "scenario write set" not in c
+            ]
+            repository_checks.append(
+                "repository changes stay within the scenario write set"
+                " (Workflow runtime paths excluded)"
+            )
+        elif unexpected_paths and "scenario_write_set" not in repository_failure_codes:
+            # Bound paths were excluded but violations remain — ensure failure
+            repository_failure_codes.append("scenario_write_set")
+            repository_failures.append(
+                "repository changes stay within the scenario write set"
+            )
 
     profile_checks.extend(trace_checks)
     profile_failures.extend(trace_failures)

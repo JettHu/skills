@@ -283,7 +283,7 @@ def main() -> None:
         if not isinstance(policy_manifest, dict):
             raise SystemExit("canonical policy manifest must be an object")
         try:
-            policy = load_policy(HERE / "acceptance-policy-v2.json")
+            policy = load_policy(HERE / "acceptance-policy-v3.json")
             validate_manifest(policy, policy_manifest)
         except ValueError as exc:
             raise SystemExit(f"canonical policy manifest is not authoritative: {exc}") from exc
@@ -591,6 +591,33 @@ def main() -> None:
                         primary_adapter.preserved_baseline_path
                     )
             else:
+                # Snapshot Qoder Workflow runtime artifacts BEFORE cleanup.
+                # The runtime_root contains child transcripts that will be
+                # deleted; the repo contains manifest/journal/output.
+                # Both must be captured before any deletion.
+                evidence_root = attempt_root / "runtime-evidence"
+                repo_qoder = runtime_repo / ".qoder" / "sessions"
+                if repo_qoder.is_dir():
+                    try:
+                        shutil.copytree(
+                            repo_qoder,
+                            evidence_root / ".qoder" / "sessions",
+                        )
+                    except (OSError, shutil.Error):
+                        runtime_errors.append({
+                            "phase": "evidence-snapshot",
+                            "code": "workflow_artifact_snapshot_failed",
+                        })
+                # Also snapshot config-level transcripts if present
+                config_projects = runtime_config / "projects"
+                if config_projects.is_dir():
+                    try:
+                        shutil.copytree(
+                            config_projects,
+                            evidence_root / "config-projects",
+                        )
+                    except (OSError, shutil.Error):
+                        pass  # non-critical; config transcripts are supplementary
                 try:
                     if runtime_repo.exists() or runtime_repo.is_symlink():
                         shutil.move(str(runtime_repo), repo)
@@ -601,19 +628,6 @@ def main() -> None:
                 shutil.rmtree(workspace_root, ignore_errors=True)
         write(attempt_root / "raw-stdout.log", stdout)
         write(attempt_root / "raw-stderr.log", stderr)
-        # Snapshot Qoder Workflow runtime artifacts to attempt evidence.
-        # These are runtime-owned files that the grader needs to resolve
-        # child agent lifecycles.  They are copied verbatim before grading.
-        qoder_sessions = repo / ".qoder" / "sessions"
-        if qoder_sessions.is_dir():
-            evidence_sessions = attempt_root / "runtime-evidence" / ".qoder" / "sessions"
-            try:
-                shutil.copytree(qoder_sessions, evidence_sessions)
-            except (OSError, shutil.Error):
-                runtime_errors.append({
-                    "phase": "evidence-snapshot",
-                    "code": "workflow_artifact_snapshot_failed",
-                })
         invocation["model_started"] = (
             invocation["runtime_invoked"] and text_has_model_event(stdout)
         )
@@ -635,16 +649,18 @@ def main() -> None:
             write(attempt_root / "error.json", json.dumps({"errors": runtime_errors}, indent=2) + "\n")
         grader_control = attempt_root / "grader-control.json"
         write(grader_control, json.dumps(control_snapshot, indent=2) + "\n")
-        # Pass --workflow-runtime-root when the repo contains Qoder Workflow
-        # runtime artifacts.  The grader uses this to resolve child agent
-        # lifecycles from runtime-owned journal/transcript/output/manifest.
+        # Pass --workflow-runtime-root pointing to the attempt-owned
+        # snapshot, NOT the repo.  This ensures the grader reads runtime
+        # artifacts from the durable evidence directory, which was captured
+        # before cleanup deleted the isolated runtime root.
+        evidence_root = attempt_root / "runtime-evidence"
         grader_command = [
             sys.executable, str(GRADER), str(repo),
             "--control", str(grader_control),
             "--trace", str(attempt_root / "raw-stdout.log"), "--json",
         ]
-        if (repo / ".qoder" / "sessions").is_dir():
-            grader_command.extend(["--workflow-runtime-root", str(repo)])
+        if (evidence_root / ".qoder" / "sessions").is_dir():
+            grader_command.extend(["--workflow-runtime-root", str(evidence_root)])
         grade = subprocess.run(
             grader_command,
             text=True,

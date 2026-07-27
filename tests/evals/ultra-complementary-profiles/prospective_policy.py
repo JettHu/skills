@@ -18,7 +18,7 @@ from typing import Any
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 MANIFEST_NAME = "canonical-manifest.json"
-CANONICAL_POLICY_PATH = HERE / "acceptance-policy-v2.json"
+CANONICAL_POLICY_PATH = HERE / "acceptance-policy-v3.json"
 _SHA = re.compile(r"[0-9a-f]{40}")
 
 
@@ -42,7 +42,7 @@ def _read_object(path: Path, label: str) -> dict[str, Any]:
 
 def _policy_commit(path: Path) -> str:
     if path != CANONICAL_POLICY_PATH:
-        raise ValueError("policy path must be the canonical tracked acceptance-policy-v2.json")
+        raise ValueError("policy path must be the canonical tracked acceptance-policy-v3.json")
     relative = str(path.relative_to(ROOT))
     result = subprocess.run(
         ["git", "log", "-1", "--format=%H", "--", relative],
@@ -75,16 +75,18 @@ def load_policy(path: Path) -> dict[str, Any]:
     """Load a tracked policy, retaining its immutable identity out of band."""
     path = path.resolve()
     if path != CANONICAL_POLICY_PATH:
-        raise ValueError("policy path must be the canonical tracked acceptance-policy-v2.json")
+        raise ValueError("policy path must be the canonical tracked acceptance-policy-v3.json")
     policy = _read_object(path, "acceptance policy")
-    if policy.get("schema_version") != 2:
-        raise ValueError("acceptance policy schema_version must be 2")
-    if policy.get("policy_id") != "ticket-20-qoder-prospective-v2":
+    if policy.get("schema_version") != 3:
+        raise ValueError("acceptance policy schema_version must be 3")
+    if policy.get("policy_id") != "ticket-20-qoder-prospective-v3":
         raise ValueError("unrecognized prospective acceptance policy")
     if policy.get("runtime", {}).get("required") != "qoder":
         raise ValueError("policy must require the qoder runtime")
     if policy.get("evidence", {}).get("v1_evidence") != "permanently-non-gating":
         raise ValueError("policy must permanently exclude v1 evidence from gating")
+    if policy.get("effective_scope", {}).get("v2_evidence") != "permanently-non-gating":
+        raise ValueError("policy must permanently exclude v2 evidence from gating")
     return {
         **policy,
         "_path": path,
@@ -168,13 +170,13 @@ def _resolve_commit(ref: str, label: str) -> str:
 
 
 def build_canonical_manifest(policy: dict[str, Any], treatment_ref: str) -> dict[str, Any]:
-    """Materialize the only authority allowed to launch a v2 model cell."""
+    """Materialize the only authority allowed to launch a v3 model cell."""
     treatment_ref = _resolve_commit(treatment_ref, "treatment")
     ablation_ref = _resolve_commit(policy.get("refs", {}).get("ablation"), "ablation")
     cells = _phase_plan(policy)
     return {
-        "schema_version": 2,
-        "manifest_id": "ticket-20-qoder-prospective-v2",
+        "schema_version": 3,
+        "manifest_id": "ticket-20-qoder-prospective-v3",
         "policy": {
             "id": policy["policy_id"],
             "commit_sha": policy["_commit_sha"],
@@ -373,7 +375,7 @@ def reserve_cell(
             _assert_cell_startable(state_root, manifest, cell, variant)
             path = _reservation_path(state_root, manifest, cell, variant)
             receipt = {
-                "schema_version": 2,
+                "schema_version": 3,
                 "kind": "cell_reserved",
                 "manifest_sha256": _digest(manifest),
                 "run_id": cell["run_id"],
@@ -407,7 +409,7 @@ def append_attempt_state(
     path = _cell_state_path(state_root, manifest, cell, variant)
     path.parent.mkdir(parents=True, exist_ok=True)
     receipt = {
-        "schema_version": 2,
+        "schema_version": 3,
         "event": event,
         "manifest_sha256": _digest(manifest),
         "run_id": cell["run_id"],
@@ -574,7 +576,7 @@ def build_phase_verdict(
             for cell in phase_cells
         }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "kind": "phase_verdict",
         "manifest_sha256": _digest(manifest),
         "phase": phase_name,

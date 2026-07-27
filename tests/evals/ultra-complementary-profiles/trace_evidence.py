@@ -122,137 +122,251 @@ def json_lines(path: Path) -> list[dict[str, Any]]:
 
 
 # -- Workflow runtime artifact parsing ----------------------------------------
+# Aligned with real Qoder 1.0.48 Workflow protocol:
+# - Workflow tool_use input: { script: "..." }
+# - tool_result payload: { taskId, runId, transcriptDir, scriptPath }
+# - Runtime dir: .qoder/sessions/<session>/workflows/runs/<runId>/
+# - Artifacts: manifest.json, journal.jsonl, output.json (no transcript.jsonl)
+# - manifest.json agents[]: { index, label, agentId, agentType, state, journalKey }
+# - journal.jsonl: { type: "started"|"event"|"result", key, agentId?, ... }
+# - Main trace system events: parent_tool_use_id = Workflow tool call ID
 
-def _read_json_file(path: Path) -> Optional[dict[str, Any]]:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+_OPAQUE_ID_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
+
+
+def _safe_opaque_id(value: object) -> Optional[str]:
+    """Validate an opaque identifier: non-empty, safe charset, no path traversal."""
+    if not isinstance(value, str) or not value:
         return None
+    if not _OPAQUE_ID_RE.match(value):
+        return None
+    if ".." in value or "/" in value or "\\" in value:
+        return None
+    return value
+
+
+def _read_json_file_strict(path: Path) -> Optional[dict[str, Any]]:
+    """Read a JSON file; return None only on OS/encoding errors, not on malformed JSON."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return None  # caller must treat this as protocol failure
     return value if isinstance(value, dict) else None
 
 
-def _workflow_journal_events(journal_path: Path) -> Optional[list[dict[str, Any]]]:
-    """Parse a runtime-owned workflow journal; return None on any error."""
-    events = json_lines(journal_path)
-    if not events:
+def _read_jsonl_strict(path: Path) -> Optional[list[dict[str, Any]]]:
+    """Read a JSONL file strictly: every non-blank line must parse as a JSON object."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
         return None
-    return events
+    events: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            value = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None  # any bad line = protocol failure
+        if not isinstance(value, dict):
+            return None
+        events.append(value)
+    return events if events else None
 
 
-def _workflow_transcript_events(transcript_path: Path) -> Optional[list[dict[str, Any]]]:
-    """Parse a runtime-owned workflow transcript; return None on any error."""
-    events = json_lines(transcript_path)
-    if not events:
+def _resolve_workflow_dir(
+    runtime_root: Path,
+    session_id: str,
+    run_id: str,
+) -> Optional[Path]:
+    """Resolve the Workflow runtime directory and verify it stays within root."""
+    wf_dir = runtime_root / ".qoder" / "sessions" / session_id / "workflows" / "runs" / run_id
+    try:
+        resolved = wf_dir.resolve()
+        root_resolved = runtime_root.resolve()
+    except (OSError, ValueError):
         return None
-    return events
+    # Verify the resolved path is within the runtime root
+    try:
+        resolved.relative_to(root_resolved)
+    except ValueError:
+        return None
+    # Reject symlink components in the path chain
+    check = runtime_root
+    for part in [".qoder", "sessions", session_id, "workflows", "runs", run_id]:
+        check = check / part
+        if check.is_symlink():
+            return None
+    return wf_dir if wf_dir.is_dir() else None
 
 
-def _build_workflow_child_calls(
-    workflow_id: str,
+def _build_workflow_child_calls_real(
     session_id: str,
     run_id: str,
     task_id: str,
+    manifest: dict[str, Any],
     journal_events: list[dict[str, Any]],
-    transcript_events: list[dict[str, Any]],
-    output: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Build normalized agent call records from runtime-owned workflow evidence.
+    main_trace_events: list[dict[str, Any]],
+    wf_tool_use_id: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Build normalized agent call records from real Qoder 1.0.48 Workflow evidence.
 
-    Each child agent() invocation in the journal produces an independent lifecycle
-    record.  Markers, role, task identity, terminal status, and order come
-    exclusively from the journal and transcript -- never from the model-written
-    workflow script or stage ledger.
-
-    Workflow overall completed alone cannot substitute for a missing child
-    terminal event.  A child without a terminal event is not counted as completed.
+    Returns (calls, protocol_failures).  If protocol_failures is non-empty,
+    the calls list must be discarded — the Workflow evidence is unreliable.
     """
-    # Index journal events by agent_id
-    children: dict[str, dict[str, Any]] = {}
-    for event in journal_events:
-        agent_id = event.get("agent_id")
-        if not agent_id or not isinstance(agent_id, str):
+    failures: list[str] = []
+
+    # 1. Extract agents from manifest (authoritative lifecycle)
+    manifest_agents = manifest.get("agents")
+    if not isinstance(manifest_agents, list) or not manifest_agents:
+        failures.append("workflow_manifest_agents_missing")
+        return [], failures
+
+    # 2. Build journal result index by key
+    journal_results: dict[str, dict[str, Any]] = {}
+    for evt in journal_events:
+        if evt.get("type") == "result" and isinstance(evt.get("key"), str):
+            journal_results[evt["key"]] = evt
+
+    # 3. Index main trace system events by parent_tool_use_id (child activity)
+    trace_children: dict[str, list[dict[str, Any]]] = {}
+    for evt in main_trace_events:
+        if evt.get("type") != "system":
             continue
-        event_type = event.get("event")
-        if event_type == "agent_started":
-            children[agent_id] = {
-                "agent_id": agent_id,
-                "agent_type": event.get("agent_type"),
-                "task_id": event.get("task_id"),
-                "prompt": event.get("prompt"),
-                "stage_markers": event.get("stage_markers", []),
-                "started_trace_index": event.get("trace_index"),
-                "terminal_status": None,
-                "delegated_models": [],
-                "completed_trace_index": None,
-            }
-        elif event_type in {"agent_completed", "agent_failed"} and agent_id in children:
-            children[agent_id]["terminal_status"] = (
-                "completed" if event_type == "agent_completed" else "failed"
-            )
-            children[agent_id]["delegated_models"] = event.get("delegated_models", [])
-            children[agent_id]["completed_trace_index"] = event.get("trace_index")
+        parent = evt.get("parent_tool_use_id") or evt.get("tool_use_id")
+        if parent == wf_tool_use_id or str(parent) == str(wf_tool_use_id):
+            child_task = evt.get("task_id", "")
+            if isinstance(child_task, str) and child_task:
+                trace_children.setdefault(child_task, []).append(evt)
 
-    # Verify transcript corroborates the journal (fail closed if inconsistent)
-    transcript_agent_ids = set()
-    for event in transcript_events:
-        agent_id = event.get("agent_id")
-        if isinstance(agent_id, str):
-            transcript_agent_ids.add(agent_id)
-
-    # Build normalized call records only for children with both journal and
-    # transcript evidence AND a terminal event.
+    # 4. Build calls from manifest agents, cross-validated against journal + trace
     calls: list[dict[str, Any]] = []
-    for agent_id, child in children.items():
-        # Must appear in transcript
-        if agent_id not in transcript_agent_ids:
-            continue
-        # Must have a terminal event (workflow overall completed is not enough)
-        terminal_status = child.get("terminal_status")
-        if terminal_status not in {"completed", "failed"}:
+    for idx, agent in enumerate(manifest_agents):
+        if not isinstance(agent, dict):
+            failures.append(f"workflow_manifest_agent_{idx}_malformed")
             continue
 
-        agent_role = child.get("agent_type")
-        prompt = child.get("prompt", "")
-        description = prompt
-        stage_markers = [
-            m for m in child.get("stage_markers", []) if isinstance(m, str)
-        ]
+        label = agent.get("label")
+        agent_id = agent.get("agentId")
+        agent_type = agent.get("agentType")
+        state = agent.get("state")
+        journal_key = agent.get("journalKey")
+        agent_index = agent.get("index")
+
+        # All binding fields must be present and valid
+        if not isinstance(label, str) or not label:
+            failures.append(f"workflow_agent_{idx}_label_missing")
+            continue
+        if not isinstance(agent_id, str) or not agent_id:
+            failures.append(f"workflow_agent_{idx}_agentId_missing")
+            continue
+        if not isinstance(agent_type, str) or not agent_type:
+            failures.append(f"workflow_agent_{idx}_agentType_missing")
+            continue
+        if not isinstance(state, str) or not state:
+            failures.append(f"workflow_agent_{idx}_state_missing")
+            continue
+        if not isinstance(journal_key, str) or not journal_key:
+            failures.append(f"workflow_agent_{idx}_journalKey_missing")
+            continue
+
+        # 5. Cross-validate: journal must have a result for this key
+        journal_result = journal_results.get(journal_key)
+        if journal_result is None:
+            failures.append(f"workflow_agent_{label}_journal_result_missing")
+            continue
+        # Verify journal agentId matches manifest
+        journal_agent_id = journal_result.get("agentId")
+        if journal_agent_id != agent_id:
+            failures.append(f"workflow_agent_{label}_journal_agentId_mismatch")
+            continue
+
+        # 6. Cross-validate: main trace must have child activity for this agentId
+        child_events = trace_children.get(agent_id, [])
+        if not child_events:
+            failures.append(f"workflow_agent_{label}_trace_children_missing")
+            continue
+
+        # 7. Determine terminal status from manifest state
+        if state == "done":
+            terminal_status = "completed"
+        elif state in ("failed", "error", "cancelled", "timeout"):
+            terminal_status = "failed"
+        else:
+            failures.append(f"workflow_agent_{label}_non_terminal_state")
+            continue
+
+        # 8. Extract stage markers from main trace child event descriptions
+        stage_markers: list[str] = []
+        for ce in child_events:
+            desc = str(ce.get("description", ""))
+            found = re.findall(r"\[[a-z0-9-]+:[a-z0-9-]+\]", desc, flags=re.IGNORECASE)
+            for m in found:
+                if m not in stage_markers:
+                    stage_markers.append(m)
+
+        # 9. Determine trace indices from main trace events
+        started_index = None
+        completed_index = None
+        for ce in child_events:
+            subtype = ce.get("subtype", "")
+            if subtype == "task_started" and started_index is None:
+                started_index = ce.get("_trace_index")
+            if subtype in ("task_completed", "task_progress"):
+                completed_index = ce.get("_trace_index")
+
+        # 10. Extract delegated model from child events
+        delegated_models: list[str] = []
+        for ce in child_events:
+            msg = ce.get("message")
+            if isinstance(msg, dict):
+                model = msg.get("model")
+                if isinstance(model, str) and model and model not in delegated_models:
+                    delegated_models.append(model)
 
         calls.append({
             "id": agent_id,
-            "role": agent_role,
-            "role_source": "workflow_journal_agent_type",
-            "task_name": child.get("task_id"),
-            "description": description,
-            "prompt": prompt,
+            "role": agent_type,
+            "role_source": "workflow_manifest_agentType",
+            "task_name": label,
+            "description": label,
+            "prompt": label,
             "stage_markers": stage_markers,
             "status": terminal_status,
-            "trace_index": child.get("completed_trace_index"),
-            "requested_trace_index": child.get("started_trace_index"),
+            "trace_index": completed_index,
+            "requested_trace_index": started_index,
             "runtime_status": terminal_status,
             "agents_states": {},
             "agent_terminal_states": [terminal_status],
             "background_task_id": task_id,
-            "delegated_models": child.get("delegated_models", []),
-            "workflow_id": workflow_id,
-            "workflow_session_id": session_id,
+            "delegated_models": delegated_models,
             "workflow_run_id": run_id,
+            "workflow_session_id": session_id,
+            "manifest_index": agent_index,
+            "manifest_label": label,
+            "journal_key": journal_key,
         })
-    return calls
+
+    return calls, failures
 
 
 def classify_workflow_write_set(
     paths: set[str],
     session_id: str,
-    workflow_id: str,
+    run_id: str,
 ) -> set[str]:
     """Return the subset of paths that are bound Workflow runtime artifacts.
 
-    Only paths matching the exact session_id/workflow_id pattern are considered
-    legitimate Workflow runtime paths.  All other .qoder/** paths remain
-    unauthorized for the scenario write set.
+    Only paths matching .qoder/sessions/<session>/workflows/ (the entire
+    session's workflow directory tree) are considered legitimate runtime paths.
+    All other .qoder/** paths remain unauthorized for the scenario write set.
     """
-    prefix = f".qoder/sessions/{session_id}/workflows/{workflow_id}/"
+    prefix = f".qoder/sessions/{session_id}/workflows/"
     return {path for path in paths if path.startswith(prefix)}
 
 
@@ -546,134 +660,133 @@ def summarize(path: Path, workflow_runtime_root: Optional[Path] = None) -> dict[
             )
             tools_used.append("command_execution")
 
-        # -- Workflow tool-use detection --
-        # Detect Workflow tool-use in both Qoder (message.content) and
-        # Codex (item) traces, then resolve runtime artifacts.
+        # -- Workflow tool-use detection (real Qoder 1.0.48 protocol) --
+        # Workflow tool_use input only has { script: "..." }.
+        # IDs (taskId, runId) come from the tool_result payload, not input.
         for use in qoder_tool_uses(event):
             if use.get("name") not in WORKFLOW_NAMES:
                 continue
-            wf_input = use.get("input") if isinstance(use.get("input"), dict) else {}
-            wf_session_id = wf_input.get("session_id", "")
-            wf_workflow_id = wf_input.get("workflow_id", "")
-            wf_run_id = wf_input.get("run_id", "")
-            wf_task_id = wf_input.get("task_id", "")
             tools_used.append("Workflow")
-            workflow_sessions[str(use.get("id", ""))] = {
-                "tool_use_id": use.get("id"),
-                "session_id": wf_session_id,
-                "workflow_id": wf_workflow_id,
-                "run_id": wf_run_id,
-                "task_id": wf_task_id,
+            tool_use_id = str(use.get("id", ""))
+            workflow_sessions[tool_use_id] = {
+                "tool_use_id": tool_use_id,
+                "session_id": "",
+                "run_id": "",
+                "task_id": "",
                 "status": "requested",
                 "trace_index": event_index,
-            }
-        # Codex-style Workflow detection
-        codex_wf = None
-        item = event.get("item")
-        if isinstance(item, dict) and item.get("type") == "collab_tool_call":
-            name = item.get("name") or item.get("tool") or item.get("tool_name")
-            if str(name) in WORKFLOW_NAMES:
-                codex_wf = item
-        if codex_wf is not None:
-            wf_input = codex_wf.get("arguments") or codex_wf.get("input") or {}
-            if isinstance(wf_input, str):
-                try:
-                    wf_input = json.loads(wf_input)
-                except json.JSONDecodeError:
-                    wf_input = {}
-            wf_session_id = wf_input.get("session_id", "") if isinstance(wf_input, dict) else ""
-            wf_workflow_id = wf_input.get("workflow_id", "") if isinstance(wf_input, dict) else ""
-            wf_run_id = wf_input.get("run_id", "") if isinstance(wf_input, dict) else ""
-            wf_task_id = wf_input.get("task_id", "") if isinstance(wf_input, dict) else ""
-            tools_used.append("Workflow")
-            wf_call_id = str(codex_wf.get("id") or codex_wf.get("call_id") or "")
-            workflow_sessions[wf_call_id] = {
-                "tool_use_id": wf_call_id,
-                "session_id": wf_session_id,
-                "workflow_id": wf_workflow_id,
-                "run_id": wf_run_id,
-                "task_id": wf_task_id,
-                "status": str(codex_wf.get("status") or "requested").casefold(),
-                "trace_index": event_index,
+                "protocol_failures": [],
             }
 
-    # Resolve Workflow system events (started/completed)
+    # Second pass: resolve Workflow IDs from tool_result and system events.
+    # Also tag system events with _trace_index for child activity tracking.
     for event_index, event in enumerate(events):
-        if event.get("type") != "system":
-            continue
-        tool_use_id = str(event.get("tool_use_id") or "")
-        if tool_use_id not in workflow_sessions:
-            continue
-        wf = workflow_sessions[tool_use_id]
-        wf_status = str(event.get("status") or "").casefold()
-        if wf_status:
-            wf["status"] = wf_status
-            wf["trace_index"] = event_index
-        if event.get("session_id"):
-            wf["session_id"] = event["session_id"]
-        if event.get("workflow_id"):
-            wf["workflow_id"] = event["workflow_id"]
+        event["_trace_index"] = event_index
+        if event.get("type") == "system":
+            session_id = event.get("session_id")
+            if isinstance(session_id, str) and session_id:
+                for wf in workflow_sessions.values():
+                    if not wf["session_id"]:
+                        wf["session_id"] = session_id
+        # Parse Workflow tool_result for IDs (real protocol)
+        message = event.get("message")
+        if isinstance(message, dict):
+            content = message.get("content")
+            if isinstance(content, list):
+                for item in content:
+                    if not isinstance(item, dict) or item.get("type") != "tool_result":
+                        continue
+                    tuid = str(item.get("tool_use_id", ""))
+                    if tuid not in workflow_sessions:
+                        continue
+                    wf = workflow_sessions[tuid]
+                    # Parse payload from tool_use_result or content text
+                    payload = None
+                    tur = event.get("tool_use_result")
+                    if isinstance(tur, dict):
+                        raw_payload = tur.get("payload")
+                        if isinstance(raw_payload, str):
+                            try:
+                                payload = json.loads(raw_payload)
+                            except json.JSONDecodeError:
+                                pass
+                    if payload is None:
+                        # Try content text for embedded IDs
+                        text_content = item.get("content", "")
+                        if isinstance(text_content, str):
+                            task_match = re.search(r"taskId:\s*(\S+)", text_content)
+                            run_match = re.search(r"runId:\s*(\S+)", text_content)
+                            if task_match:
+                                wf["task_id"] = task_match.group(1)
+                            if run_match:
+                                wf["run_id"] = run_match.group(1)
+                    else:
+                        wf["task_id"] = str(payload.get("taskId", ""))
+                        wf["run_id"] = str(payload.get("runId", ""))
+        # System task_notification events for Workflow completion
+        if event.get("type") == "system" and event.get("subtype") == "task_notification":
+            task_id = str(event.get("task_id", ""))
+            for wf in workflow_sessions.values():
+                if wf["task_id"] == task_id:
+                    wf_status = str(event.get("status") or "").casefold()
+                    if wf_status:
+                        wf["status"] = wf_status
+                        wf["trace_index"] = event_index
 
     # Resolve Workflow runtime artifacts and build child agent calls.
-    # Fail closed: journal, transcript, and output must all be present and
-    # parseable.  Workflow overall completed cannot substitute for missing
-    # child lifecycle.  Model-written scripts are not authoritative.
-    if workflow_runtime_root is not None:
+    # Fail closed with EXPLICIT protocol failures — no silent continue.
+    # A detected Workflow invocation that cannot produce valid child evidence
+    # generates failures that cannot be masked by direct Agent calls.
+    workflow_protocol_failures: list[str] = []
+    if workflow_runtime_root is not None and workflow_sessions:
         for wf in workflow_sessions.values():
-            wf_dir = (
-                workflow_runtime_root
-                / ".qoder" / "sessions" / wf["session_id"]
-                / "workflows" / wf["workflow_id"]
-            )
-            journal_path = wf_dir / "journal.jsonl"
-            transcript_path = wf_dir / "transcript.jsonl"
-            output_path = wf_dir / "output.json"
-            manifest_path = wf_dir / "manifest.json"
-
-            journal_events = _workflow_journal_events(journal_path)
-            transcript_events = _workflow_transcript_events(transcript_path)
-            output = _read_json_file(output_path)
-            manifest = _read_json_file(manifest_path)
-
-            # All four artifacts must be present and parseable
-            if journal_events is None or transcript_events is None or output is None or manifest is None:
+            session_id = _safe_opaque_id(wf.get("session_id"))
+            run_id = _safe_opaque_id(wf.get("run_id"))
+            if not session_id or not run_id:
+                workflow_protocol_failures.append("workflow_id_unresolvable")
                 continue
 
-            # Use the Workflow's initial request trace index as the base
-            # for child trace indices (not the completed event), so child
-            # calls appear before subsequent main-trace events like
-            # validation commands in the timeline ordering.
-            wf_base_index = min(
-                wf.get("trace_index", 0),
-                next(
-                    (idx for idx, ev in enumerate(events)
-                     if any(
-                         isinstance(c, dict) and c.get("type") == "tool_use"
-                         and c.get("id") == wf.get("tool_use_id")
-                         for c in (
-                             (ev.get("message", {}).get("content", [])
-                              if isinstance(ev.get("message"), dict) else [])
-                         )
-                     )),
-                    wf.get("trace_index", 0),
-                ),
-            )
-            child_calls = _build_workflow_child_calls(
-                wf["workflow_id"],
-                wf["session_id"],
-                wf["run_id"],
-                wf["task_id"],
+            wf_dir = _resolve_workflow_dir(workflow_runtime_root, session_id, run_id)
+            if wf_dir is None:
+                workflow_protocol_failures.append("workflow_runtime_dir_unresolvable")
+                continue
+
+            manifest = _read_json_file_strict(wf_dir / "manifest.json")
+            journal_events = _read_jsonl_strict(wf_dir / "journal.jsonl")
+            output = _read_json_file_strict(wf_dir / "output.json")
+
+            # All three artifacts must be present and strictly parseable.
+            # Missing or corrupt = explicit protocol failure, not silent skip.
+            if manifest is None:
+                workflow_protocol_failures.append("workflow_manifest_missing_or_corrupt")
+                continue
+            if journal_events is None:
+                workflow_protocol_failures.append("workflow_journal_missing_or_corrupt")
+                continue
+            if output is None:
+                workflow_protocol_failures.append("workflow_output_missing_or_corrupt")
+                continue
+
+            # Cross-validate manifest runId against trace-derived run_id
+            manifest_run_id = manifest.get("runId")
+            if manifest_run_id != run_id:
+                workflow_protocol_failures.append("workflow_manifest_runId_mismatch")
+                continue
+
+            child_calls, child_failures = _build_workflow_child_calls_real(
+                session_id,
+                run_id,
+                wf.get("task_id", ""),
+                manifest,
                 journal_events,
-                transcript_events,
-                output,
+                events,
+                wf.get("tool_use_id", ""),
             )
-            # Offset child trace indices relative to the Workflow's position
-            # in the main trace.  Each completed child gets a slightly
-            # increasing offset so their relative order is preserved.
-            for offset, call in enumerate(child_calls, start=1):
-                call["trace_index"] = wf_base_index + offset
-                if call.get("requested_trace_index") is not None:
-                    call["requested_trace_index"] = wf_base_index + offset - 1
+            if child_failures:
+                workflow_protocol_failures.extend(child_failures)
+                # Do NOT add partial calls — protocol is compromised
+                continue
+
             calls.extend(child_calls)
 
 
@@ -802,6 +915,7 @@ def summarize(path: Path, workflow_runtime_root: Optional[Path] = None) -> dict[
             else "unknown/unavailable"
         ),
         "workflow_sessions": list(workflow_sessions.values()),
+        "workflow_protocol_failures": workflow_protocol_failures,
     }
 
 
@@ -814,6 +928,13 @@ def grade(summary: dict[str, Any], expected: dict[str, Any]) -> tuple[list[str],
         (checks if condition else failures).append(message)
         if not condition:
             failure_codes.append(code)
+
+    # Workflow protocol failures are explicit and cannot be masked by direct Agent calls
+    wf_protocol_failures = summary.get("workflow_protocol_failures", [])
+    if wf_protocol_failures:
+        for pf in wf_protocol_failures:
+            failures.append(f"workflow protocol failure: {pf}")
+            failure_codes.append("workflow_protocol_failure")
 
     capabilities = summary["capabilities"]
     for tool in expected.get("capability_tools", []):

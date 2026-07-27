@@ -136,151 +136,162 @@ def direct_agent_trace_events() -> list[dict]:
     ]
 
 
-# -- Workflow trace builders ---------------------------------------------------
+# -- Workflow trace builders (real Qoder 1.0.48 protocol) ---------------------
+
+_SESSION_ID = "57f4c118-76cc-4fa6-9b89-6181108f516e"
+_RUN_ID = "wf_54671518-a88"
+_TASK_ID = "wf-54671518-a88"
+_WF_TOOL_USE_ID = "call_9f46a0efa9f94a78832376ad"
+
 
 def workflow_runtime_artifacts(
     runtime_dir: Path,
     session_id: str,
-    workflow_id: str,
+    run_id: str,
     children: list[dict],
     *,
     overall_status: str = "completed",
     corrupt_journal: bool = False,
     missing_journal: bool = False,
-    missing_transcript: bool = False,
     missing_output: bool = False,
 ) -> Path:
-    """Write workflow runtime artifacts and return the workflow directory."""
-    wf_dir = runtime_dir / ".qoder" / "sessions" / session_id / "workflows" / workflow_id
+    """Write real-protocol workflow artifacts to workflows/runs/<runId>/."""
+    wf_dir = runtime_dir / ".qoder" / "sessions" / session_id / "workflows" / "runs" / run_id
     wf_dir.mkdir(parents=True, exist_ok=True)
 
-    # Manifest
+    # manifest.json with agents array
+    manifest_agents = []
+    for idx, child in enumerate(children, start=1):
+        manifest_agents.append({
+            "index": idx,
+            "label": child["label"],
+            "phaseIndex": child.get("phase_index", 1),
+            "phaseTitle": child.get("phase_title", "Explore"),
+            "journalKey": child["journal_key"],
+            "agentId": child["agent_id"],
+            "agentType": child["agent_type"],
+            "state": child.get("state", "done"),
+            "attempts": 1,
+        })
     _write_json(wf_dir, "manifest.json", {
-        "workflow_id": workflow_id,
-        "session_id": session_id,
-        "task_id": "wf-task-001",
-        "run_id": "wf-run-001",
-        "stages": [
-            {"name": child["name"], "agent_type": child["role"]}
-            for child in children
-        ],
+        "runId": run_id,
+        "workflowName": "test-workflow",
+        "status": overall_status,
+        "agents": manifest_agents,
     })
 
-    # Journal (runtime-owned lifecycle events)
+    # journal.jsonl with real format: started/event/result per key
     if not missing_journal:
         journal_events = []
         for child in children:
-            journal_events.append({
-                "event": "agent_started",
-                "agent_id": child["agent_id"],
-                "agent_type": child["role"],
-                "task_id": child.get("task_id", f"task-{child['agent_id']}"),
-                "prompt": child["prompt"],
-                "stage_markers": child.get("stage_markers", []),
-                "trace_index": child.get("started_index", 0),
-            })
+            key = child["journal_key"]
+            journal_events.append({"type": "started", "key": key, "timestamp": 1000})
+            journal_events.append({"type": "event", "key": key,
+                                   "event": {"kind": "attempt_started", "attempt": 1}})
             if child.get("has_terminal", True):
-                journal_events.append({
-                    "event": "agent_completed" if child.get("terminal_status", "completed") == "completed" else "agent_failed",
-                    "agent_id": child["agent_id"],
-                    "delegated_models": child.get("delegated_models", ["delegate-model"]),
-                    "trace_index": child.get("completed_index", 1),
-                })
+                journal_events.append({"type": "result", "key": key,
+                                       "agentId": child["agent_id"],
+                                       "result": {"content": "{}"}})
         if corrupt_journal:
             _write_text(wf_dir, "journal.jsonl", "NOT-VALID-JSON\n{{bad\n")
         else:
             _write_jsonl(wf_dir, "journal.jsonl", journal_events)
 
-    # Transcript
-    if not missing_transcript:
-        _write_jsonl(wf_dir, "transcript.jsonl", [
-            {"event": "workflow_started", "workflow_id": workflow_id},
-            *[
-                {"event": "agent_event", "agent_id": child["agent_id"],
-                 "stage_markers": child.get("stage_markers", [])}
-                for child in children
-            ],
-            {"event": "workflow_completed", "status": overall_status},
-        ])
-
-    # Output
+    # output.json
     if not missing_output:
         _write_json(wf_dir, "output.json", {
+            "runId": run_id,
+            "taskId": _TASK_ID,
+            "workflowName": "test-workflow",
             "status": overall_status,
-            "children": [
-                {"agent_id": child["agent_id"], "status": child.get("terminal_status", "completed")}
-                for child in children if child.get("has_terminal", True)
-            ],
+            "result": {},
         })
 
     return wf_dir
 
 
 def workflow_trace_events(
-    session_id: str = "sess-001",
-    workflow_id: str = "wf-001",
+    session_id: str = _SESSION_ID,
+    run_id: str = _RUN_ID,
+    task_id: str = _TASK_ID,
+    wf_tool_use_id: str = _WF_TOOL_USE_ID,
     children: list[dict] | None = None,
     *,
     overall_status: str = "completed",
     script_has_agent: bool = True,
 ) -> list[dict]:
-    """Build a Qoder Workflow trace (top-level events only)."""
+    """Build trace events matching real Qoder 1.0.48 Workflow protocol."""
     events = [
         {"type": "system", "subtype": "init", "tools": ["Agent", "Bash", "Workflow"],
-         "agents": ["Explore", "general-purpose"], "model": "dfmodel"},
+         "agents": ["Explore", "general-purpose"], "model": "qmodel_preview",
+         "session_id": session_id},
     ]
-    # Workflow tool-use request
-    script_body = ""
-    if script_has_agent:
-        script_body = "agent('explore'); agent('candidate'); agent('review');"
-    else:
-        script_body = "// no agent calls"
+    # Workflow tool_use — input only has script
+    script_body = "export const meta = { name: 'test' }" if script_has_agent else "// empty"
     events.append({
         "type": "assistant",
-        "message": {"model": "dfmodel", "content": [
-            {"type": "tool_use", "id": f"call_wf_{workflow_id}",
+        "message": {"model": "qmodel_preview", "content": [
+            {"type": "tool_use", "id": wf_tool_use_id,
              "name": "Workflow",
-             "input": {
-                 "description": "Architecture workflow",
-                 "script": script_body,
-                 "session_id": session_id,
-                 "workflow_id": workflow_id,
-                 "run_id": "wf-run-001",
-                 "task_id": "wf-task-001",
-             }}]}
+             "input": {"script": script_body}}]},
+        "session_id": session_id,
     })
-    # Workflow launched
+    # tool_result with payload containing taskId, runId, transcriptDir
+    import json as _json
+    payload = _json.dumps({
+        "status": "async_launched",
+        "taskId": task_id,
+        "runId": run_id,
+        "transcriptDir": f"/tmp/workspace/.qoder/sessions/{session_id}/workflows/runs/{run_id}",
+    })
     events.append({
         "type": "user",
         "message": {"content": [
-            {"type": "tool_result", "tool_use_id": f"call_wf_{workflow_id}",
-             "content": "Workflow launched."}]},
-        "tool_use_result": {"status": "async_launched"},
-    })
-    # Workflow system events
-    events.append({
-        "type": "system",
-        "task_id": "wf-task-001",
-        "tool_use_id": f"call_wf_{workflow_id}",
+            {"type": "tool_result", "tool_use_id": wf_tool_use_id,
+             "content": f"Workflow launched.\ntaskId: {task_id}\nrunId: {run_id}"}]},
+        "tool_use_result": {"payload": payload},
         "session_id": session_id,
-        "workflow_id": workflow_id,
-        "description": "workflow execution",
     })
+    # Child agent system events (with parent_tool_use_id = wf_tool_use_id)
+    if children:
+        for child in children:
+            # task_started event
+            events.append({
+                "type": "system",
+                "task_id": child["agent_id"],
+                "parent_tool_use_id": wf_tool_use_id,
+                "tool_use_id": wf_tool_use_id,
+                "subtype": "task_started",
+                "description": f"{child.get('marker_text', child['label'])}",
+                "session_id": session_id,
+            })
+            # task_progress events
+            events.append({
+                "type": "system",
+                "task_id": child["agent_id"],
+                "parent_tool_use_id": wf_tool_use_id,
+                "tool_use_id": wf_tool_use_id,
+                "subtype": "task_progress",
+                "description": f"{child.get('marker_text', '')}",
+                "session_id": session_id,
+            })
+    # task_notification for Workflow completion
     events.append({
         "type": "system",
-        "task_id": "wf-task-001",
-        "tool_use_id": f"call_wf_{workflow_id}",
+        "subtype": "task_notification",
+        "task_id": task_id,
+        "tool_use_id": wf_tool_use_id,
         "status": overall_status,
         "session_id": session_id,
-        "workflow_id": workflow_id,
     })
     # Validation command
     events.append({
         "type": "assistant",
-        "message": {"model": "dfmodel", "content": [
+        "message": {"model": "qmodel_preview", "content": [
             {"type": "tool_use", "id": "call_validate", "name": "Bash",
              "input": {"command": "python3 scripts/check.py",
-                       "dir_path": "/tmp/fixture"}}]}
+                       "dir_path": "/tmp/fixture"}}]},
+        "session_id": session_id,
     })
     events.append({
         "type": "user",
@@ -288,51 +299,46 @@ def workflow_trace_events(
             {"type": "tool_result", "tool_use_id": "call_validate",
              "is_error": False, "content": "EXIT_CODE=0"}]},
         "tool_use_result": {"kind": "completed", "exitCode": 0},
+        "session_id": session_id,
     })
     return events
 
 
 def standard_workflow_children() -> list[dict]:
-    """Standard 3-child workflow: explore, candidate, post-review."""
+    """Standard 3-child workflow matching real Qoder 1.0.48 agent structure."""
     return [
         {
-            "agent_id": "agent-explore-001",
-            "name": "target-native-explore",
-            "role": "Explore",
-            "prompt": "Explore [eval-stage:target-native-explore]",
-            "stage_markers": ["[eval-stage:target-native-explore]"],
-            "task_id": "task-explore-001",
-            "delegated_models": ["delegate-model"],
-            "started_index": 3,
-            "completed_index": 4,
+            "agent_id": "aExplore-963959565d8dca96",
+            "label": "target-native-explore",
+            "agent_type": "Explore",
+            "journal_key": "v2:e4e9f74d7a1f75d86a132c25ddd1b90546ab1e21c67b37f491dba8834afbf8e7",
+            "phase_index": 1,
+            "phase_title": "Explore",
+            "marker_text": "[eval-stage:target-native-explore]",
+            "state": "done",
             "has_terminal": True,
-            "terminal_status": "completed",
         },
         {
-            "agent_id": "agent-candidate-001",
-            "name": "target-native-candidate",
-            "role": "general-purpose",
-            "prompt": "Produce candidate [eval-stage:target-native-candidate]",
-            "stage_markers": ["[eval-stage:target-native-candidate]"],
-            "task_id": "task-candidate-001",
-            "delegated_models": ["delegate-model"],
-            "started_index": 5,
-            "completed_index": 6,
+            "agent_id": "aworkflow-subagent-873e6bdde1964c81",
+            "label": "target-native-candidate",
+            "agent_type": "workflow-subagent",
+            "journal_key": "v2:5eea14e79089da9a5ce40ccf898d8339bf9ea10e28500b5dde9a97789edaeee0",
+            "phase_index": 2,
+            "phase_title": "Candidate",
+            "marker_text": "[eval-stage:target-native-candidate]",
+            "state": "done",
             "has_terminal": True,
-            "terminal_status": "completed",
         },
         {
-            "agent_id": "agent-review-001",
-            "name": "ultra-post-review",
-            "role": "general-purpose",
-            "prompt": "Review [eval-stage:ultra-post-review]",
-            "stage_markers": ["[eval-stage:ultra-post-review]"],
-            "task_id": "task-review-001",
-            "delegated_models": ["delegate-model"],
-            "started_index": 7,
-            "completed_index": 8,
+            "agent_id": "aworkflow-subagent-6711054d3de79b1b",
+            "label": "ultra-post-review",
+            "agent_type": "workflow-subagent",
+            "journal_key": "v2:eff74d58b80340cdf5d2f64bfc7d486a4299ab4c2380ef1f42307c11b6175766",
+            "phase_index": 3,
+            "phase_title": "Review",
+            "marker_text": "[eval-stage:ultra-post-review]",
+            "state": "done",
             "has_terminal": True,
-            "terminal_status": "completed",
         },
     ]
 
@@ -352,18 +358,22 @@ def test_direct_agent_treatment_passes(tmp: Path) -> None:
 def test_workflow_complete_trusted_trace_passes(tmp: Path) -> None:
     """Workflow with full trusted runtime evidence passes like direct Agent."""
     children = standard_workflow_children()
+    sid, rid = "sess-001", "wf_run-001"
     runtime_dir = tmp / "runtime"
     runtime_dir.mkdir()
-    workflow_runtime_artifacts(runtime_dir, "sess-001", "wf-001", children)
+    workflow_runtime_artifacts(runtime_dir, sid, rid, children)
 
     trace = _write_jsonl(tmp / "traces", "workflow-complete.jsonl",
-                         workflow_trace_events(children=children))
+                         workflow_trace_events(children=children,
+                                               session_id=sid, run_id=rid))
     summary = summarize(trace, workflow_runtime_root=runtime_dir)
     assert summary["runtime"] == "qoder"
+    assert not summary.get("workflow_protocol_failures"), (
+        f"unexpected protocol failures: {summary['workflow_protocol_failures']}"
+    )
     assert summary["agent_call_count"] == 3, (
         f"expected 3 workflow child agent calls, got {summary['agent_call_count']}"
     )
-    # Verify markers and roles from runtime evidence
     markers_found = set()
     for call in summary["agent_calls"]:
         for marker in call.get("stage_markers", []):
@@ -378,48 +388,41 @@ def test_workflow_complete_trusted_trace_passes(tmp: Path) -> None:
 def test_workflow_completed_but_child_missing_terminal_fails(tmp: Path) -> None:
     """Workflow overall completed but one child has no terminal event → fail."""
     children = standard_workflow_children()
-    children[1]["has_terminal"] = False  # candidate has no terminal event
+    children[1]["state"] = "running"  # candidate not terminal
+    children[1]["has_terminal"] = False
 
+    sid, rid = "sess-002", "wf_run-002"
     runtime_dir = tmp / "runtime"
     runtime_dir.mkdir()
-    workflow_runtime_artifacts(runtime_dir, "sess-002", "wf-002", children,
-                               overall_status="completed")
+    workflow_runtime_artifacts(runtime_dir, sid, rid, children)
 
     trace = _write_jsonl(tmp / "traces", "workflow-missing-terminal.jsonl",
                          workflow_trace_events(children=children,
-                                               workflow_id="wf-002",
-                                               session_id="sess-002"))
+                                               session_id=sid, run_id=rid))
     summary = summarize(trace, workflow_runtime_root=runtime_dir)
-    # Should have only 2 completed calls (explore + review), not 3
-    completed_markers = [
-        marker
-        for call in summary["agent_calls"]
-        for marker in call.get("stage_markers", [])
-    ]
-    assert "[eval-stage:target-native-candidate]" not in completed_markers, (
-        "child without terminal should not appear as completed"
+    # Protocol should report failures for non-terminal child
+    assert summary.get("workflow_protocol_failures"), (
+        "non-terminal child should produce protocol failure"
     )
-    # The grader should still require all markers; missing candidate may not
-    # itself be a required marker, but the overall trace should be incomplete.
-    # At minimum, agent_call_count should reflect only truly completed children
-    assert summary["agent_call_count"] <= 2
+    assert summary["agent_call_count"] == 0, (
+        "protocol failure should prevent any child calls"
+    )
 
 
 def test_script_claims_agent_no_runtime_evidence_fails(tmp: Path) -> None:
     """Script claims agent() but no runtime child evidence → fail closed."""
+    sid, rid = "sess-003", "wf_run-003"
     runtime_dir = tmp / "runtime"
     runtime_dir.mkdir()
-    # Write empty journal - no child events
-    workflow_runtime_artifacts(runtime_dir, "sess-003", "wf-003", [])
+    # Empty children → manifest agents=[] → protocol failure
+    workflow_runtime_artifacts(runtime_dir, sid, rid, [])
 
     trace = _write_jsonl(tmp / "traces", "workflow-script-claims.jsonl",
-                         workflow_trace_events(workflow_id="wf-003",
-                                               session_id="sess-003",
+                         workflow_trace_events(session_id=sid, run_id=rid,
                                                script_has_agent=True))
     summary = summarize(trace, workflow_runtime_root=runtime_dir)
-    assert summary["agent_call_count"] == 0, (
-        "script-claimed agents without runtime evidence should not count"
-    )
+    assert summary["agent_call_count"] == 0
+    assert summary.get("workflow_protocol_failures"), "empty manifest should fail"
     checks, failures, codes = grade(summary, ARCHITECTURE_TRACE_EXPECTED)
     assert failures, "missing required stage markers should fail"
 
@@ -427,35 +430,36 @@ def test_script_claims_agent_no_runtime_evidence_fails(tmp: Path) -> None:
 def test_marker_mismatch_fails(tmp: Path) -> None:
     """Workflow child with wrong marker → fail."""
     children = standard_workflow_children()
-    children[0]["stage_markers"] = ["[eval-stage:wrong-marker]"]
+    children[0]["marker_text"] = "[eval-stage:wrong-marker]"
 
+    sid, rid = "sess-004", "wf_run-004"
     runtime_dir = tmp / "runtime"
     runtime_dir.mkdir()
-    workflow_runtime_artifacts(runtime_dir, "sess-004", "wf-004", children)
+    workflow_runtime_artifacts(runtime_dir, sid, rid, children)
 
     trace = _write_jsonl(tmp / "traces", "workflow-marker-mismatch.jsonl",
                          workflow_trace_events(children=children,
-                                               workflow_id="wf-004",
-                                               session_id="sess-004"))
+                                               session_id=sid, run_id=rid))
     summary = summarize(trace, workflow_runtime_root=runtime_dir)
     checks, failures, codes = grade(summary, ARCHITECTURE_TRACE_EXPECTED)
-    assert any("delegated_stage_marker_missing" in c or "required_stage_call" in c
-               for c in codes), f"marker mismatch should fail: {codes}"
+    assert any("required_stage_call" in c for c in codes), (
+        f"marker mismatch should fail: {codes}"
+    )
 
 
 def test_role_mismatch_fails(tmp: Path) -> None:
     """Workflow child with wrong role/agentType → fail."""
     children = standard_workflow_children()
-    children[0]["role"] = "general-purpose"  # Should be Explore
+    children[0]["agent_type"] = "general-purpose"  # Should be Explore
 
+    sid, rid = "sess-005", "wf_run-005"
     runtime_dir = tmp / "runtime"
     runtime_dir.mkdir()
-    workflow_runtime_artifacts(runtime_dir, "sess-005", "wf-005", children)
+    workflow_runtime_artifacts(runtime_dir, sid, rid, children)
 
     trace = _write_jsonl(tmp / "traces", "workflow-role-mismatch.jsonl",
                          workflow_trace_events(children=children,
-                                               workflow_id="wf-005",
-                                               session_id="sess-005"))
+                                               session_id=sid, run_id=rid))
     summary = summarize(trace, workflow_runtime_root=runtime_dir)
     checks, failures, codes = grade(summary, ARCHITECTURE_TRACE_EXPECTED)
     assert any("delegated_stage_role" in c for c in codes), (
@@ -466,17 +470,16 @@ def test_role_mismatch_fails(tmp: Path) -> None:
 def test_child_order_wrong_fails(tmp: Path) -> None:
     """Workflow children in wrong order → fail."""
     children = standard_workflow_children()
-    # Swap explore and review order
     children[0], children[2] = children[2], children[0]
 
+    sid, rid = "sess-006", "wf_run-006"
     runtime_dir = tmp / "runtime"
     runtime_dir.mkdir()
-    workflow_runtime_artifacts(runtime_dir, "sess-006", "wf-006", children)
+    workflow_runtime_artifacts(runtime_dir, sid, rid, children)
 
     trace = _write_jsonl(tmp / "traces", "workflow-order-wrong.jsonl",
                          workflow_trace_events(children=children,
-                                               workflow_id="wf-006",
-                                               session_id="sess-006"))
+                                               session_id=sid, run_id=rid))
     summary = summarize(trace, workflow_runtime_root=runtime_dir)
     checks, failures, codes = grade(summary, ARCHITECTURE_TRACE_EXPECTED)
     assert any("delegated_stage_order" in c for c in codes), (
@@ -485,89 +488,68 @@ def test_child_order_wrong_fails(tmp: Path) -> None:
 
 
 def test_missing_journal_fails_closed(tmp: Path) -> None:
-    """Missing workflow journal → fail closed, not pass."""
+    """Missing workflow journal → fail closed with explicit protocol failure."""
+    sid, rid = "sess-007", "wf_run-007"
     runtime_dir = tmp / "runtime"
     runtime_dir.mkdir()
-    workflow_runtime_artifacts(runtime_dir, "sess-007", "wf-007",
+    workflow_runtime_artifacts(runtime_dir, sid, rid,
                                standard_workflow_children(),
                                missing_journal=True)
 
     trace = _write_jsonl(tmp / "traces", "workflow-no-journal.jsonl",
-                         workflow_trace_events(workflow_id="wf-007",
-                                               session_id="sess-007"))
+                         workflow_trace_events(session_id=sid, run_id=rid))
     summary = summarize(trace, workflow_runtime_root=runtime_dir)
-    assert summary["agent_call_count"] == 0, (
-        "missing journal should produce zero agent calls"
-    )
-    checks, failures, codes = grade(summary, ARCHITECTURE_TRACE_EXPECTED)
-    assert failures, "missing journal should fail"
+    assert summary["agent_call_count"] == 0
+    pf = summary.get("workflow_protocol_failures", [])
+    assert any("journal" in f for f in pf), f"should report journal failure: {pf}"
 
 
 def test_corrupt_journal_fails_closed(tmp: Path) -> None:
     """Corrupt workflow journal → fail closed."""
+    sid, rid = "sess-008", "wf_run-008"
     runtime_dir = tmp / "runtime"
     runtime_dir.mkdir()
-    workflow_runtime_artifacts(runtime_dir, "sess-008", "wf-008",
+    workflow_runtime_artifacts(runtime_dir, sid, rid,
                                standard_workflow_children(),
                                corrupt_journal=True)
 
     trace = _write_jsonl(tmp / "traces", "workflow-corrupt-journal.jsonl",
-                         workflow_trace_events(workflow_id="wf-008",
-                                               session_id="sess-008"))
+                         workflow_trace_events(session_id=sid, run_id=rid))
     summary = summarize(trace, workflow_runtime_root=runtime_dir)
-    assert summary["agent_call_count"] == 0, (
-        "corrupt journal should produce zero agent calls"
-    )
-    checks, failures, codes = grade(summary, ARCHITECTURE_TRACE_EXPECTED)
-    assert failures, "corrupt journal should fail"
-
-
-def test_missing_transcript_fails_closed(tmp: Path) -> None:
-    """Missing workflow transcript → fail closed."""
-    runtime_dir = tmp / "runtime"
-    runtime_dir.mkdir()
-    workflow_runtime_artifacts(runtime_dir, "sess-009", "wf-009",
-                               standard_workflow_children(),
-                               missing_transcript=True)
-
-    trace = _write_jsonl(tmp / "traces", "workflow-no-transcript.jsonl",
-                         workflow_trace_events(workflow_id="wf-009",
-                                               session_id="sess-009"))
-    summary = summarize(trace, workflow_runtime_root=runtime_dir)
-    assert summary["agent_call_count"] == 0, (
-        "missing transcript should produce zero agent calls"
-    )
+    assert summary["agent_call_count"] == 0
+    pf = summary.get("workflow_protocol_failures", [])
+    assert any("journal" in f for f in pf), f"should report journal failure: {pf}"
 
 
 def test_missing_output_fails_closed(tmp: Path) -> None:
     """Missing workflow output → fail closed."""
+    sid, rid = "sess-010", "wf_run-010"
     runtime_dir = tmp / "runtime"
     runtime_dir.mkdir()
-    workflow_runtime_artifacts(runtime_dir, "sess-010", "wf-010",
+    workflow_runtime_artifacts(runtime_dir, sid, rid,
                                standard_workflow_children(),
                                missing_output=True)
 
     trace = _write_jsonl(tmp / "traces", "workflow-no-output.jsonl",
-                         workflow_trace_events(workflow_id="wf-010",
-                                               session_id="sess-010"))
+                         workflow_trace_events(session_id=sid, run_id=rid))
     summary = summarize(trace, workflow_runtime_root=runtime_dir)
-    assert summary["agent_call_count"] == 0, (
-        "missing output should produce zero agent calls"
-    )
+    assert summary["agent_call_count"] == 0
+    pf = summary.get("workflow_protocol_failures", [])
+    assert any("output" in f for f in pf), f"should report output failure: {pf}"
 
 
 def test_workflow_runtime_paths_allowed_in_write_set(tmp: Path) -> None:
     """Workflow runtime paths bound to session/run ID should be allowed."""
     from trace_evidence import classify_workflow_write_set
     session_id = "sess-011"
-    workflow_id = "wf-011"
+    run_id = "wf_run-011"
     paths = {
-        f".qoder/sessions/{session_id}/workflows/{workflow_id}/manifest.json",
-        f".qoder/sessions/{session_id}/workflows/{workflow_id}/journal.jsonl",
-        f".qoder/sessions/{session_id}/workflows/{workflow_id}/transcript.jsonl",
-        f".qoder/sessions/{session_id}/workflows/{workflow_id}/output.json",
+        f".qoder/sessions/{session_id}/workflows/runs/{run_id}/manifest.json",
+        f".qoder/sessions/{session_id}/workflows/runs/{run_id}/journal.jsonl",
+        f".qoder/sessions/{session_id}/workflows/runs/{run_id}/output.json",
+        f".qoder/sessions/{session_id}/workflows/scripts/some-script.js",
     }
-    bound = classify_workflow_write_set(paths, session_id, workflow_id)
+    bound = classify_workflow_write_set(paths, session_id, run_id)
     assert bound == paths, f"bound workflow paths should be allowed: {paths - bound}"
 
 
@@ -575,59 +557,50 @@ def test_unbound_qoder_files_still_trigger_write_set(tmp: Path) -> None:
     """Arbitrary .qoder files NOT bound to a valid session → write set violation."""
     from trace_evidence import classify_workflow_write_set
     session_id = "sess-012"
-    workflow_id = "wf-012"
+    run_id = "wf_run-012"
     unbound_paths = {
         ".qoder/settings.json",
         ".qoder/cache/data.bin",
-        ".qoder/sessions/other-session/workflows/other-wf/journal.jsonl",
+        ".qoder/sessions/other-session/workflows/runs/other/journal.jsonl",
     }
-    bound = classify_workflow_write_set(unbound_paths, session_id, workflow_id)
+    bound = classify_workflow_write_set(unbound_paths, session_id, run_id)
     assert not bound, f"no unbound paths should be classified: {bound}"
-    # The remaining paths should all be violations
     remaining = unbound_paths - bound
     assert remaining == unbound_paths
 
 
 def test_direct_agent_and_workflow_normalized_equivalently(tmp: Path) -> None:
     """Direct Agent and Workflow for the same stage plan → same normalized summary."""
-    # Direct Agent
     direct_trace = _write_jsonl(tmp / "traces", "equiv-direct.jsonl",
                                 direct_agent_trace_events())
     direct_summary = summarize(direct_trace)
 
-    # Workflow with equivalent stages
     children = standard_workflow_children()
+    sid, rid = "sess-eq", "wf_run-eq"
     runtime_dir = tmp / "runtime-equiv"
     runtime_dir.mkdir()
-    workflow_runtime_artifacts(runtime_dir, "sess-eq", "wf-eq", children)
+    workflow_runtime_artifacts(runtime_dir, sid, rid, children)
 
     wf_trace = _write_jsonl(tmp / "traces", "equiv-workflow.jsonl",
                             workflow_trace_events(children=children,
-                                                  session_id="sess-eq",
-                                                  workflow_id="wf-eq"))
+                                                  session_id=sid, run_id=rid))
     wf_summary = summarize(wf_trace, workflow_runtime_root=runtime_dir)
 
-    # Both should produce the same set of stage markers
     direct_markers = sorted(
-        marker
-        for call in direct_summary["agent_calls"]
+        marker for call in direct_summary["agent_calls"]
         for marker in call.get("stage_markers", [])
     )
     wf_markers = sorted(
-        marker
-        for call in wf_summary["agent_calls"]
+        marker for call in wf_summary["agent_calls"]
         for marker in call.get("stage_markers", [])
     )
-    # Workflow has 3 children (explore, candidate, review), direct has 2 (explore, review)
-    # But the required markers should overlap
     assert "[eval-stage:target-native-explore]" in direct_markers
     assert "[eval-stage:target-native-explore]" in wf_markers
     assert "[eval-stage:ultra-post-review]" in direct_markers
     assert "[eval-stage:ultra-post-review]" in wf_markers
 
-    # Grade both with the same expectations
-    direct_checks, direct_failures, direct_codes = grade(direct_summary, ARCHITECTURE_TRACE_EXPECTED)
-    wf_checks, wf_failures, wf_codes = grade(wf_summary, ARCHITECTURE_TRACE_EXPECTED)
+    direct_checks, direct_failures, _ = grade(direct_summary, ARCHITECTURE_TRACE_EXPECTED)
+    wf_checks, wf_failures, _ = grade(wf_summary, ARCHITECTURE_TRACE_EXPECTED)
     assert not direct_failures, f"direct should pass: {direct_failures}"
     assert not wf_failures, f"workflow should pass: {wf_failures}"
 
@@ -635,76 +608,34 @@ def test_direct_agent_and_workflow_normalized_equivalently(tmp: Path) -> None:
 def test_ablation_duplicate_evidence_goal_and_extra_exploration(tmp: Path) -> None:
     """Ablation's ultra-code-explore + target-native-explore detected."""
     children = [
-        {
-            "agent_id": "agent-ultra-explore",
-            "name": "ultra-code-explore",
-            "role": "Explore",
-            "prompt": "Explore [eval-stage:ultra-code-explore]",
-            "stage_markers": ["[eval-stage:ultra-code-explore]"],
-            "task_id": "task-ultra-explore",
-            "delegated_models": ["delegate-model"],
-            "started_index": 3,
-            "completed_index": 4,
-            "has_terminal": True,
-        },
-        {
-            "agent_id": "agent-native-explore",
-            "name": "target-native-explore",
-            "role": "Explore",
-            "prompt": "Explore [eval-stage:target-native-explore]",
-            "stage_markers": ["[eval-stage:target-native-explore]"],
-            "task_id": "task-native-explore",
-            "delegated_models": ["delegate-model"],
-            "started_index": 5,
-            "completed_index": 6,
-            "has_terminal": True,
-        },
-        {
-            "agent_id": "agent-candidate",
-            "name": "target-native-candidate",
-            "role": "general-purpose",
-            "prompt": "Candidate [eval-stage:target-native-candidate]",
-            "stage_markers": ["[eval-stage:target-native-candidate]"],
-            "task_id": "task-candidate",
-            "delegated_models": ["delegate-model"],
-            "started_index": 7,
-            "completed_index": 8,
-            "has_terminal": True,
-        },
-        {
-            "agent_id": "agent-review",
-            "name": "ultra-post-review",
-            "role": "general-purpose",
-            "prompt": "Review [eval-stage:ultra-post-review]",
-            "stage_markers": ["[eval-stage:ultra-post-review]"],
-            "task_id": "task-review",
-            "delegated_models": ["delegate-model"],
-            "started_index": 9,
-            "completed_index": 10,
-            "has_terminal": True,
-        },
+        {"agent_id": "aExplore-ultra", "label": "ultra-code-explore",
+         "agent_type": "Explore", "journal_key": "v2:aaa111",
+         "marker_text": "[eval-stage:ultra-code-explore]", "state": "done", "has_terminal": True},
+        {"agent_id": "aExplore-native", "label": "target-native-explore",
+         "agent_type": "Explore", "journal_key": "v2:bbb222",
+         "marker_text": "[eval-stage:target-native-explore]", "state": "done", "has_terminal": True},
+        {"agent_id": "aworkflow-sub-cand", "label": "target-native-candidate",
+         "agent_type": "workflow-subagent", "journal_key": "v2:ccc333",
+         "marker_text": "[eval-stage:target-native-candidate]", "state": "done", "has_terminal": True},
+        {"agent_id": "aworkflow-sub-rev", "label": "ultra-post-review",
+         "agent_type": "workflow-subagent", "journal_key": "v2:ddd444",
+         "marker_text": "[eval-stage:ultra-post-review]", "state": "done", "has_terminal": True},
     ]
+    sid, rid = "sess-abl", "wf_run-abl"
     runtime_dir = tmp / "runtime-ablation"
     runtime_dir.mkdir()
-    workflow_runtime_artifacts(runtime_dir, "sess-abl", "wf-abl", children)
+    workflow_runtime_artifacts(runtime_dir, sid, rid, children)
 
     trace = _write_jsonl(tmp / "traces", "ablation-workflow.jsonl",
                          workflow_trace_events(children=children,
-                                               session_id="sess-abl",
-                                               workflow_id="wf-abl"))
+                                               session_id=sid, run_id=rid))
     summary = summarize(trace, workflow_runtime_root=runtime_dir)
     assert summary["agent_call_count"] == 4
 
     checks, failures, codes = grade(summary, ARCHITECTURE_TRACE_EXPECTED)
-    assert "extra_exploration_call" in codes, (
-        f"ablation should detect extra_exploration_call: {codes}"
-    )
-    # The duplicate_evidence_goal is detected at the grade-run.py level through
-    # stage-evidence.json reconciliation, not trace_evidence.py directly.
-    # But the trace should at least show both exploration markers present.
+    assert "extra_exploration_call" in codes, f"should detect extra_exploration_call: {codes}"
     all_markers = [
-        marker
-        for call in summary["agent_calls"]
+        marker for call in summary["agent_calls"]
         for marker in call.get("stage_markers", [])
     ]
     assert "[eval-stage:ultra-code-explore]" in all_markers
@@ -715,90 +646,57 @@ def test_workflow_completed_no_child_evidence_fails(tmp: Path) -> None:
     """Workflow completed but no child runtime evidence at all → fail."""
     runtime_dir = tmp / "runtime"
     runtime_dir.mkdir()
-    # No runtime artifacts at all for this workflow
     trace = _write_jsonl(tmp / "traces", "workflow-no-evidence.jsonl",
-                         workflow_trace_events(workflow_id="wf-none",
-                                               session_id="sess-none"))
+                         workflow_trace_events(session_id="sess-none", run_id="wf_none"))
     summary = summarize(trace, workflow_runtime_root=runtime_dir)
-    assert summary["agent_call_count"] == 0, (
-        "workflow with no runtime evidence should have zero agent calls"
-    )
+    assert summary["agent_call_count"] == 0
     checks, failures, codes = grade(summary, ARCHITECTURE_TRACE_EXPECTED)
     assert failures, "no evidence should fail"
 
 
 def test_workflow_overall_completed_cannot_substitute_child(tmp: Path) -> None:
     """Workflow completed status alone cannot substitute for missing child lifecycle."""
+    sid, rid = "sess-sub", "wf_run-sub"
     runtime_dir = tmp / "runtime"
     runtime_dir.mkdir()
-    # Write only manifest and output (no journal/transcript)
-    wf_dir = runtime_dir / ".qoder" / "sessions" / "sess-sub" / "workflows" / "wf-sub"
+    wf_dir = runtime_dir / ".qoder" / "sessions" / sid / "workflows" / "runs" / rid
     wf_dir.mkdir(parents=True, exist_ok=True)
     _write_json(wf_dir, "manifest.json", {
-        "workflow_id": "wf-sub", "session_id": "sess-sub",
-        "task_id": "wf-task-sub", "run_id": "wf-run-sub",
-        "stages": [],
+        "runId": rid, "workflowName": "test", "status": "completed",
+        "agents": [],
     })
-    _write_json(wf_dir, "output.json", {"status": "completed", "children": []})
+    _write_json(wf_dir, "output.json", {"runId": rid, "status": "completed", "result": {}})
+    _write_jsonl(wf_dir, "journal.jsonl", [{"type": "started", "key": "v2:empty"}])
 
     trace = _write_jsonl(tmp / "traces", "workflow-substitute.jsonl",
-                         workflow_trace_events(workflow_id="wf-sub",
-                                               session_id="sess-sub"))
+                         workflow_trace_events(session_id=sid, run_id=rid))
     summary = summarize(trace, workflow_runtime_root=runtime_dir)
-    assert summary["agent_call_count"] == 0, (
-        "workflow completed without child evidence should not produce agent calls"
-    )
+    assert summary["agent_call_count"] == 0
+    pf = summary.get("workflow_protocol_failures", [])
+    assert pf, "empty agents should produce protocol failure"
 
 
 def test_stage_ledger_workflow_child_reconciliation(tmp: Path) -> None:
-    """Stage ledger claims ultra-code-explore but workflow trace lacks it → fail.
-
-    The architecture scenario reconcile_events include ultra-code-explore.
-    If the stage ledger records it but the workflow trace doesn't produce a
-    matching agent call, the reconciliation should detect stage_trace_mismatch.
-
-    This test simulates what grade-run.py does: comparing ledger event names
-    against traced agent markers for the reconcile_events subset.
-    """
-    # Workflow with only explore + review (no ultra-code-explore)
+    """Stage ledger claims ultra-code-explore but workflow trace lacks it → fail."""
     children = [
-        {
-            "agent_id": "agent-explore-rc",
-            "name": "target-native-explore",
-            "role": "Explore",
-            "prompt": "Explore [eval-stage:target-native-explore]",
-            "stage_markers": ["[eval-stage:target-native-explore]"],
-            "task_id": "task-explore-rc",
-            "delegated_models": ["delegate-model"],
-            "started_index": 3,
-            "completed_index": 4,
-            "has_terminal": True,
-        },
-        {
-            "agent_id": "agent-review-rc",
-            "name": "ultra-post-review",
-            "role": "general-purpose",
-            "prompt": "Review [eval-stage:ultra-post-review]",
-            "stage_markers": ["[eval-stage:ultra-post-review]"],
-            "task_id": "task-review-rc",
-            "delegated_models": ["delegate-model"],
-            "started_index": 5,
-            "completed_index": 6,
-            "has_terminal": True,
-        },
+        {"agent_id": "aExplore-rc", "label": "target-native-explore",
+         "agent_type": "Explore", "journal_key": "v2:rc111",
+         "marker_text": "[eval-stage:target-native-explore]", "state": "done", "has_terminal": True},
+        {"agent_id": "aworkflow-sub-rc", "label": "ultra-post-review",
+         "agent_type": "workflow-subagent", "journal_key": "v2:rc222",
+         "marker_text": "[eval-stage:ultra-post-review]", "state": "done", "has_terminal": True},
     ]
+    sid, rid = "sess-recon", "wf_run-recon"
     runtime_dir = tmp / "runtime-recon"
     runtime_dir.mkdir()
-    workflow_runtime_artifacts(runtime_dir, "sess-recon", "wf-recon", children)
+    workflow_runtime_artifacts(runtime_dir, sid, rid, children)
 
     trace = _write_jsonl(tmp / "traces", "workflow-reconciliation.jsonl",
                          workflow_trace_events(children=children,
-                                               session_id="sess-recon",
-                                               workflow_id="wf-recon"))
+                                               session_id=sid, run_id=rid))
     summary = summarize(trace, workflow_runtime_root=runtime_dir)
     assert summary["agent_call_count"] == 2
 
-    # Simulate the grade-run.py reconciliation logic
     reconcile_events = ARCHITECTURE_TRACE_EXPECTED["reconcile_events"]
     marker_to_event = {
         marker: name
@@ -811,23 +709,37 @@ def test_stage_ledger_workflow_child_reconciliation(tmp: Path) -> None:
         if marker in marker_to_event
     ]
 
-    # Simulate a stage ledger that claims ultra-code-explore occurred
     ledger_names = ["target-native-explore", "ultra-code-explore", "ultra-post-review", "validation"]
     reconciled = set(reconcile_events)
     ledger_sequence = [name for name in ledger_names if name in reconciled]
     trace_sequence = [name for name in traced_names if name in reconciled]
 
-    # The ledger claims ultra-code-explore but the trace doesn't have it
     mismatched = [
         name for name in reconcile_events
         if ledger_names.count(name) != traced_names.count(name)
     ]
     assert mismatched or ledger_sequence != trace_sequence, (
-        "reconciliation should detect mismatch: ledger has ultra-code-explore, trace does not"
+        "reconciliation should detect mismatch"
     )
-    assert "ultra-code-explore" in mismatched, (
-        f"ultra-code-explore should be the mismatched event: {mismatched}"
-    )
+    assert "ultra-code-explore" in mismatched
+
+
+def test_bound_plus_unbound_qoder_write_set(tmp: Path) -> None:
+    """Bound workflow paths + unbound .qoder files → write-set still fails."""
+    from trace_evidence import classify_workflow_write_set
+    session_id = "sess-mixed"
+    run_id = "wf_run-mixed"
+    mixed_paths = {
+        f".qoder/sessions/{session_id}/workflows/runs/{run_id}/manifest.json",
+        ".qoder/settings.json",
+        ".qoder/sessions/other-session/workflows/runs/other/journal.jsonl",
+    }
+    bound = classify_workflow_write_set(mixed_paths, session_id, run_id)
+    # Only the bound path should be excluded
+    assert bound == {f".qoder/sessions/{session_id}/workflows/runs/{run_id}/manifest.json"}
+    remaining = mixed_paths - bound
+    assert ".qoder/settings.json" in remaining
+    assert ".qoder/sessions/other-session/workflows/runs/other/journal.jsonl" in remaining
 
 
 # -- Runner -------------------------------------------------------------------
@@ -846,7 +758,6 @@ def main() -> None:
         test_child_order_wrong_fails,
         test_missing_journal_fails_closed,
         test_corrupt_journal_fails_closed,
-        test_missing_transcript_fails_closed,
         test_missing_output_fails_closed,
         test_workflow_runtime_paths_allowed_in_write_set,
         test_unbound_qoder_files_still_trigger_write_set,
@@ -855,6 +766,7 @@ def main() -> None:
         test_workflow_completed_no_child_evidence_fails,
         test_workflow_overall_completed_cannot_substitute_child,
         test_stage_ledger_workflow_child_reconciliation,
+        test_bound_plus_unbound_qoder_write_set,
     ]
     for test in tests:
         with tempfile.TemporaryDirectory(prefix="workflow-evidence-") as td:
