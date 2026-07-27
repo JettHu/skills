@@ -109,6 +109,9 @@ def direct_agent_trace_events() -> list[dict]:
          "tool_use_result": {"status": "async_launched"}},
         {"type": "system", "task_id": "aExplore-native",
          "tool_use_id": "call_explore", "description": "app/router.py"},
+        # Real child model evidence (parent_tool_use_id matches tool_use_id)
+        {"type": "assistant", "parent_tool_use_id": "call_explore",
+         "message": {"model": "dfmodel-child", "content": []}},
         {"type": "system", "task_id": "aExplore-native",
          "tool_use_id": "call_explore", "status": "completed"},
         # ultra-post-review via Agent
@@ -122,6 +125,9 @@ def direct_agent_trace_events() -> list[dict]:
             {"type": "tool_result", "tool_use_id": "call_review",
              "content": "Agent launched."}]},
          "tool_use_result": {"status": "async_launched"}},
+        # Real child model evidence
+        {"type": "assistant", "parent_tool_use_id": "call_review",
+         "message": {"model": "dfmodel-child2", "content": []}},
         {"type": "system", "task_id": "ageneral-review",
          "tool_use_id": "call_review", "status": "completed"},
         # Validation command
@@ -154,6 +160,7 @@ def workflow_runtime_artifacts(
     corrupt_journal: bool = False,
     missing_journal: bool = False,
     missing_output: bool = False,
+    task_id: str = _TASK_ID,
 ) -> Path:
     """Write real-protocol workflow artifacts to workflows/runs/<runId>/."""
     wf_dir = runtime_dir / ".qoder" / "sessions" / session_id / "workflows" / "runs" / run_id
@@ -201,7 +208,7 @@ def workflow_runtime_artifacts(
     if not missing_output:
         _write_json(wf_dir, "output.json", {
             "runId": run_id,
-            "taskId": _TASK_ID,
+            "taskId": task_id,
             "workflowName": "test-workflow",
             "status": overall_status,
             "result": {},
@@ -265,13 +272,20 @@ def workflow_trace_events(
                 "description": f"{child.get('marker_text', child['label'])}",
                 "session_id": session_id,
             })
-            # task_progress events
+            # task_completed event (with delegated model evidence)
+            events.append({
+                "type": "assistant",
+                "parent_tool_use_id": wf_tool_use_id,
+                "task_id": child["agent_id"],
+                "message": {"model": f"child-model-{child['agent_id'][:8]}", "content": []},
+                "session_id": session_id,
+            })
             events.append({
                 "type": "system",
                 "task_id": child["agent_id"],
                 "parent_tool_use_id": wf_tool_use_id,
                 "tool_use_id": wf_tool_use_id,
-                "subtype": "task_progress",
+                "subtype": "task_completed",
                 "description": f"{child.get('marker_text', '')}",
                 "session_id": session_id,
             })
@@ -539,7 +553,7 @@ def test_missing_output_fails_closed(tmp: Path) -> None:
 
 
 def test_workflow_runtime_paths_allowed_in_write_set(tmp: Path) -> None:
-    """Workflow runtime paths bound to session/run ID should be allowed."""
+    """Workflow runtime paths under runs/<runId>/ should be allowed."""
     from trace_evidence import classify_workflow_write_set
     session_id = "sess-011"
     run_id = "wf_run-011"
@@ -547,10 +561,9 @@ def test_workflow_runtime_paths_allowed_in_write_set(tmp: Path) -> None:
         f".qoder/sessions/{session_id}/workflows/runs/{run_id}/manifest.json",
         f".qoder/sessions/{session_id}/workflows/runs/{run_id}/journal.jsonl",
         f".qoder/sessions/{session_id}/workflows/runs/{run_id}/output.json",
-        f".qoder/sessions/{session_id}/workflows/scripts/some-script.js",
     }
     bound = classify_workflow_write_set(paths, session_id, run_id)
-    assert bound == paths, f"bound workflow paths should be allowed: {paths - bound}"
+    assert bound == paths, f"bound run paths should be allowed: {paths - bound}"
 
 
 def test_unbound_qoder_files_still_trigger_write_set(tmp: Path) -> None:
@@ -735,11 +748,1062 @@ def test_bound_plus_unbound_qoder_write_set(tmp: Path) -> None:
         ".qoder/sessions/other-session/workflows/runs/other/journal.jsonl",
     }
     bound = classify_workflow_write_set(mixed_paths, session_id, run_id)
-    # Only the bound path should be excluded
+    # Only the bound path should be excluded (must match run_id)
     assert bound == {f".qoder/sessions/{session_id}/workflows/runs/{run_id}/manifest.json"}
     remaining = mixed_paths - bound
     assert ".qoder/settings.json" in remaining
     assert ".qoder/sessions/other-session/workflows/runs/other/journal.jsonl" in remaining
+
+
+# -- NEW red-first regression tests for Ticket 20 Workflow evidence gaps ------
+
+def test_workflow_trace_no_runtime_root_fails(tmp: Path) -> None:
+    """Workflow invocation detected but no --workflow-runtime-root → fail closed.
+
+    When a trace contains Workflow tool_use events but the grader is not
+    provided --workflow-runtime-root, the Workflow protocol failures MUST
+    be explicit and cannot be silently skipped.
+    """
+    children = standard_workflow_children()
+    sid, rid = "sess-nort", "wf_run-nort"
+    # Do NOT create runtime artifacts directory
+    trace = _write_jsonl(tmp / "traces", "workflow-no-runtime-root.jsonl",
+                         workflow_trace_events(children=children,
+                                               session_id=sid, run_id=rid))
+    # summarize WITHOUT workflow_runtime_root
+    summary = summarize(trace)
+    assert summary.get("workflow_sessions"), "should detect Workflow sessions"
+    pf = summary.get("workflow_protocol_failures", [])
+    assert pf, (
+        f"Workflow trace without runtime root MUST produce protocol failures, "
+        f"got: {pf}"
+    )
+    # The failures must prevent any agent calls from being created
+    assert summary["agent_call_count"] == 0, (
+        "no agent calls should be produced when Workflow evidence is missing"
+    )
+
+
+def test_workflow_failures_not_masked_by_direct_agent(tmp: Path) -> None:
+    """Workflow protocol failures are NOT masked by direct Agent evidence.
+
+    Even if the same trace has direct Agent calls that satisfy all stage
+    markers, Workflow protocol failures (missing runtime evidence) must
+    still cause an explicit grade failure.
+    """
+    sid, rid = "sess-masked", "wf_run-masked"
+    # Build a trace that has BOTH Workflow AND direct Agent calls
+    events = [
+        {"type": "system", "subtype": "init", "tools": ["Agent", "Bash", "Workflow"],
+         "agents": ["Explore", "general-purpose"], "model": "qmodel_preview",
+         "session_id": sid},
+        # Direct Agent call (target-native-explore) — this would normally pass
+        {"type": "assistant", "message": {"model": "qmodel_preview", "content": [
+            {"type": "tool_use", "id": "call_direct_explore", "name": "Agent",
+             "input": {"description": "Direct explore",
+                       "subagent_type": "Explore",
+                       "prompt": "Explore [eval-stage:target-native-explore]",
+                       "run_in_background": True}}]},
+         "session_id": sid},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "call_direct_explore",
+             "content": "Agent launched."}]},
+         "tool_use_result": {"status": "async_launched"},
+         "session_id": sid},
+        {"type": "system", "task_id": "aDirectExplore",
+         "tool_use_id": "call_direct_explore",
+         "description": "[eval-stage:target-native-explore] app/router.py",
+         "session_id": sid},
+        {"type": "system", "task_id": "aDirectExplore",
+         "tool_use_id": "call_direct_explore", "status": "completed",
+         "session_id": sid},
+        # Direct Agent call (ultra-post-review) — this would normally pass
+        {"type": "assistant", "message": {"model": "qmodel_preview", "content": [
+            {"type": "tool_use", "id": "call_direct_review", "name": "Agent",
+             "input": {"description": "Direct review",
+                       "subagent_type": "general-purpose",
+                       "prompt": "Review [eval-stage:ultra-post-review]",
+                       "run_in_background": True}}]},
+         "session_id": sid},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "call_direct_review",
+             "content": "Agent launched."}]},
+         "tool_use_result": {"status": "async_launched"},
+         "session_id": sid},
+        {"type": "system", "task_id": "aDirectReview",
+         "tool_use_id": "call_direct_review", "status": "completed",
+         "session_id": sid},
+    ]
+    # Add Workflow invocation (tool_use + tool_result) AFTER direct Agent calls
+    import json as _json
+    wf_tool_use_id = "call_masked_wf"
+    task_id = "wf-masked-task"
+    events.append({
+        "type": "assistant",
+        "message": {"model": "qmodel_preview", "content": [
+            {"type": "tool_use", "id": wf_tool_use_id,
+             "name": "Workflow",
+             "input": {"script": "export const meta = { name: 'masked' }"}}]},
+        "session_id": sid,
+    })
+    payload = _json.dumps({
+        "status": "async_launched",
+        "taskId": task_id,
+        "runId": rid,
+    })
+    events.append({
+        "type": "user",
+        "message": {"content": [
+            {"type": "tool_result", "tool_use_id": wf_tool_use_id,
+             "content": f"Workflow launched.\ntaskId: {task_id}\nrunId: {rid}"}]},
+        "tool_use_result": {"payload": payload},
+        "session_id": sid,
+    })
+    events.append({
+        "type": "system", "subtype": "task_notification",
+        "task_id": task_id, "tool_use_id": wf_tool_use_id,
+        "status": "completed", "session_id": sid,
+    })
+    # Validation command
+    events.append({
+        "type": "assistant",
+        "message": {"model": "qmodel_preview", "content": [
+            {"type": "tool_use", "id": "call_validate_masked", "name": "Bash",
+             "input": {"command": "python3 scripts/check.py",
+                       "dir_path": "/tmp/fixture"}}]},
+        "session_id": sid,
+    })
+    events.append({
+        "type": "user",
+        "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "call_validate_masked",
+             "is_error": False, "content": "EXIT_CODE=0"}]},
+        "tool_use_result": {"kind": "completed", "exitCode": 0},
+        "session_id": sid,
+    })
+
+    trace = _write_jsonl(tmp / "traces", "workflow-masked.jsonl", events)
+    # NO --workflow-runtime-root!
+    summary = summarize(trace)
+    # Direct Agent calls should exist
+    assert summary["agent_call_count"] >= 2, (
+        f"direct agent calls should be detected; got {summary['agent_call_count']}"
+    )
+    # But Workflow protocol failures MUST exist
+    pf = summary.get("workflow_protocol_failures", [])
+    assert pf, (
+        "Workflow protocol failures MUST NOT be masked by direct Agent calls"
+    )
+    # Grade must fail because of workflow_protocol_failures
+    checks, failures, codes = grade(summary, ARCHITECTURE_TRACE_EXPECTED)
+    assert "workflow_protocol_failure" in codes, (
+        f"grade must report workflow_protocol_failure even with direct Agent passing; "
+        f"got codes: {codes}"
+    )
+
+
+def test_workflow_task_progress_not_terminal(tmp: Path) -> None:
+    """task_progress subtype must not be treated as terminal lifecycle.
+
+    Only task_completed constitutes a terminal event.  A child with only
+    task_progress (no task_completed) must produce a protocol failure.
+    """
+    children = standard_workflow_children()
+    # Remove the child that has both started + progress → only progress remains for it
+    sid, rid = "sess-prog", "wf_run-prog"
+    runtime_dir = tmp / "runtime"
+    runtime_dir.mkdir()
+    workflow_runtime_artifacts(runtime_dir, sid, rid, children)
+
+    # Build trace where all children have task_started but only task_progress, no task_completed
+    events = [
+        {"type": "system", "subtype": "init", "tools": ["Agent", "Bash", "Workflow"],
+         "agents": ["Explore", "general-purpose"], "model": "qmodel_preview",
+         "session_id": sid},
+        {"type": "assistant",
+         "message": {"model": "qmodel_preview", "content": [
+             {"type": "tool_use", "id": "call_prog_wf",
+              "name": "Workflow",
+              "input": {"script": "export const meta = { name: 'prog' }"}}]},
+         "session_id": sid},
+    ]
+    import json as _json
+    payload = _json.dumps({
+        "status": "async_launched", "taskId": "wf-prog-task", "runId": rid,
+    })
+    events.append({
+        "type": "user",
+        "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "call_prog_wf",
+             "content": f"Workflow launched.\ntaskId: wf-prog-task\nrunId: {rid}"}]},
+        "tool_use_result": {"payload": payload},
+        "session_id": sid,
+    })
+    # Children: only task_started and task_progress, NO task_completed
+    for child in children:
+        events.append({
+            "type": "system", "task_id": child["agent_id"],
+            "parent_tool_use_id": "call_prog_wf",
+            "tool_use_id": "call_prog_wf",
+            "subtype": "task_started",
+            "description": child.get("marker_text", child["label"]),
+            "session_id": sid,
+        })
+        events.append({
+            "type": "system", "task_id": child["agent_id"],
+            "parent_tool_use_id": "call_prog_wf",
+            "tool_use_id": "call_prog_wf",
+            "subtype": "task_progress",
+            "description": child.get("marker_text", ""),
+            "session_id": sid,
+        })
+    # Workflow completed notification
+    events.append({
+        "type": "system", "subtype": "task_notification",
+        "task_id": "wf-prog-task", "tool_use_id": "call_prog_wf",
+        "status": "completed", "session_id": sid,
+    })
+    # Validation
+    events.append({
+        "type": "assistant",
+        "message": {"model": "qmodel_preview", "content": [
+            {"type": "tool_use", "id": "call_val_prog", "name": "Bash",
+             "input": {"command": "python3 scripts/check.py",
+                       "dir_path": "/tmp/fixture"}}]},
+        "session_id": sid,
+    })
+    events.append({
+        "type": "user",
+        "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "call_val_prog",
+             "is_error": False, "content": "EXIT_CODE=0"}]},
+        "tool_use_result": {"kind": "completed", "exitCode": 0},
+        "session_id": sid,
+    })
+
+    trace = _write_jsonl(tmp / "traces", "workflow-progress-only.jsonl", events)
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    # task_progress must not count as terminal — child should fail
+    pf = summary.get("workflow_protocol_failures", [])
+    assert pf, (
+        f"task_progress-only children must produce protocol failure; got: {pf}"
+    )
+    assert summary["agent_call_count"] == 0, (
+        "no calls should be produced when children lack task_completed"
+    )
+
+
+def test_workflow_child_started_after_terminal_fails(tmp: Path) -> None:
+    """Child with started_index after terminal_index → protocol failure.
+
+    The started event MUST occur before the terminal event in the trace.
+    Reversed order indicates corrupted or tampered evidence.
+    """
+    children = standard_workflow_children()
+    sid, rid = "sess-rev", "wf_run-rev"
+    runtime_dir = tmp / "runtime"
+    runtime_dir.mkdir()
+    workflow_runtime_artifacts(runtime_dir, sid, rid, children)
+
+    # Build trace where task_completed appears BEFORE task_started for children
+    events = [
+        {"type": "system", "subtype": "init", "tools": ["Agent", "Bash", "Workflow"],
+         "agents": ["Explore", "general-purpose"], "model": "qmodel_preview",
+         "session_id": sid},
+        {"type": "assistant",
+         "message": {"model": "qmodel_preview", "content": [
+             {"type": "tool_use", "id": "call_rev_wf",
+              "name": "Workflow",
+              "input": {"script": "export const meta = { name: 'rev' }"}}]},
+         "session_id": sid},
+    ]
+    import json as _json
+    payload = _json.dumps({
+        "status": "async_launched", "taskId": "wf-rev-task", "runId": rid,
+    })
+    events.append({
+        "type": "user",
+        "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "call_rev_wf",
+             "content": f"Workflow launched.\ntaskId: wf-rev-task\nrunId: {rid}"}]},
+        "tool_use_result": {"payload": payload},
+        "session_id": sid,
+    })
+    # Deliberately emit task_completed BEFORE task_started (reversed)
+    for child in children:
+        events.append({
+            "type": "system", "task_id": child["agent_id"],
+            "parent_tool_use_id": "call_rev_wf",
+            "tool_use_id": "call_rev_wf",
+            "subtype": "task_completed",
+            "description": child.get("marker_text", child["label"]),
+            "session_id": sid,
+        })
+        events.append({
+            "type": "system", "task_id": child["agent_id"],
+            "parent_tool_use_id": "call_rev_wf",
+            "tool_use_id": "call_rev_wf",
+            "subtype": "task_started",
+            "description": child.get("marker_text", child["label"]),
+            "session_id": sid,
+        })
+    events.append({
+        "type": "system", "subtype": "task_notification",
+        "task_id": "wf-rev-task", "tool_use_id": "call_rev_wf",
+        "status": "completed", "session_id": sid,
+    })
+    events.append({
+        "type": "assistant",
+        "message": {"model": "qmodel_preview", "content": [
+            {"type": "tool_use", "id": "call_val_rev", "name": "Bash",
+             "input": {"command": "python3 scripts/check.py",
+                       "dir_path": "/tmp/fixture"}}]},
+        "session_id": sid,
+    })
+    events.append({
+        "type": "user",
+        "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "call_val_rev",
+             "is_error": False, "content": "EXIT_CODE=0"}]},
+        "tool_use_result": {"kind": "completed", "exitCode": 0},
+        "session_id": sid,
+    })
+
+    trace = _write_jsonl(tmp / "traces", "workflow-reversed.jsonl", events)
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    pf = summary.get("workflow_protocol_failures", [])
+    assert pf, (
+        f"reversed started/terminal must produce protocol failure; got: {pf}"
+    )
+    assert summary["agent_call_count"] == 0
+
+
+def test_workflow_child_failed_state_fails(tmp: Path) -> None:
+    """Child with state 'failed' in manifest → protocol failure."""
+    children = standard_workflow_children()
+    children[0]["state"] = "failed"  # Failed child
+
+    sid, rid = "sess-fl", "wf_run-fl"
+    runtime_dir = tmp / "runtime"
+    runtime_dir.mkdir()
+    workflow_runtime_artifacts(runtime_dir, sid, rid, children,
+                               overall_status="failed")
+
+    trace = _write_jsonl(tmp / "traces", "workflow-failed-child.jsonl",
+                         workflow_trace_events(children=children,
+                                               session_id=sid, run_id=rid,
+                                               overall_status="failed"))
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    pf = summary.get("workflow_protocol_failures", [])
+    assert pf, (
+        f"failed child state must produce protocol failure; got: {pf}"
+    )
+    assert summary["agent_call_count"] == 0
+
+
+def test_workflow_child_cancelled_state_fails(tmp: Path) -> None:
+    """Child with state 'cancelled' in manifest → protocol failure."""
+    children = standard_workflow_children()
+    children[1]["state"] = "cancelled"
+
+    sid, rid = "sess-cx", "wf_run-cx"
+    runtime_dir = tmp / "runtime"
+    runtime_dir.mkdir()
+    workflow_runtime_artifacts(runtime_dir, sid, rid, children,
+                               overall_status="cancelled")
+
+    trace = _write_jsonl(tmp / "traces", "workflow-cancelled-child.jsonl",
+                         workflow_trace_events(children=children,
+                                               session_id=sid, run_id=rid,
+                                               overall_status="cancelled"))
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    pf = summary.get("workflow_protocol_failures", [])
+    assert pf, (
+        f"cancelled child state must produce protocol failure; got: {pf}"
+    )
+    assert summary["agent_call_count"] == 0
+
+
+def test_background_task_id_not_model_proof(tmp: Path) -> None:
+    """background_task_id alone must not satisfy require_delegated_model.
+
+    Real delegated model evidence (delegated_models populated from child
+    events' message.model) is required.  A background_task_id without
+    delegated_models must fail require_delegated_model.
+    """
+    children = standard_workflow_children()
+    sid, rid = "sess-bgt", "wf_run-bgt"
+    task_id = "wf-bgt-task"
+    runtime_dir = tmp / "runtime"
+    runtime_dir.mkdir()
+    workflow_runtime_artifacts(runtime_dir, sid, rid, children, task_id=task_id)
+
+    # Build trace where children have system events but NO model in message
+    # (background_task_id gets set but delegated_models stays empty)
+    events = [
+        {"type": "system", "subtype": "init", "tools": ["Agent", "Bash", "Workflow"],
+         "agents": ["Explore", "general-purpose"], "model": "qmodel_preview",
+         "session_id": sid},
+        {"type": "assistant",
+         "message": {"model": "qmodel_preview", "content": [
+             {"type": "tool_use", "id": "call_bgt_wf",
+              "name": "Workflow",
+              "input": {"script": "export const meta = { name: 'bgt' }"}}]},
+         "session_id": sid},
+    ]
+    import json as _json
+    payload = _json.dumps({
+        "status": "async_launched", "taskId": task_id, "runId": rid,
+    })
+    events.append({
+        "type": "user",
+        "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "call_bgt_wf",
+             "content": f"Workflow launched.\ntaskId: {task_id}\nrunId: {rid}"}]},
+        "tool_use_result": {"payload": payload},
+        "session_id": sid,
+    })
+    # Child system events WITHOUT model in message
+    for child in children:
+        events.append({
+            "type": "system", "task_id": child["agent_id"],
+            "parent_tool_use_id": "call_bgt_wf",
+            "tool_use_id": "call_bgt_wf",
+            "subtype": "task_started",
+            "description": child.get("marker_text", child["label"]),
+            "session_id": sid,
+        })
+        events.append({
+            "type": "system", "task_id": child["agent_id"],
+            "parent_tool_use_id": "call_bgt_wf",
+            "tool_use_id": "call_bgt_wf",
+            "subtype": "task_completed",
+            "description": child.get("marker_text", child["label"]),
+            "session_id": sid,
+            # NOTE: no "message" key with model info
+        })
+    events.append({
+        "type": "system", "subtype": "task_notification",
+        "task_id": task_id, "tool_use_id": "call_bgt_wf",
+        "status": "completed", "session_id": sid,
+    })
+    events.append({
+        "type": "assistant",
+        "message": {"model": "qmodel_preview", "content": [
+            {"type": "tool_use", "id": "call_val_bgt", "name": "Bash",
+             "input": {"command": "python3 scripts/check.py",
+                       "dir_path": "/tmp/fixture"}}]},
+        "session_id": sid,
+    })
+    events.append({
+        "type": "user",
+        "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "call_val_bgt",
+             "is_error": False, "content": "EXIT_CODE=0"}]},
+        "tool_use_result": {"kind": "completed", "exitCode": 0},
+        "session_id": sid,
+    })
+
+    trace = _write_jsonl(tmp / "traces", "workflow-bgtask.jsonl", events)
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    # background_task_id may be set, but delegated_models must be empty
+    assert not summary.get("delegated_models"), (
+        "delegated_models must be empty when child events lack model info"
+    )
+    # Children without model evidence fail at protocol level (no_delegated_model)
+    assert summary["agent_call_count"] == 0, (
+        "no agent calls should be produced without delegated model evidence"
+    )
+    pf = summary.get("workflow_protocol_failures", [])
+    assert any("no_delegated_model" in f for f in pf), (
+        f"must report no_delegated_model; got: {pf}"
+    )
+
+
+def test_sibling_run_still_triggers_write_set(tmp: Path) -> None:
+    """Sibling run paths in same session → write-set violations.
+
+    Only the exact run_id-bound paths are excluded.  Sibling runs within
+    the same session must still trigger scenario_write_set.
+    """
+    from trace_evidence import classify_workflow_write_set
+    session_id = "sess-sib"
+    bound_run_id = "wf_run-bound"
+    sibling_run_id = "wf_run-sibling"
+    paths = {
+        f".qoder/sessions/{session_id}/workflows/runs/{bound_run_id}/manifest.json",
+        f".qoder/sessions/{session_id}/workflows/runs/{bound_run_id}/journal.jsonl",
+        f".qoder/sessions/{session_id}/workflows/runs/{sibling_run_id}/manifest.json",
+        f".qoder/sessions/{session_id}/workflows/scripts/shared.js",
+    }
+    bound = classify_workflow_write_set(paths, session_id, bound_run_id)
+    # Only bound run paths excluded
+    expected_bound = {
+        f".qoder/sessions/{session_id}/workflows/runs/{bound_run_id}/manifest.json",
+        f".qoder/sessions/{session_id}/workflows/runs/{bound_run_id}/journal.jsonl",
+    }
+    assert bound == expected_bound, (
+        f"only bound run paths should be excluded; got bound={bound}, "
+        f"expected={expected_bound}"
+    )
+    remaining = paths - bound
+    assert f".qoder/sessions/{session_id}/workflows/runs/{sibling_run_id}/manifest.json" in remaining, (
+        "sibling run paths must remain as violations"
+    )
+    assert f".qoder/sessions/{session_id}/workflows/scripts/shared.js" in remaining, (
+        "scripts and non-run paths must remain as violations"
+    )
+
+
+def test_run_id_must_match_write_set_exclusion(tmp: Path) -> None:
+    """Only paths matching the exact session+run_id are excluded.
+
+    run_id must participate in the path matching; paths without matching
+    run_id must not be excluded even if they share the session prefix.
+    """
+    from trace_evidence import classify_workflow_write_set
+    session_id = "sess-exact"
+    run_id = "wf_run-exact"
+    paths = {
+        f".qoder/sessions/{session_id}/workflows/runs/{run_id}/manifest.json",
+        f".qoder/sessions/{session_id}/workflows/runs/{run_id}/journal.jsonl",
+        f".qoder/sessions/{session_id}/workflows/runs/{run_id}/output.json",
+        # Metadata at workflows level, not within runs/<runId>/
+        f".qoder/sessions/{session_id}/workflows/metadata.json",
+        # Sibling run
+        f".qoder/sessions/{session_id}/workflows/runs/wf_other/script.js",
+    }
+    bound = classify_workflow_write_set(paths, session_id, run_id)
+    expected_bound = {
+        f".qoder/sessions/{session_id}/workflows/runs/{run_id}/manifest.json",
+        f".qoder/sessions/{session_id}/workflows/runs/{run_id}/journal.jsonl",
+        f".qoder/sessions/{session_id}/workflows/runs/{run_id}/output.json",
+    }
+    assert bound == expected_bound, (
+        f"only paths under runs/{run_id}/ should be excluded; got bound={bound}"
+    )
+    remaining = paths - bound
+    assert f".qoder/sessions/{session_id}/workflows/metadata.json" in remaining, (
+        "non-run metadata must not be excluded"
+    )
+    assert f".qoder/sessions/{session_id}/workflows/runs/wf_other/script.js" in remaining, (
+        "sibling run must not be excluded"
+    )
+
+
+# -- Fixture builder: shared Workflow test harness ---------------------------
+
+class WorkflowFixture:
+    """Reusable builder for Workflow trace + runtime artifacts.
+
+    Each negative test creates a fixture, mutates one aspect, and verifies
+    the expected protocol failure.  This eliminates the duplicated event
+    construction that previously existed in every negative test.
+    """
+
+    def __init__(self, tmp: Path, suffix: str = ""):
+        self.suffix = suffix or f"-{id(self):x}"[:8]
+        self.session_id = f"sess{self.suffix}"
+        self.run_id = f"wf_run{self.suffix}"
+        self.task_id = f"wf-task{self.suffix}"
+        self.wf_tool_use_id = f"call_wf{self.suffix}"
+        self.children = standard_workflow_children()
+        self.tmp = tmp
+
+    def build_artifacts(self, **overrides) -> Path:
+        """Build runtime artifacts, forwarding kwargs to workflow_runtime_artifacts."""
+        runtime_dir = self.tmp / "runtime"
+        runtime_dir.mkdir(exist_ok=True)
+        kwargs = {
+            "task_id": self.task_id,
+            **overrides,
+        }
+        workflow_runtime_artifacts(
+            runtime_dir, self.session_id, self.run_id,
+            self.children, **kwargs,
+        )
+        return runtime_dir
+
+    def build_events(self, **overrides) -> list[dict]:
+        """Build trace events.  overrides can set overall_status, children, etc."""
+        children = overrides.pop("children", self.children)
+        overall_status = overrides.pop("overall_status", "completed")
+        session_id = overrides.pop("session_id", self.session_id)
+        run_id = overrides.pop("run_id", self.run_id)
+        task_id = overrides.pop("task_id", self.task_id)
+        wf_tool_use_id = overrides.pop("wf_tool_use_id", self.wf_tool_use_id)
+        include_children = overrides.pop("include_children", True)
+        include_notification = overrides.pop("include_notification", True)
+        child_event_session = overrides.pop("child_event_session", session_id)
+        notification_status = overrides.pop("notification_status", overall_status)
+        include_model_events = overrides.pop("include_model_events", True)
+
+        events = [
+            {"type": "system", "subtype": "init",
+             "tools": ["Agent", "Bash", "Workflow"],
+             "agents": ["Explore", "general-purpose"], "model": "qmodel_preview",
+             "session_id": session_id},
+            {"type": "assistant",
+             "message": {"model": "qmodel_preview", "content": [
+                 {"type": "tool_use", "id": wf_tool_use_id,
+                  "name": "Workflow",
+                  "input": {"script": "export const meta = { name: 'test' }"}}]},
+             "session_id": session_id},
+        ]
+        import json as _json
+        payload = _json.dumps({
+            "status": "async_launched",
+            "taskId": task_id,
+            "runId": run_id,
+        })
+        events.append({
+            "type": "user",
+            "message": {"content": [
+                {"type": "tool_result", "tool_use_id": wf_tool_use_id,
+                 "content": f"Workflow launched.\ntaskId: {task_id}\nrunId: {run_id}"}]},
+            "tool_use_result": {"payload": payload},
+            "session_id": session_id,
+        })
+        # Child events
+        if include_children and children:
+            for child in children:
+                events.append({
+                    "type": "system",
+                    "task_id": child["agent_id"],
+                    "parent_tool_use_id": wf_tool_use_id,
+                    "tool_use_id": wf_tool_use_id,
+                    "subtype": "task_started",
+                    "description": child.get("marker_text", child["label"]),
+                    "session_id": child_event_session,
+                })
+                if include_model_events:
+                    events.append({
+                        "type": "assistant",
+                        "parent_tool_use_id": wf_tool_use_id,
+                        "task_id": child["agent_id"],
+                        "message": {"model": f"child-model-{child['agent_id'][:8]}",
+                                    "content": []},
+                        "session_id": child_event_session,
+                    })
+                events.append({
+                    "type": "system",
+                    "task_id": child["agent_id"],
+                    "parent_tool_use_id": wf_tool_use_id,
+                    "tool_use_id": wf_tool_use_id,
+                    "subtype": "task_completed",
+                    "description": child.get("marker_text", ""),
+                    "session_id": child_event_session,
+                })
+        if include_notification:
+            events.append({
+                "type": "system", "subtype": "task_notification",
+                "task_id": task_id, "tool_use_id": wf_tool_use_id,
+                "status": notification_status,
+                "session_id": session_id,
+            })
+        # Validation command
+        events.append({
+            "type": "assistant",
+            "message": {"model": "qmodel_preview", "content": [
+                {"type": "tool_use", "id": f"call_val{self.suffix}", "name": "Bash",
+                 "input": {"command": "python3 scripts/check.py",
+                           "dir_path": "/tmp/fixture"}}]},
+            "session_id": session_id,
+        })
+        events.append({
+            "type": "user",
+            "message": {"content": [
+                {"type": "tool_result", "tool_use_id": f"call_val{self.suffix}",
+                 "is_error": False, "content": "EXIT_CODE=0"}]},
+            "tool_use_result": {"kind": "completed", "exitCode": 0},
+            "session_id": session_id,
+        })
+        return events
+
+    def summarize(self) -> dict:
+        runtime_dir = self.build_artifacts()
+        events = self.build_events()
+        trace = _write_jsonl(self.tmp / "traces", f"fixture{self.suffix}.jsonl", events)
+        return summarize(trace, workflow_runtime_root=runtime_dir)
+
+
+# -- New [P0] red-first tests: output gating, cross-session, per-child model ---
+
+def test_workflow_output_failed_status_fails(tmp: Path) -> None:
+    """output.json status is 'failed' → protocol failure even if children look OK."""
+    fx = WorkflowFixture(tmp, "-outfail")
+    runtime_dir = fx.build_artifacts(overall_status="failed")
+    events = fx.build_events()
+    trace = _write_jsonl(tmp / "traces", "output-failed.jsonl", events)
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    pf = summary.get("workflow_protocol_failures", [])
+    assert any("output_status" in f for f in pf), (
+        f"output failed status must produce protocol failure; got: {pf}"
+    )
+    assert summary["agent_call_count"] == 0
+
+
+def test_workflow_output_task_id_mismatch_fails(tmp: Path) -> None:
+    """output.json taskId doesn't match trace taskId → protocol failure."""
+    fx = WorkflowFixture(tmp, "-taskmis")
+    runtime_dir = fx.build_artifacts(task_id="wrong-task-id")
+    events = fx.build_events()
+    trace = _write_jsonl(tmp / "traces", "output-task-mismatch.jsonl", events)
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    pf = summary.get("workflow_protocol_failures", [])
+    assert any("taskId" in f for f in pf), (
+        f"output taskId mismatch must produce protocol failure; got: {pf}"
+    )
+    assert summary["agent_call_count"] == 0
+
+
+def test_workflow_cross_session_child_event_fails(tmp: Path) -> None:
+    """Child event from a different session → protocol failure."""
+    fx = WorkflowFixture(tmp, "-xsess")
+    runtime_dir = fx.build_artifacts()
+    # Build events where child events have a different session_id
+    events = fx.build_events(
+        child_event_session="other-session-id",
+    )
+    trace = _write_jsonl(tmp / "traces", "cross-session.jsonl", events)
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    pf = summary.get("workflow_protocol_failures", [])
+    assert any("cross_session" in f for f in pf), (
+        f"cross-session child event must produce protocol failure; got: {pf}"
+    )
+    assert summary["agent_call_count"] == 0
+
+
+def test_workflow_notification_failed_fails(tmp: Path) -> None:
+    """Workflow task_notification status is 'failed' → protocol failure."""
+    fx = WorkflowFixture(tmp, "-notfail")
+    runtime_dir = fx.build_artifacts()
+    events = fx.build_events(notification_status="failed")
+    trace = _write_jsonl(tmp / "traces", "notification-failed.jsonl", events)
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    pf = summary.get("workflow_protocol_failures", [])
+    assert any("notification_status" in f for f in pf), (
+        f"failed notification status must produce protocol failure; got: {pf}"
+    )
+    assert summary["agent_call_count"] == 0
+
+
+def test_model_less_explore_cannot_trigger_extra_exploration(tmp: Path) -> None:
+    """Model-less Explore child cannot satisfy extra_exploration_call gate.
+
+    A child with an extra-exploration marker but no delegated model evidence
+    must not count toward extra-exploration detection.  Model-less children
+    in marker positions must fail require_delegated_model.
+    """
+    # Create children where ultra-code-explore has NO model evidence
+    children = [
+        {"agent_id": "aExplore-ultra", "label": "ultra-code-explore",
+         "agent_type": "Explore", "journal_key": "v2:aaa111",
+         "marker_text": "[eval-stage:ultra-code-explore]",
+         "state": "done", "has_terminal": True},
+        {"agent_id": "aExplore-native", "label": "target-native-explore",
+         "agent_type": "Explore", "journal_key": "v2:bbb222",
+         "marker_text": "[eval-stage:target-native-explore]",
+         "state": "done", "has_terminal": True},
+        {"agent_id": "aworkflow-sub-rev", "label": "ultra-post-review",
+         "agent_type": "workflow-subagent", "journal_key": "v2:ddd444",
+         "marker_text": "[eval-stage:ultra-post-review]",
+         "state": "done", "has_terminal": True},
+    ]
+    fx = WorkflowFixture(tmp, "-nomodel")
+    fx.children = children
+    runtime_dir = fx.build_artifacts()
+    events = fx.build_events(include_model_events=False)
+    trace = _write_jsonl(tmp / "traces", "model-less-explore.jsonl", events)
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    # All children should fail because no delegated_models
+    assert summary["agent_call_count"] == 0, (
+        f"model-less children should all fail; got {summary['agent_call_count']}"
+    )
+    # delegated_model must not be satisfied by empty delegated_models
+    checks, failures, codes = grade(summary, ARCHITECTURE_TRACE_EXPECTED)
+    assert "delegated_model_observed" in codes or any(
+        "workflow_protocol" in c for c in codes
+    ), f"model-less children must fail; got: {codes}"
+
+
+def test_workflow_child_missing_session_fails(tmp: Path) -> None:
+    """Child events without session_id → protocol failure.
+
+    Every child event must be traceable to its owning Workflow session.
+    Missing session_id means the event cannot be bound to any workflow.
+    """
+    fx = WorkflowFixture(tmp, "-noss")
+    runtime_dir = fx.build_artifacts()
+    # Build events where child events have NO session_id
+    events = fx.build_events(child_event_session=None)
+    trace = _write_jsonl(tmp / "traces", "missing-session.jsonl", events)
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    pf = summary.get("workflow_protocol_failures", [])
+    assert any("missing_session" in f for f in pf), (
+        f"missing session_id must produce protocol failure; got: {pf}"
+    )
+    assert summary["agent_call_count"] == 0
+
+
+def test_workflow_duplicate_journal_key_fails(tmp: Path) -> None:
+    """Journal with duplicate result keys → protocol failure.
+
+    Each journal result must have a unique key.  Duplicate keys indicate
+    tampered or corrupted journal data.
+    """
+    sid, rid = "sess-dup", "wf_run-dup"
+    runtime_dir = tmp / "runtime"
+    runtime_dir.mkdir()
+    wf_dir = runtime_dir / ".qoder" / "sessions" / sid / "workflows" / "runs" / rid
+    wf_dir.mkdir(parents=True)
+    children = standard_workflow_children()
+    # Build manifest normally
+    manifest_agents = []
+    for idx, child in enumerate(children, start=1):
+        manifest_agents.append({
+            "index": idx, "label": child["label"],
+            "phaseIndex": child.get("phase_index", 1),
+            "phaseTitle": child.get("phase_title", "Explore"),
+            "journalKey": child["journal_key"],
+            "agentId": child["agent_id"],
+            "agentType": child["agent_type"],
+            "state": child.get("state", "done"),
+            "attempts": 1,
+        })
+    _write_json(wf_dir, "manifest.json", {
+        "runId": rid, "workflowName": "test", "status": "completed",
+        "agents": manifest_agents,
+    })
+    # Build journal with DUPLICATE result key
+    journal_events = []
+    for child in children:
+        key = child["journal_key"]
+        journal_events.append({"type": "started", "key": key, "timestamp": 1000})
+        journal_events.append({"type": "result", "key": key,
+                               "agentId": child["agent_id"],
+                               "result": {"content": "{}"}})
+    # Add duplicate result for the first key
+    dup_key = children[0]["journal_key"]
+    journal_events.append({"type": "result", "key": dup_key,
+                           "agentId": children[0]["agent_id"],
+                           "result": {"content": "duplicate"}})
+    _write_jsonl(wf_dir, "journal.jsonl", journal_events)
+    _write_json(wf_dir, "output.json", {
+        "runId": rid, "taskId": _TASK_ID,
+        "workflowName": "test", "status": "completed", "result": {},
+    })
+
+    trace = _write_jsonl(tmp / "traces", "dup-journal.jsonl",
+                         workflow_trace_events(children=children,
+                                               session_id=sid, run_id=rid))
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    pf = summary.get("workflow_protocol_failures", [])
+    assert any("duplicate_result_key" in f for f in pf), (
+        f"duplicate journal key must produce protocol failure; got: {pf}"
+    )
+    assert summary["agent_call_count"] == 0
+
+
+def test_workflow_conflicting_terminal_event_fails(tmp: Path) -> None:
+    """Child with task_failed event alongside task_completed → protocol failure.
+
+    Any co-existing failed/cancelled/timeout/unknown lifecycle event
+    alongside success events must be rejected — the evidence is conflicting.
+    """
+    children = standard_workflow_children()
+    sid, rid = "sess-cfl", "wf_run-cfl"
+    runtime_dir = tmp / "runtime"
+    runtime_dir.mkdir()
+    task_id = "wf-cfl-task"
+    workflow_runtime_artifacts(runtime_dir, sid, rid, children, task_id=task_id)
+
+    # Build trace with task_failed alongside task_completed for first child
+    wf_tool_use_id = "call_cfl_wf"
+    events = [
+        {"type": "system", "subtype": "init", "tools": ["Agent", "Bash", "Workflow"],
+         "agents": ["Explore", "general-purpose"], "model": "qmodel_preview",
+         "session_id": sid},
+        {"type": "assistant",
+         "message": {"model": "qmodel_preview", "content": [
+             {"type": "tool_use", "id": wf_tool_use_id, "name": "Workflow",
+              "input": {"script": "export const meta = {}"}}]},
+         "session_id": sid},
+    ]
+    import json as _json
+    payload = _json.dumps({"status": "async_launched", "taskId": task_id, "runId": rid})
+    events.append({
+        "type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": wf_tool_use_id,
+             "content": f"Workflow launched.\ntaskId: {task_id}\nrunId: {rid}"}]},
+        "tool_use_result": {"payload": payload}, "session_id": sid,
+    })
+    for child in children:
+        events.append({
+            "type": "system", "task_id": child["agent_id"],
+            "parent_tool_use_id": wf_tool_use_id,
+            "tool_use_id": wf_tool_use_id,
+            "subtype": "task_started",
+            "description": child.get("marker_text", child["label"]),
+            "session_id": sid,
+        })
+        events.append({
+            "type": "assistant", "parent_tool_use_id": wf_tool_use_id,
+            "task_id": child["agent_id"],
+            "message": {"model": f"cm-{child['agent_id'][:8]}", "content": []},
+            "session_id": sid,
+        })
+        # First child gets task_failed BEFORE task_completed
+        if child == children[0]:
+            events.append({
+                "type": "system", "task_id": child["agent_id"],
+                "parent_tool_use_id": wf_tool_use_id,
+                "tool_use_id": wf_tool_use_id,
+                "subtype": "task_failed",
+                "description": "failed", "session_id": sid,
+            })
+        events.append({
+            "type": "system", "task_id": child["agent_id"],
+            "parent_tool_use_id": wf_tool_use_id,
+            "tool_use_id": wf_tool_use_id,
+            "subtype": "task_completed",
+            "description": child.get("marker_text", ""),
+            "session_id": sid,
+        })
+    events.append({
+        "type": "system", "subtype": "task_notification",
+        "task_id": task_id, "tool_use_id": wf_tool_use_id,
+        "status": "completed", "session_id": sid,
+    })
+    events.append({
+        "type": "assistant",
+        "message": {"model": "qmodel_preview", "content": [
+            {"type": "tool_use", "id": "call_val_cfl", "name": "Bash",
+             "input": {"command": "python3 scripts/check.py",
+                       "dir_path": "/tmp/fixture"}}]},
+        "session_id": sid,
+    })
+    events.append({
+        "type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "call_val_cfl",
+             "is_error": False, "content": "EXIT_CODE=0"}]},
+        "tool_use_result": {"kind": "completed", "exitCode": 0},
+        "session_id": sid,
+    })
+
+    trace = _write_jsonl(tmp / "traces", "conflicting-term.jsonl", events)
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    pf = summary.get("workflow_protocol_failures", [])
+    assert any("conflicting_terminal" in f for f in pf), (
+        f"conflicting terminal event must produce protocol failure; got: {pf}"
+    )
+
+
+def test_direct_agent_missing_role_fails(tmp: Path) -> None:
+    """Direct Agent call without subagent_type/agent_type → role failure.
+
+    A required marker's Agent call must have an explicit role.  Missing role
+    means the agent identity is unverifiable — not equivalent to any role.
+    """
+    trace = _write_jsonl(tmp / "traces", "no-role.jsonl", [
+        {"type": "system", "subtype": "init", "tools": ["Agent", "Bash"],
+         "agents": ["Explore", "general-purpose"], "model": "dfmodel"},
+        # Agent call WITHOUT subagent_type
+        {"type": "assistant", "message": {"model": "dfmodel", "content": [
+            {"type": "tool_use", "id": "call_norole", "name": "Agent",
+             "input": {"description": "Explore", "prompt": "Explore [eval-stage:target-native-explore]",
+                       "run_in_background": True}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "call_norole",
+             "content": "Agent launched."}]},
+         "tool_use_result": {"status": "async_launched"}},
+        {"type": "system", "task_id": "aNoRole",
+         "tool_use_id": "call_norole", "description": "explore"},
+        {"type": "assistant", "parent_tool_use_id": "call_norole",
+         "message": {"model": "child-model", "content": []}},
+        {"type": "system", "task_id": "aNoRole",
+         "tool_use_id": "call_norole", "status": "completed"},
+        # Agent call with role
+        {"type": "assistant", "message": {"model": "dfmodel", "content": [
+            {"type": "tool_use", "id": "call_review", "name": "Agent",
+             "input": {"subagent_type": "general-purpose",
+                       "description": "Review",
+                       "prompt": "Review [eval-stage:ultra-post-review]",
+                       "run_in_background": True}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "call_review",
+             "content": "Agent launched."}]},
+         "tool_use_result": {"status": "async_launched"}},
+        {"type": "assistant", "parent_tool_use_id": "call_review",
+         "message": {"model": "child-model2", "content": []}},
+        {"type": "system", "task_id": "aReview",
+         "tool_use_id": "call_review", "status": "completed"},
+        {"type": "assistant", "message": {"model": "dfmodel", "content": [
+            {"type": "tool_use", "id": "call_val", "name": "Bash",
+             "input": {"command": "python3 scripts/check.py",
+                       "dir_path": "/tmp/fixture"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "call_val",
+             "is_error": False, "content": "EXIT_CODE=0"}]},
+         "tool_use_result": {"kind": "completed", "exitCode": 0}},
+    ])
+    summary = summarize(trace)
+    checks, failures, codes = grade(summary, ARCHITECTURE_TRACE_EXPECTED)
+    assert "delegated_stage_role" in codes, (
+        f"direct Agent without role must fail delegated_stage_role; got: {codes}"
+    )
+
+
+def test_workflow_output_missing_task_id_fails(tmp: Path) -> None:
+    """output.json without taskId → protocol failure.
+
+    output taskId is mandatory identity evidence.  Missing taskId means
+    the output cannot be bound to the trace-derived workflow task.
+    """
+    sid, rid = "sess-otm", "wf_run-otm"
+    runtime_dir = tmp / "runtime"
+    runtime_dir.mkdir()
+    wf_dir = runtime_dir / ".qoder" / "sessions" / sid / "workflows" / "runs" / rid
+    wf_dir.mkdir(parents=True)
+    children = standard_workflow_children()
+    manifest_agents = []
+    for idx, child in enumerate(children, start=1):
+        manifest_agents.append({
+            "index": idx, "label": child["label"],
+            "phaseIndex": child.get("phase_index", 1),
+            "phaseTitle": child.get("phase_title", "Explore"),
+            "journalKey": child["journal_key"],
+            "agentId": child["agent_id"],
+            "agentType": child["agent_type"],
+            "state": child.get("state", "done"),
+            "attempts": 1,
+        })
+    _write_json(wf_dir, "manifest.json", {
+        "runId": rid, "workflowName": "test", "status": "completed",
+        "agents": manifest_agents,
+    })
+    journal_events = []
+    for child in children:
+        key = child["journal_key"]
+        journal_events.append({"type": "started", "key": key})
+        journal_events.append({"type": "result", "key": key,
+                               "agentId": child["agent_id"],
+                               "result": {"content": "{}"}})
+    _write_jsonl(wf_dir, "journal.jsonl", journal_events)
+    # output.json WITHOUT taskId
+    _write_json(wf_dir, "output.json", {
+        "runId": rid, "workflowName": "test", "status": "completed", "result": {},
+    })
+
+    trace = _write_jsonl(tmp / "traces", "no-taskid.jsonl",
+                         workflow_trace_events(children=children,
+                                               session_id=sid, run_id=rid))
+    summary = summarize(trace, workflow_runtime_root=runtime_dir)
+    pf = summary.get("workflow_protocol_failures", [])
+    assert any("taskId_missing" in f for f in pf), (
+        f"missing output taskId must produce protocol failure; got: {pf}"
+    )
+    assert summary["agent_call_count"] == 0
 
 
 # -- Runner -------------------------------------------------------------------
@@ -767,6 +1831,30 @@ def main() -> None:
         test_workflow_overall_completed_cannot_substitute_child,
         test_stage_ledger_workflow_child_reconciliation,
         test_bound_plus_unbound_qoder_write_set,
+        # Red-first: Workflow evidence fail-open
+        test_workflow_trace_no_runtime_root_fails,
+        test_workflow_failures_not_masked_by_direct_agent,
+        # Red-first: child lifecycle, model, ordering
+        test_workflow_task_progress_not_terminal,
+        test_workflow_child_started_after_terminal_fails,
+        test_workflow_child_failed_state_fails,
+        test_workflow_child_cancelled_state_fails,
+        test_background_task_id_not_model_proof,
+        # Red-first: .qoder write-set
+        test_sibling_run_still_triggers_write_set,
+        test_run_id_must_match_write_set_exclusion,
+        # Red-first: output gating, cross-session, per-child model
+        test_workflow_output_failed_status_fails,
+        test_workflow_output_task_id_mismatch_fails,
+        test_workflow_cross_session_child_event_fails,
+        test_workflow_notification_failed_fails,
+        test_model_less_explore_cannot_trigger_extra_exploration,
+        # Red-first: missing session, dup journal, conflicting terminal, missing role
+        test_workflow_child_missing_session_fails,
+        test_workflow_duplicate_journal_key_fails,
+        test_workflow_conflicting_terminal_event_fails,
+        test_direct_agent_missing_role_fails,
+        test_workflow_output_missing_task_id_fails,
     ]
     for test in tests:
         with tempfile.TemporaryDirectory(prefix="workflow-evidence-") as td:

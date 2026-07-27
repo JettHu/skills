@@ -1613,6 +1613,9 @@ extra_trace.write_text(valid_trace.read_text() + json.dumps({
         "input": {"subagent_type": "Explore", "description": "extra Ultra exploration", "prompt": "Explore [eval-stage:ultra-code-explore]"},
     }]},
 }) + "\n" + json.dumps({
+    "type": "assistant", "parent_tool_use_id": "agent-2",
+    "message": {"model": "delegated-extra", "content": []},
+}) + "\n" + json.dumps({
     "type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "agent-2", "is_error": False}]},
     "tool_use_result": {"state": "completed"},
 }) + "\n")
@@ -1701,16 +1704,19 @@ codex_trace.write_text("\n".join(json.dumps(event) for event in (
     {"type": "item.completed", "item": {
         "id": "collab-ok", "type": "collab_tool_call", "tool": "spawn_agent",
         "prompt": "Explore repository [eval-stage:target-native-explore]",
+        "arguments": {"subagent_type": "Explore"},
         "agents_states": {"agent-1": {"status": "completed"}}, "status": "completed",
     }},
     {"type": "item.completed", "item": {
         "id": "collab-child-failed", "type": "collab_tool_call", "tool": "spawn_agent",
         "prompt": "Explore repository [eval-stage:target-native-explore]",
+        "arguments": {"subagent_type": "Explore"},
         "agents_states": {"agent-2": {"status": "failed"}}, "status": "completed",
     }},
     {"type": "item.completed", "item": {
         "id": "collab-review", "type": "collab_tool_call", "tool": "spawn_agent",
         "prompt": "Review and summarize the target-native exploration report [eval-stage:ultra-post-review]",
+        "arguments": {"subagent_type": "general-purpose"},
         "agents_states": {"agent-3": {"status": "completed"}}, "status": "completed",
     }},
     {"type": "item.completed", "item": {
@@ -1732,7 +1738,7 @@ assert failed_call["runtime_status"] == "completed"
 assert failed_call["agent_terminal_states"] == ["failed"]
 assert codex_grade["trace"]["agent_calls"][0]["prompt"].endswith("[eval-stage:target-native-explore]")
 review_call = next(call for call in codex_grade["trace"]["agent_calls"] if call["id"] == "collab-review")
-assert review_call["role"] is None and review_call["stage_markers"] == ["[eval-stage:ultra-post-review]"]
+assert review_call["role"] == "general-purpose" and review_call["stage_markers"] == ["[eval-stage:ultra-post-review]"]
 assert codex_grade["trace"]["delegated_model_observation"] == "unknown/unavailable"
 assert codex_grade["repository_grade"]["passed"] is True
 assert codex_grade["profile_grade"]["passed"] is True
@@ -1742,13 +1748,13 @@ codex_task_name_trace.write_text("\n".join(json.dumps(event) for event in (
     {"type": "thread.started", "thread_id": "task-name-is-not-role"},
     {"type": "item.completed", "item": {
         "id": "native-task", "type": "collab_tool_call", "tool": "spawn_agent",
-        "arguments": {"task_name": "codebase_scout"},
+        "arguments": {"task_name": "codebase_scout", "subagent_type": "Explore"},
         "prompt": "Explore repository [eval-stage:target-native-explore]",
         "agents_states": {"agent-1": {"status": "completed"}}, "status": "completed",
     }},
     {"type": "item.completed", "item": {
         "id": "review-task", "type": "collab_tool_call", "tool": "spawn_agent",
-        "arguments": {"task_name": "risk_review"},
+        "arguments": {"task_name": "risk_review", "subagent_type": "general-purpose"},
         "prompt": "Review artifact risks [eval-stage:ultra-post-review]",
         "agents_states": {"agent-2": {"status": "completed"}}, "status": "completed",
     }},
@@ -1762,8 +1768,9 @@ assert task_name_result.returncode == 0, task_name_result.stdout + task_name_res
 native_task_call = next(
     call for call in task_name_grade["trace"]["agent_calls"] if call["id"] == "native-task"
 )
-assert native_task_call["role"] is None
-assert native_task_call["role_source"] is None
+# task_name is preserved as metadata; role comes from subagent_type
+assert native_task_call["role"] == "Explore"
+assert native_task_call["role_source"] == "subagent_type"
 assert native_task_call["task_name"] == "codebase_scout"
 
 primary_unmarked_trace = treatment.parent / "primary-unmarked-trace.jsonl"
@@ -1771,11 +1778,13 @@ primary_unmarked_trace.write_text("\n".join(json.dumps(event) for event in (
     {"type": "thread.started", "thread_id": "primary-unmarked"},
     {"type": "item.completed", "item": {
         "id": "native", "type": "collab_tool_call", "tool": "spawn_agent",
+        "arguments": {"subagent_type": "Explore"},
         "prompt": "Explore repository [eval-stage:target-native-explore]",
         "agents_states": {"agent-1": {"status": "completed"}}, "status": "completed",
     }},
     {"type": "item.completed", "item": {
         "id": "unmarked-extra", "type": "collab_tool_call", "tool": "spawn_agent",
+        "arguments": {"subagent_type": "Explore"},
         "prompt": "Find another architecture and risk candidate",
         "agents_states": {"agent-2": {"status": "completed"}}, "status": "completed",
     }},

@@ -237,12 +237,12 @@ def main() -> None:
     parser.add_argument(
         "--policy-state",
         type=Path,
-        help="append-only v2 policy state root; requires --canonical-manifest",
+        help="append-only v4 policy state root; requires --canonical-manifest",
     )
     parser.add_argument(
         "--canonical-manifest",
         type=Path,
-        help="the v2 canonical manifest selected by run-policy.py",
+        help="the v4 canonical manifest selected by run-policy.py",
     )
     args = parser.parse_args()
     output = args.output.resolve()
@@ -257,7 +257,7 @@ def main() -> None:
         parser.error("use --canary-gate or --pair-verdict, not both")
     if args.acceptance_policy:
         raise SystemExit(
-            "policy v1 is permanently non-gating; use run-policy.py with acceptance-policy-v2.json"
+            "policy v1/v2/v3 are permanently non-gating; use run-policy.py with acceptance-policy-v4.json"
         )
     if bool(args.policy_state) != bool(args.canonical_manifest):
         parser.error("--policy-state and --canonical-manifest must be used together")
@@ -283,7 +283,7 @@ def main() -> None:
         if not isinstance(policy_manifest, dict):
             raise SystemExit("canonical policy manifest must be an object")
         try:
-            policy = load_policy(HERE / "acceptance-policy-v3.json")
+            policy = load_policy(HERE / "acceptance-policy-v4.json")
             validate_manifest(policy, policy_manifest)
         except ValueError as exc:
             raise SystemExit(f"canonical policy manifest is not authoritative: {exc}") from exc

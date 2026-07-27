@@ -1,0 +1,286 @@
+{
+  "schema_version": 4,
+  "policy_id": "ticket-20-qoder-prospective-v4",
+  "effective_scope": {
+    "mode": "prospective-only",
+    "starts_after": "git-commit-containing-this-policy",
+    "historical_attempts": "diagnostic-only-non-gating",
+    "v1_evidence": "permanently-non-gating",
+    "v2_evidence": "permanently-non-gating",
+    "v3_evidence": "permanently-non-gating",
+    "v2_phase_1_verdict": "passed=false-non-retry-non-gating",
+    "change_rule": "new-policy-version-and-new-run-ids"
+  },
+  "runtime": {
+    "required": "qoder",
+    "codex_cli": {
+      "status": "unavailable-for-delegation-evaluation",
+      "counts_as_pass": false,
+      "claim_delegation_coverage": false,
+      "reentry_gate": "dedicated-capability-canary-must-pass"
+    }
+  },
+  "refs": {
+    "ablation": "b196b40def10579a17326b3b8a0fbc04cb513907",
+    "treatment": "pin-independently-reviewed-implementation-sha-in-canonical-manifest"
+  },
+  "matrix": {
+    "reference": {
+      "model": "Qwen3.8-Max-Preview",
+      "reasoning_effort": "default",
+      "context_window": 1000000
+    },
+    "sentinels": [
+      {
+        "model": "Qwen3.7-Plus",
+        "reasoning_effort": "default",
+        "context_window": 1000000
+      },
+      {
+        "model": "DeepSeek-V4-Flash",
+        "reasoning_effort": "max",
+        "context_window": 1000000
+      },
+      {
+        "model": "MiniMax-M3",
+        "reasoning_effort": "default",
+        "context_window": 1000000
+      }
+    ]
+  },
+  "phases": [
+    {
+      "name": "reference-architecture-treatment-and-ablation",
+      "cells": [
+        {
+          "run_id": "ticket-20-v4-reference-architecture",
+          "model_key": "reference",
+          "scenario": "architecture-native-ownership",
+          "variants": ["treatment", "ablation"]
+        }
+      ]
+    },
+    {
+      "name": "sentinel-architecture-treatments",
+      "cells": [
+        {
+          "run_id": "ticket-20-v4-qwen37-architecture",
+          "model_key": "sentinel-1",
+          "scenario": "architecture-native-ownership",
+          "variants": ["treatment"]
+        },
+        {
+          "run_id": "ticket-20-v4-deepseek-architecture",
+          "model_key": "sentinel-2",
+          "scenario": "architecture-native-ownership",
+          "variants": ["treatment"]
+        },
+        {
+          "run_id": "ticket-20-v4-minimax-architecture",
+          "model_key": "sentinel-3",
+          "scenario": "architecture-native-ownership",
+          "variants": ["treatment"]
+        }
+      ]
+    },
+    {
+      "name": "reference-and-sentinel-long-stale-treatments",
+      "cells": [
+        {
+          "run_id": "ticket-20-v4-reference-long-stale",
+          "model_key": "reference",
+          "scenario": "long-stale-context",
+          "variants": ["treatment"]
+        },
+        {
+          "run_id": "ticket-20-v4-qwen37-long-stale",
+          "model_key": "sentinel-1",
+          "scenario": "long-stale-context",
+          "variants": ["treatment"]
+        },
+        {
+          "run_id": "ticket-20-v4-deepseek-long-stale",
+          "model_key": "sentinel-2",
+          "scenario": "long-stale-context",
+          "variants": ["treatment"]
+        },
+        {
+          "run_id": "ticket-20-v4-minimax-long-stale",
+          "model_key": "sentinel-3",
+          "scenario": "long-stale-context",
+          "variants": ["treatment"]
+        }
+      ]
+    },
+    {
+      "name": "reference-and-sentinel-short-complete-treatments",
+      "cells": [
+        {
+          "run_id": "ticket-20-v4-reference-short-complete",
+          "model_key": "reference",
+          "scenario": "short-evidence-complete",
+          "variants": ["treatment"]
+        },
+        {
+          "run_id": "ticket-20-v4-qwen37-short-complete",
+          "model_key": "sentinel-1",
+          "scenario": "short-evidence-complete",
+          "variants": ["treatment"]
+        },
+        {
+          "run_id": "ticket-20-v4-deepseek-short-complete",
+          "model_key": "sentinel-2",
+          "scenario": "short-evidence-complete",
+          "variants": ["treatment"]
+        },
+        {
+          "run_id": "ticket-20-v4-minimax-short-complete",
+          "model_key": "sentinel-3",
+          "scenario": "short-evidence-complete",
+          "variants": ["treatment"]
+        }
+      ]
+    },
+    {
+      "name": "remaining-reference-core-treatments",
+      "cells": [
+        {
+          "run_id": "ticket-20-v4-reference-diagnosis",
+          "model_key": "reference",
+          "scenario": "diagnosis-feedback-loop-first",
+          "variants": ["treatment"]
+        },
+        {
+          "run_id": "ticket-20-v4-reference-spec",
+          "model_key": "reference",
+          "scenario": "spec-independent-code-trigger",
+          "variants": ["treatment"]
+        },
+        {
+          "run_id": "ticket-20-v4-reference-tickets",
+          "model_key": "reference",
+          "scenario": "tickets-review-publication",
+          "variants": ["treatment"]
+        }
+      ]
+    }
+  ],
+  "execution_order": [
+    "reference-architecture-treatment-and-ablation",
+    "sentinel-architecture-treatments",
+    "reference-and-sentinel-long-stale-treatments",
+    "reference-and-sentinel-short-complete-treatments",
+    "remaining-reference-core-treatments"
+  ],
+  "gates": {
+    "reference_all_treatments_must_pass": true,
+    "sentinel_quorum": {
+      "required": 2,
+      "total": 3,
+      "applies_per_scenario": true,
+      "reference_must_also_pass": true
+    },
+    "architecture_attribution": {
+      "required": true,
+      "treatment_must_pass": true,
+      "ablation_final_state_must_be_valid": true,
+      "repository_artifact_validation_tracker_and_write_set_must_pass": true,
+      "required_difference": "extra_exploration_call",
+      "allowed_ablation_failure_codes": [
+        "duplicate_evidence_goal",
+        "extra_exploration_call"
+      ],
+      "no_other_failures": true
+    }
+  },
+  "attempt_policy": {
+    "state_receipts": "append-only-lock-protected-jsonl",
+    "runtime_invoked": "record-before-runtime-cli-execution",
+    "model_started": "true-only-when-raw-runtime-trace-has-an-assistant-model-event",
+    "model_started_attempts_per_cell": 1,
+    "retry_after_model_start": false,
+    "retry_after_runtime_invoked_without_model_event": false,
+    "pre_model_infrastructure_retry": {
+      "allowed": true,
+      "requires_new_attempt_id": true,
+      "preserve_failed_attempt": true,
+      "requires_runtime_invoked_false": true
+    }
+  },
+  "evidence": {
+    "canonical_manifest": {
+      "schema_version": 4,
+      "path": "canonical-manifest.json",
+      "create": "atomic-create-only",
+      "overwrite": "forbidden",
+      "required_fields": [
+        "schema_version",
+        "policy.id",
+        "policy.commit_sha",
+        "policy.file_sha256",
+        "runtime",
+        "refs.treatment",
+        "refs.ablation",
+        "run_ids",
+        "timeout_seconds",
+        "execution_order",
+        "cells.run_id",
+        "cells.model",
+        "cells.reasoning_effort",
+        "cells.context_window",
+        "cells.scenario",
+        "cells.variants"
+      ]
+    },
+    "grade_from": [
+      "final_repository_state",
+      "artifact_state",
+      "validation_state",
+      "tracker_or_publication_state",
+      "write_set",
+      "raw_delegation_trace",
+      "workflow_runtime_artifacts"
+    ],
+    "workflow_evidence_transport": {
+      "status": "capability-equivalent-delegation-surface",
+      "authoritative_artifacts": [
+        "manifest.json",
+        "journal.jsonl",
+        "output.json"
+      ],
+      "non_authoritative_sources": [
+        "model-written-workflow-script",
+        "model-authored-stage-ledger",
+        "model-response-prose"
+      ],
+      "fail_closed_conditions": [
+        "runtime_root_unavailable",
+        "missing_manifest",
+        "corrupt_manifest",
+        "missing_journal",
+        "corrupt_journal",
+        "missing_output",
+        "corrupt_output",
+        "manifest_run_id_mismatch",
+        "child_without_terminal_event",
+        "child_non_terminal_state",
+        "task_progress_not_terminal",
+        "started_after_terminal",
+        "child_lifecycle_conflict",
+        "child_identity_cross_validation_failed",
+        "runtime_unavailable",
+        "trace_incomplete",
+        "parser_unknown"
+      ],
+      "write_set_isolation": "only-session-workflow-run-bound-qoder-paths-allowed"
+    },
+    "durable_verdicts": ["cell_state", "pair_verdict", "phase_verdict"],
+    "historical_attempts_may_satisfy_gate": false,
+    "v1_evidence": "permanently-non-gating",
+    "v2_evidence": "permanently-non-gating",
+    "v3_evidence": "permanently-non-gating"
+  },
+  "stop_after_failed_phase": true,
+  "timeout_seconds": 1800,
+  "optional_non_gating_models": ["Peach-07-17-DogFooding"]
+}

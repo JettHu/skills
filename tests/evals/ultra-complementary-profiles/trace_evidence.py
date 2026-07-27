@@ -227,17 +227,22 @@ def _build_workflow_child_calls_real(
         failures.append("workflow_manifest_agents_missing")
         return [], failures
 
-    # 2. Build journal result index by key
+    # 2. Build journal result index by key.  Reject duplicate keys —
+    # each journal line with type "result" must have a unique key.
     journal_results: dict[str, dict[str, Any]] = {}
     for evt in journal_events:
         if evt.get("type") == "result" and isinstance(evt.get("key"), str):
-            journal_results[evt["key"]] = evt
+            key = evt["key"]
+            if key in journal_results:
+                failures.append("workflow_journal_duplicate_result_key")
+                return [], failures
+            journal_results[key] = evt
 
-    # 3. Index main trace system events by parent_tool_use_id (child activity)
+    # 3. Index main trace events by parent_tool_use_id (child activity).
+    # Include ALL event types (not just system) so delegated model evidence
+    # from assistant messages can be captured.
     trace_children: dict[str, list[dict[str, Any]]] = {}
     for evt in main_trace_events:
-        if evt.get("type") != "system":
-            continue
         parent = evt.get("parent_tool_use_id") or evt.get("tool_use_id")
         if parent == wf_tool_use_id or str(parent) == str(wf_tool_use_id):
             child_task = evt.get("task_id", "")
@@ -286,17 +291,37 @@ def _build_workflow_child_calls_real(
             failures.append(f"workflow_agent_{label}_journal_agentId_mismatch")
             continue
 
-        # 6. Cross-validate: main trace must have child activity for this agentId
+        # 6. Cross-validate: main trace must have child activity for this agentId.
+        # Each child event must belong to the same session/workflow.
         child_events = trace_children.get(agent_id, [])
         if not child_events:
             failures.append(f"workflow_agent_{label}_trace_children_missing")
             continue
+        # Verify every child event belongs to this Workflow's session.
+        # Missing session_id on a child event is also a protocol failure —
+        # every event must be traceable to its owning Workflow.
+        for ce in child_events:
+            ce_session = ce.get("session_id")
+            if not isinstance(ce_session, str) or not ce_session:
+                failures.append(f"workflow_agent_{label}_missing_session")
+                break
+            if ce_session != session_id:
+                failures.append(f"workflow_agent_{label}_cross_session_event")
+                break
+        else:
+            pass  # no session issue found
+        if failures and (failures[-1].endswith("_cross_session_event") or failures[-1].endswith("_missing_session")):
+            continue
 
-        # 7. Determine terminal status from manifest state
+        # 7. Determine terminal status from manifest state.
+        # Only "done" is a successful terminal state.
+        # All other states (failed, error, cancelled, timeout, unknown) must
+        # produce explicit protocol failures — no child call is created.
         if state == "done":
             terminal_status = "completed"
         elif state in ("failed", "error", "cancelled", "timeout"):
-            terminal_status = "failed"
+            failures.append(f"workflow_agent_{label}_{state}_state")
+            continue
         else:
             failures.append(f"workflow_agent_{label}_non_terminal_state")
             continue
@@ -310,17 +335,53 @@ def _build_workflow_child_calls_real(
                 if m not in stage_markers:
                     stage_markers.append(m)
 
-        # 9. Determine trace indices from main trace events
+        # 9. Bind unique started and terminal runtime events.
+        # Reject duplicate or conflicting lifecycle: exactly one task_started
+        # and exactly one task_completed are required.
+        # task_progress is NOT a terminal event.
+        # Any co-existing failed, cancelled, timeout, or unknown lifecycle
+        # events (task_failed, task_cancelled, etc.) are also rejected.
+        started_count = 0
+        completed_count = 0
         started_index = None
         completed_index = None
         for ce in child_events:
             subtype = ce.get("subtype", "")
-            if subtype == "task_started" and started_index is None:
-                started_index = ce.get("_trace_index")
-            if subtype in ("task_completed", "task_progress"):
-                completed_index = ce.get("_trace_index")
+            if subtype == "task_started":
+                started_count += 1
+                if started_index is None:
+                    started_index = ce.get("_trace_index")
+            if subtype == "task_completed":
+                completed_count += 1
+                if completed_index is None:
+                    completed_index = ce.get("_trace_index")
+            # Reject conflicting terminal subtypes
+            if subtype in ("task_failed", "task_cancelled", "task_timeout",
+                           "task_error", "task_unknown"):
+                failures.append(
+                    f"workflow_agent_{label}_conflicting_terminal_{subtype}"
+                )
+                break
+        if failures:
+            continue
+        if started_count != 1:
+            failures.append(f"workflow_agent_{label}_started_event_count_{started_count}")
+            continue
+        if completed_count != 1:
+            failures.append(f"workflow_agent_{label}_completed_event_count_{completed_count}")
+            continue
+        if started_index is None or completed_index is None:
+            failures.append(f"workflow_agent_{label}_missing_lifecycle_index")
+            continue
+        # started MUST precede terminal in the trace
+        if started_index >= completed_index:
+            failures.append(f"workflow_agent_{label}_started_after_terminal")
+            continue
 
-        # 10. Extract delegated model from child events
+        # 10. Extract delegated model from child events.
+        # Every child agent MUST have at least one real model event —
+        # an empty delegated_models list means the child produced no
+        # verifiable model evidence and the protocol is compromised.
         delegated_models: list[str] = []
         for ce in child_events:
             msg = ce.get("message")
@@ -328,6 +389,9 @@ def _build_workflow_child_calls_real(
                 model = msg.get("model")
                 if isinstance(model, str) and model and model not in delegated_models:
                     delegated_models.append(model)
+        if not delegated_models:
+            failures.append(f"workflow_agent_{label}_no_delegated_model")
+            continue
 
         calls.append({
             "id": agent_id,
@@ -362,11 +426,12 @@ def classify_workflow_write_set(
 ) -> set[str]:
     """Return the subset of paths that are bound Workflow runtime artifacts.
 
-    Only paths matching .qoder/sessions/<session>/workflows/ (the entire
-    session's workflow directory tree) are considered legitimate runtime paths.
-    All other .qoder/** paths remain unauthorized for the scenario write set.
+    Only paths matching .qoder/sessions/<session>/workflows/runs/<runId>/
+    are considered legitimate runtime paths.  The run_id MUST participate in
+    the match.  Sibling runs, scripts, metadata, and other non-run paths
+    remain unauthorized for the scenario write set.
     """
-    prefix = f".qoder/sessions/{session_id}/workflows/"
+    prefix = f".qoder/sessions/{session_id}/workflows/runs/{run_id}/"
     return {path for path in paths if path.startswith(prefix)}
 
 
@@ -680,14 +745,19 @@ def summarize(path: Path, workflow_runtime_root: Optional[Path] = None) -> dict[
 
     # Second pass: resolve Workflow IDs from tool_result and system events.
     # Also tag system events with _trace_index for child activity tracking.
+    # Each Workflow binds its own session_id from its tool_use event, not from
+    # the first global system init event.  Child events must also verify session.
+    # Build a mapping of tool_use_id → session_id from tool_use events first.
     for event_index, event in enumerate(events):
         event["_trace_index"] = event_index
-        if event.get("type") == "system":
-            session_id = event.get("session_id")
-            if isinstance(session_id, str) and session_id:
-                for wf in workflow_sessions.values():
-                    if not wf["session_id"]:
-                        wf["session_id"] = session_id
+        for use in qoder_tool_uses(event):
+            if use.get("name") in WORKFLOW_NAMES:
+                tuid = str(use.get("id", ""))
+                if tuid in workflow_sessions and not workflow_sessions[tuid]["session_id"]:
+                    evt_session = event.get("session_id")
+                    if isinstance(evt_session, str) and evt_session:
+                        workflow_sessions[tuid]["session_id"] = evt_session
+    for event_index, event in enumerate(events):
         # Parse Workflow tool_result for IDs (real protocol)
         message = event.get("message")
         if isinstance(message, dict):
@@ -700,6 +770,14 @@ def summarize(path: Path, workflow_runtime_root: Optional[Path] = None) -> dict[
                     if tuid not in workflow_sessions:
                         continue
                     wf = workflow_sessions[tuid]
+                    # Verify tool_result belongs to same session as the workflow
+                    result_session = event.get("session_id")
+                    wf_session = wf.get("session_id")
+                    if wf_session and isinstance(result_session, str) and result_session:
+                        if result_session != wf_session:
+                            wf["protocol_failures"].append(
+                                "workflow_tool_result_cross_session"
+                            )
                     # Parse payload from tool_use_result or content text
                     payload = None
                     tur = event.get("tool_use_result")
@@ -723,11 +801,20 @@ def summarize(path: Path, workflow_runtime_root: Optional[Path] = None) -> dict[
                     else:
                         wf["task_id"] = str(payload.get("taskId", ""))
                         wf["run_id"] = str(payload.get("runId", ""))
-        # System task_notification events for Workflow completion
+        # System task_notification events for Workflow completion.
+        # Verify session consistency: the notification must belong to the
+        # same session as the Workflow it reports on.
         if event.get("type") == "system" and event.get("subtype") == "task_notification":
             task_id = str(event.get("task_id", ""))
+            notif_session = event.get("session_id")
             for wf in workflow_sessions.values():
                 if wf["task_id"] == task_id:
+                    wf_session = wf.get("session_id")
+                    if (wf_session and isinstance(notif_session, str)
+                            and notif_session and notif_session != wf_session):
+                        wf["protocol_failures"].append(
+                            "workflow_notification_cross_session"
+                        )
                     wf_status = str(event.get("status") or "").casefold()
                     if wf_status:
                         wf["status"] = wf_status
@@ -738,56 +825,93 @@ def summarize(path: Path, workflow_runtime_root: Optional[Path] = None) -> dict[
     # A detected Workflow invocation that cannot produce valid child evidence
     # generates failures that cannot be masked by direct Agent calls.
     workflow_protocol_failures: list[str] = []
-    if workflow_runtime_root is not None and workflow_sessions:
-        for wf in workflow_sessions.values():
-            session_id = _safe_opaque_id(wf.get("session_id"))
-            run_id = _safe_opaque_id(wf.get("run_id"))
-            if not session_id or not run_id:
-                workflow_protocol_failures.append("workflow_id_unresolvable")
-                continue
+    # Flush per-workflow protocol failures (from tool_result/notification checks)
+    for wf in workflow_sessions.values():
+        workflow_protocol_failures.extend(wf.get("protocol_failures", []))
+    if workflow_sessions:
+        if workflow_runtime_root is None:
+            workflow_protocol_failures.append("workflow_runtime_root_unavailable")
+        else:
+            for wf in workflow_sessions.values():
+                session_id = _safe_opaque_id(wf.get("session_id"))
+                run_id = _safe_opaque_id(wf.get("run_id"))
+                if not session_id or not run_id:
+                    workflow_protocol_failures.append("workflow_id_unresolvable")
+                    continue
 
-            wf_dir = _resolve_workflow_dir(workflow_runtime_root, session_id, run_id)
-            if wf_dir is None:
-                workflow_protocol_failures.append("workflow_runtime_dir_unresolvable")
-                continue
+                wf_dir = _resolve_workflow_dir(workflow_runtime_root, session_id, run_id)
+                if wf_dir is None:
+                    workflow_protocol_failures.append("workflow_runtime_dir_unresolvable")
+                    continue
 
-            manifest = _read_json_file_strict(wf_dir / "manifest.json")
-            journal_events = _read_jsonl_strict(wf_dir / "journal.jsonl")
-            output = _read_json_file_strict(wf_dir / "output.json")
+                manifest = _read_json_file_strict(wf_dir / "manifest.json")
+                journal_events = _read_jsonl_strict(wf_dir / "journal.jsonl")
+                output = _read_json_file_strict(wf_dir / "output.json")
 
-            # All three artifacts must be present and strictly parseable.
-            # Missing or corrupt = explicit protocol failure, not silent skip.
-            if manifest is None:
-                workflow_protocol_failures.append("workflow_manifest_missing_or_corrupt")
-                continue
-            if journal_events is None:
-                workflow_protocol_failures.append("workflow_journal_missing_or_corrupt")
-                continue
-            if output is None:
-                workflow_protocol_failures.append("workflow_output_missing_or_corrupt")
-                continue
+                # All three artifacts must be present and strictly parseable.
+                # Missing or corrupt = explicit protocol failure, not silent skip.
+                if manifest is None:
+                    workflow_protocol_failures.append("workflow_manifest_missing_or_corrupt")
+                    continue
+                if journal_events is None:
+                    workflow_protocol_failures.append("workflow_journal_missing_or_corrupt")
+                    continue
+                if output is None:
+                    workflow_protocol_failures.append("workflow_output_missing_or_corrupt")
+                    continue
 
-            # Cross-validate manifest runId against trace-derived run_id
-            manifest_run_id = manifest.get("runId")
-            if manifest_run_id != run_id:
-                workflow_protocol_failures.append("workflow_manifest_runId_mismatch")
-                continue
+                # Cross-validate manifest runId against trace-derived run_id
+                manifest_run_id = manifest.get("runId")
+                if manifest_run_id != run_id:
+                    workflow_protocol_failures.append("workflow_manifest_runId_mismatch")
+                    continue
 
-            child_calls, child_failures = _build_workflow_child_calls_real(
-                session_id,
-                run_id,
-                wf.get("task_id", ""),
-                manifest,
-                journal_events,
-                events,
-                wf.get("tool_use_id", ""),
-            )
-            if child_failures:
-                workflow_protocol_failures.extend(child_failures)
-                # Do NOT add partial calls — protocol is compromised
-                continue
+                # Cross-validate output identity and terminal status.
+                # output.json MUST have matching runId, taskId, and a
+                # successful terminal status.  Any mismatch or non-completed
+                # status is an explicit protocol failure.
+                output_run_id = output.get("runId")
+                output_task_id = output.get("taskId")
+                output_status = str(output.get("status", "")).casefold()
+                if output_run_id != run_id:
+                    workflow_protocol_failures.append("workflow_output_runId_mismatch")
+                    continue
+                wf_task_id = wf.get("task_id", "")
+                # output taskId MUST be present — missing identity is a protocol failure
+                if not isinstance(output_task_id, str) or not output_task_id:
+                    workflow_protocol_failures.append("workflow_output_taskId_missing")
+                    continue
+                if output_task_id != wf_task_id:
+                    workflow_protocol_failures.append("workflow_output_taskId_mismatch")
+                    continue
+                if output_status not in ("completed", "done"):
+                    workflow_protocol_failures.append(f"workflow_output_status_{output_status}")
+                    continue
 
-            calls.extend(child_calls)
+                # Workflow notification must confirm successful terminal status.
+                # A task_notification with failed/cancelled/timeout status means
+                # the Workflow itself did not complete successfully, regardless
+                # of individual child states in the manifest.
+                wf_notification_status = str(wf.get("status", "")).casefold()
+                if wf_notification_status not in ("completed", ""):
+                    workflow_protocol_failures.append(f"workflow_notification_status_{wf_notification_status}")
+                    continue
+
+                child_calls, child_failures = _build_workflow_child_calls_real(
+                    session_id,
+                    run_id,
+                    wf.get("task_id", ""),
+                    manifest,
+                    journal_events,
+                    events,
+                    wf.get("tool_use_id", ""),
+                )
+                if child_failures:
+                    workflow_protocol_failures.extend(child_failures)
+                    # Do NOT add partial calls — protocol is compromised
+                    continue
+
+                calls.extend(child_calls)
 
 
     unique_by_id: dict[str, dict[str, Any]] = {}
@@ -966,8 +1090,18 @@ def grade(summary: dict[str, Any], expected: dict[str, Any]) -> tuple[list[str],
         marker = known_markers.get(event_name)
         matching = [call for call in calls if marker in call.get("stage_markers", [])]
         roles = [str(call["role"]).casefold() for call in matching if call.get("role")]
+        # Every required-marker call MUST have an explicit role.
+        # A missing role (empty list) is NOT equivalent to "any role allowed" —
+        # it means the agent identity is unverifiable.
+        if matching and not roles:
+            check(
+                False,
+                f"delegated runtime role is missing for stage: {event_name}",
+                "delegated_stage_role",
+            )
+            continue
         check(
-            not roles or all(role in {str(value).casefold() for value in allowed_roles} for role in roles),
+            all(role in {str(value).casefold() for value in allowed_roles} for role in roles),
             f"delegated runtime role matches stage intent: {event_name}",
             "delegated_stage_role",
         )
@@ -1046,14 +1180,24 @@ def grade(summary: dict[str, Any], expected: dict[str, Any]) -> tuple[list[str],
                 "extra_exploration_call",
             )
     if expected.get("require_delegated_model") and summary["runtime"] == "qoder":
-        delegated_execution_observed = bool(summary["delegated_models"]) or any(
-            call.get("background_task_id") for call in calls
-        )
-        check(
-            delegated_execution_observed,
-            "delegated Agent completion is observed in the runtime trace",
-            "delegated_model_observed",
-        )
+        # Per-child model proof: every completed child that participates in
+        # required markers, order, or extra-exploration must have its own
+        # real model evidence.  One child's model event cannot vouch for
+        # another child.  background_task_id is never a substitute.
+        known_marker_values = set(expected.get("known_stage_markers", {}).values())
+        for call in calls:
+            markers = set(call.get("stage_markers", []))
+            if markers & known_marker_values:
+                if not call.get("delegated_models"):
+                    failures.append(
+                        f"child {call.get('task_name') or call.get('id')} "
+                        "participates in stage markers but has no delegated model evidence"
+                    )
+                    failure_codes.append("delegated_model_observed")
+                    break
+        else:
+            # All marker-participating children have model proof
+            checks.append("every marker-participating child has delegated model evidence")
     for requirement in expected.get("command_calls", []):
         command = requirement["command"]
         matching = [

@@ -63,9 +63,9 @@ def treatment_pass(run_id: str) -> dict:
 
 def main(tmp: Path) -> None:
     policy_runner = load_module(HERE / "prospective_policy.py", "prospective_policy")
-    policy_path = HERE / "acceptance-policy-v3.json"
+    policy_path = HERE / "acceptance-policy-v4.json"
     policy = policy_runner.load_policy(policy_path)
-    assert policy["policy_id"] == "ticket-20-qoder-prospective-v3"
+    assert policy["policy_id"] == "ticket-20-qoder-prospective-v4"
     assert policy["runtime"]["required"] == "qoder"
     assert policy["gates"]["sentinel_quorum"] == {
         "required": 2,
@@ -77,7 +77,7 @@ def main(tmp: Path) -> None:
 
     # The runner may load only the tracked, canonical v3 authority.  A byte-for-byte
     # copy elsewhere cannot inherit its run IDs or commit identity.
-    foreign_policy = tmp / "acceptance-policy-v3.json"
+    foreign_policy = tmp / "acceptance-policy-v4.json"
     foreign_policy.parent.mkdir(parents=True, exist_ok=True)
     foreign_policy.write_text(policy_path.read_text(encoding="utf-8"), encoding="utf-8")
     expect_rejected(
@@ -88,7 +88,7 @@ def main(tmp: Path) -> None:
     treatment = "3a3e22dac7e0fdff508d5dbf4f36963381af2f40"
     manifest = policy_runner.build_canonical_manifest(policy, treatment)
     policy_runner.validate_manifest(policy, manifest)
-    assert manifest["schema_version"] == 3
+    assert manifest["schema_version"] == 4
     assert manifest["runtime"] == "qoder"
     assert manifest["refs"] == {
         "treatment": treatment,
@@ -351,7 +351,7 @@ def main(tmp: Path) -> None:
         assert retry.returncode != 0
         assert "pre-model infrastructure failure" in retry.stderr
     attempts = sorted((
-        pre_model_output / "runs/ticket-20-v3-reference-architecture"
+        pre_model_output / "runs/ticket-20-v4-reference-architecture"
         "/architecture-native-ownership/treatment"
     ).glob("attempt-*"))
     assert [attempt.name for attempt in attempts] == ["attempt-001", "attempt-002"]
@@ -369,7 +369,7 @@ def main(tmp: Path) -> None:
     policy_runner.write_canonical_manifest(resumed_output, manifest)
     policy_runner.write_phase_verdict(resumed_output, phase_one)
     resumed_pair_root = (
-        resumed_output / "runs/ticket-20-v3-reference-architecture"
+        resumed_output / "runs/ticket-20-v4-reference-architecture"
         "/architecture-native-ownership"
     )
     resumed_pair_root.mkdir(parents=True)
@@ -388,7 +388,7 @@ def main(tmp: Path) -> None:
     assert resumed.returncode != 0
     assert "pre-model infrastructure failure" in resumed.stderr
     phase_one_attempts = list((
-        resumed_output / "runs/ticket-20-v3-reference-architecture"
+        resumed_output / "runs/ticket-20-v4-reference-architecture"
         "/architecture-native-ownership/treatment"
     ).glob("attempt-*"))
     assert not phase_one_attempts
@@ -474,7 +474,7 @@ def main(tmp: Path) -> None:
     )
     assert treatment_run.returncode != 0
     treatment_result = json.loads(next((
-        treatment_authority / "runs/ticket-20-v3-reference-architecture"
+        treatment_authority / "runs/ticket-20-v4-reference-architecture"
         "/architecture-native-ownership/treatment"
     ).glob("attempt-*/result.json")).read_text(encoding="utf-8"))
     assert treatment_result["recovery"].startswith("cell-consumed-no-retry")

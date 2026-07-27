@@ -118,7 +118,7 @@ def main() -> None:
         epilog=f"The only pre-run authority is output/{MANIFEST_NAME}.",
     )
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--policy", type=Path, default=HERE / "acceptance-policy-v3.json")
+    parser.add_argument("--policy", type=Path, default=HERE / "acceptance-policy-v4.json")
     parser.add_argument("--treatment-ref")
     parser.add_argument("--create-manifest", action="store_true")
     parser.add_argument("--execute", action="store_true")
