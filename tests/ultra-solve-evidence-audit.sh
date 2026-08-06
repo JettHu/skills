@@ -67,12 +67,19 @@ def finalize(*, requirements, evidence, final_validate, post_execution_review,
     return "candidate"
 
 
-requirements = {"narrow unit behavior", "broad cross-module invariant"}
+requirements = {
+    "explicit requirement",
+    "acceptance criterion",
+    "named artifact",
+    "validation gate",
+    "invariant",
+    "required deliverable",
+}
 
 # Partial work can be green without proving the full boundary.
 assert finalize(
     requirements=requirements,
-    evidence=[Evidence("narrow unit behavior", PASS)],
+    evidence=[Evidence("explicit requirement", PASS)],
     final_validate=True,
     post_execution_review=True,
 ) == "recovery"
@@ -80,7 +87,8 @@ assert finalize(
 # A narrow check cannot prove a broad criterion.
 assert finalize(
     requirements=requirements,
-    evidence=[Evidence("narrow unit behavior", PASS), Evidence("broad cross-module invariant", "narrow")],
+    evidence=[Evidence(name, PASS) for name in requirements if name != "acceptance criterion"]
+    + [Evidence("acceptance criterion", "narrow")],
     final_validate=True,
     post_execution_review=True,
 ) == "recovery"
@@ -88,15 +96,16 @@ assert finalize(
 # Delegated evidence pinned to an old head is stale even if its conclusion said pass.
 assert finalize(
     requirements=requirements,
-    evidence=[Evidence(name, PASS, current_head=(name != "broad cross-module invariant")) for name in requirements],
+    evidence=[Evidence(name, PASS, current_head=(name != "named artifact")) for name in requirements],
     final_validate=True,
     post_execution_review=True,
 ) == "recovery"
 
-# Contradictory current evidence blocks completion.
+# Contradictory current evidence blocks completion even beside green proof.
 assert finalize(
     requirements=requirements,
-    evidence=[Evidence("narrow unit behavior", PASS), Evidence("broad cross-module invariant", "contradictory")],
+    evidence=[Evidence(name, PASS) for name in requirements]
+    + [Evidence("invariant", "contradictory")],
     final_validate=True,
     post_execution_review=True,
 ) == "recovery"
