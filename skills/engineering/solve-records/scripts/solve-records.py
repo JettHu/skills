@@ -36,6 +36,8 @@ OUTCOMES = {
     "superseded",
 }
 
+LEGACY_TERMINAL_OUTCOMES = {"merged", "landed", "completed"}
+
 RECOVERY_OUTCOMES = OUTCOMES - {"candidate"}
 
 NEW_CANDIDATE_SECTIONS = {
@@ -196,6 +198,31 @@ def section(text, name):
     return text[start:end]
 
 
+def closed_candidate_terminal(text, state, outcome):
+    if state != "closed" or outcome != "candidate":
+        return False
+    body = text.lower()
+    resume = section(text, "Resume Or Cleanup").lower()
+    merge = " ".join(section(text, "Merge").lower().split())
+    superseded = "next action:" in resume and "supersed" in resume
+    zero_diff = (
+        ("zero diff" in body or "zero-diff" in body or "zero repository commits" in body or "zero commits" in body or "there is no diff" in body or "零 diff" in body)
+        and (
+            "not applicable" in merge
+            or "no changes" in merge
+            or "no repository changes" in merge
+            or ("no application code" in merge and "changed" in merge)
+            or ("no code" in merge and "schema change" in merge)
+        )
+    )
+    return superseded or zero_diff
+
+
+def closed_recovery_terminal(state, outcome):
+    """Treat cleaned closed recovery receipts as historical terminals."""
+    return state == "closed" and outcome in RECOVERY_OUTCOMES
+
+
 def status_line(block):
     for line in block.splitlines():
         if line.startswith("Status:"):
@@ -305,7 +332,11 @@ def parse_record(repo, path):
     current = None
     for line in text[4:end].splitlines():
         if line.startswith("  - ") and current:
-            data.setdefault(current, []).append(line[4:].strip())
+            existing = data.get(current)
+            if not isinstance(existing, list):
+                existing = [] if existing in (None, "") else [existing]
+            existing.append(line[4:].strip())
+            data[current] = existing
             continue
         if ":" not in line:
             data["malformed"] = f"invalid frontmatter line: {line}"
@@ -342,6 +373,10 @@ def parse_record(repo, path):
     elif not outcome:
         data["malformed"] = "missing outcome"
         return data
+    elif closed_candidate_terminal(text, data.get("state"), outcome):
+        data["closed_candidate_terminal"] = True
+    elif outcome in LEGACY_TERMINAL_OUTCOMES and data.get("state") == "merged":
+        data["legacy_terminal_outcome"] = outcome
     elif outcome not in OUTCOMES:
         data["malformed"] = f"invalid outcome: {outcome}"
         return data
@@ -896,6 +931,8 @@ def record_summary(repo, record, include_merge_gate=False):
         "state": record.get("state"),
         "outcome": record.get("outcome"),
         "legacy_outcome": bool(record.get("legacy_outcome")),
+        "legacy_terminal_outcome": record.get("legacy_terminal_outcome"),
+        "closed_candidate_terminal": bool(record.get("closed_candidate_terminal")),
         "created_at": record.get("created_at"),
         "merged_at": record.get("merged_at"),
         "merged_sha": record.get("merged_sha"),
@@ -921,6 +958,10 @@ def record_summary(repo, record, include_merge_gate=False):
     }
     if record.get("malformed"):
         summary["malformed"] = record["malformed"]
+    elif record.get("closed_candidate_terminal"):
+        summary["terminal_view"] = "closed"
+    elif closed_recovery_terminal(record.get("state"), record.get("outcome")):
+        summary["terminal_view"] = "closed"
     elif record.get("outcome") == "candidate":
         refs_ok, ref_reason = ref_check(repo, record)
         summary["refs_ok"] = refs_ok
@@ -966,6 +1007,27 @@ def dashboard(repo, records):
         summary = record_summary(repo, record)
         if record.get("malformed"):
             buckets["stale_or_malformed"].append(summary)
+            continue
+        if record.get("closed_candidate_terminal"):
+            if not is_true(record.get("cleanup_done")):
+                summary["cleanup_plan"] = cleanup_plan(repo, record)
+                buckets["cleanup"].append(summary)
+            else:
+                recent.append(summary)
+            continue
+        if closed_recovery_terminal(record.get("state"), record.get("outcome")):
+            if not is_true(record.get("cleanup_done")):
+                summary["cleanup_plan"] = cleanup_plan(repo, record)
+                buckets["cleanup"].append(summary)
+            else:
+                recent.append(summary)
+            continue
+        if record.get("legacy_terminal_outcome"):
+            if not is_true(record.get("cleanup_done")):
+                summary["cleanup_plan"] = cleanup_plan(repo, record)
+                buckets["cleanup"].append(summary)
+            else:
+                recent.append(summary)
             continue
         if record.get("outcome") != "candidate":
             buckets["recovery"].append(summary)

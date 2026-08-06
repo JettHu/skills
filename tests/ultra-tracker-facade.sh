@@ -103,6 +103,44 @@ malformed_contract = run(sys.executable, str(facade), "publication", "register",
 assert malformed_contract.returncode == 4
 assert json.loads(malformed_contract.stdout)["error"]["code"] == "invalid-input-or-state"
 
+# Inspect is the public diagnosis seam and must fail closed when the current
+# Ticket body no longer matches the registered publication digest.
+inspect_drift = fixture("publication-inspect-drift", "review-pending", "run-drift")
+run(
+    sys.executable,
+    str(facade),
+    "publication",
+    "register",
+    "--repo",
+    str(inspect_drift),
+    "--location",
+    ".scratch/feature/issues",
+    "--run-id",
+    "run-drift",
+)
+drifted_ticket = inspect_drift / ".scratch/feature/issues/A.md"
+drifted_ticket.write_text(
+    drifted_ticket.read_text(encoding="utf-8") + "\nSemantic correction after registration.\n",
+    encoding="utf-8",
+)
+drift = run(
+    sys.executable,
+    str(facade),
+    "publication",
+    "inspect",
+    "--repo",
+    str(inspect_drift),
+    "--location",
+    ".scratch/feature/issues",
+    "--run-id",
+    "run-drift",
+    check=False,
+)
+assert drift.returncode == 4
+drift_payload = json.loads(drift.stdout)
+assert drift_payload["error"]["code"] == "invalid-input-or-state"
+assert "Ticket content changed after review registration" in drift_payload["error"]["detail"]
+
 # Frontier snapshots and Claim assignments are delegated unchanged on separate identical repositories.
 frontier_direct = fixture("frontier-direct", "ready-for-agent")
 frontier_facade = fixture("frontier-facade", "ready-for-agent")

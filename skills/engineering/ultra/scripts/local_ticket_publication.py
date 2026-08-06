@@ -735,7 +735,12 @@ def inspect(repo: Path, representation: str, raw_location: str, run_id: str) -> 
     tickets = load_tickets_at(location, representation, contract)
     selected = run_tickets(tickets, run_id)
     path = journal_path(location, representation, run_id)
-    data = read_journal(path) if path.exists() else None
+    data = None
+    if path.exists():
+        _location, tickets, data = validate_against_journal_at(
+            repo, representation, location, run_id, contract
+        )
+        selected = run_tickets(tickets, run_id)
     return {
         "run_id": run_id,
         "phase": data.get("phase") if data else "unregistered",

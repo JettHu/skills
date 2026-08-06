@@ -169,6 +169,24 @@ Created: 2026-07-02
 # Review-pending must not be claimed
 EOF
 
+cat >"$REPO/.scratch/feature-a/issues/09-needs-triage.md" <<'EOF'
+Status: needs-triage
+Category: bug
+Created: 2026-07-02
+
+# Needs triage issue
+EOF
+
+cat >"$REPO/.scratch/feature-a/issues/10-publication-attention.md" <<'EOF'
+Status: ready-for-agent
+Publication Run: missing-publication-run
+Source Spec: docs/spec.md
+Category: feature
+Created: 2026-07-02
+
+# Publication attention issue
+EOF
+
 cat >"$REPO/.scratch/feature-a/tickets.md" <<'EOF'
 # Section Tickets
 
@@ -315,6 +333,17 @@ write_record "$REPO/.scratch/solve-records/20260702-stale.md" \
 
 write_record "$REPO/.scratch/solve-records/20260702-recent.md" \
   "20260702-recent" merged solve/recent "$RECENT_HEAD" "." true "Recent record" passed "auto-merged"
+
+write_record "$REPO/.scratch/solve-records/20260702-legacy-terminal.md" \
+  "20260702-legacy-terminal" merged solve/recent "$RECENT_HEAD" "." true "Legacy terminal record" passed "auto-merged"
+python3 - "$REPO/.scratch/solve-records/20260702-legacy-terminal.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+path.write_text(text.replace("outcome: candidate", "outcome: merged", 1), encoding="utf-8")
+PY
 
 write_record "$REPO/.scratch/solve-records/20260702-cleanup.md" \
   "20260702-cleanup" merged solve/ready "$READY_HEAD" "../wt-ready" false "Cleanup record" passed "auto-merged"
@@ -572,10 +601,12 @@ default_html = Path(sys.argv[3]).read_text(encoding="utf-8")
 fallback = json.loads(Path(sys.argv[4]).read_text(encoding="utf-8"))
 
 assert data["schema_version"] == "maintainer-board/v1"
-assert data["issues"]["count"] == 15
+assert data["issues"]["count"] == 17
 assert data["issues"]["counts"]["ready_for_agent"] == 3
 assert data["issues"]["counts"]["claimed_or_in_progress"] == 2
 assert data["issues"]["counts"]["needs_human"] == 1
+assert data["issues"]["counts"]["needs_triage"] == 1
+assert data["issues"]["counts"]["publication_attention"] == 1
 assert data["issues"]["counts"]["blocked_or_dependent"] == 1
 assert data["issues"]["counts"]["completed_with_solve_record"] == 1
 assert data["issues"]["counts"]["completed_without_solve_record"] == 6
@@ -606,15 +637,25 @@ ready_issue = next(issue for issue in ready if issue["title"] == "Ready issue")
 assert ready_issue["checklist"] == {"total": 2, "done": 1, "open": 1}
 
 records = data["solve_records"]
-assert records["count"] == 20
+assert records["count"] == 21
 assert records["counts"]["ready"] == 5
 assert records["counts"]["manual"] == 5
-assert records["counts"]["cleanup"] == 1
-assert records["counts"]["recent"] == 1
-assert records["counts"]["recovery"] == 5
+assert records["counts"]["cleanup"] == 2
+assert records["counts"]["recent"] == 3
+assert records["counts"]["recovery"] == 3
 assert records["counts"]["stale_or_malformed"] == 3
+assert "20260702-legacy-terminal" in {
+    record["id"] for record in records["buckets"]["recent"]
+}
+assert "20260703-superseded" in {
+    record["id"] for record in records["buckets"]["recent"]
+}
 cleanup = records["buckets"]["cleanup"][0]
-assert cleanup["id"] == "20260702-cleanup"
+assert {record["id"] for record in records["buckets"]["cleanup"]} == {
+    "20260702-cleanup",
+    "20260703-abandoned",
+}
+cleanup = next(record for record in records["buckets"]["cleanup"] if record["id"] == "20260702-cleanup")
 assert cleanup["cleanup_plan"] == {
     "id": "20260702-cleanup",
     "path": ".scratch/solve-records/20260702-cleanup.md",
@@ -642,7 +683,7 @@ bulleted_cleanup = next(
 )
 assert bulleted_cleanup["resource_cleanup"] == ""
 recovery = {record["outcome"]: record for record in records["buckets"]["recovery"]}
-assert set(recovery) == {"blocked", "needs-info", "ready-for-human", "abandoned", "superseded"}
+assert set(recovery) == {"blocked", "needs-info", "ready-for-human"}
 assert recovery["needs-info"]["recovery_action"].startswith("maintainers provide")
 assert "external API <contract>" in recovery["needs-info"]["blocker_or_requested_information"]
 assert recovery["blocked"]["retained_resources"] == "`solve/blocked`, `../wt-blocked`"

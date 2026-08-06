@@ -23,6 +23,9 @@ required = (
     "The default is `Digest: none`",
     "Final Validate proves executable validation facts",
     "Post-Execution Review consumes the Group Review and Final Validate results",
+    "Map each material predicate to its extra gates",
+    "Group Review is complete when",
+    "A generic `Ticket content changed after review registration` or body-digest mismatch is not evidence of metadata-only drift",
 )
 for text in required:
     assert text in solve, f"missing preparation contract: {text}"

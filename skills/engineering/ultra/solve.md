@@ -184,13 +184,13 @@ A blocker reason explains a state transition; it is not a new state.
 
 Discovery must skip Tickets carrying an active `solve-in-progress` Claim and report them as already claimed.
 
-`review-pending` is a Local Markdown adapter state, not a global triage role. It is never claimable. Frontier reports all publication, blocker, state, and Claim diagnostics. Before stopping on a non-frontier result, the coordinator may perform one bounded repair when the formal Ticket or its owning adapter can deterministically repair an unambiguous identity or publication-integrity defect within the configured contract, then must rediscover and Claim from a fresh snapshot. Typical repairs include adding a missing stable Ticket ID when the configured identity is unambiguous, or re-registering a formally corrected Ticket set after publication inspection reports body drift. Never hand-edit publication journals, Claim metadata, blocker relationships, states, or conflict/resume assignments; those remain fail-closed or human-owned when the coordinator cannot repair them safely.
+`review-pending` is a Local Markdown adapter state, not a global triage role. It is never claimable. Frontier reports all publication, blocker, state, and Claim diagnostics. Before stopping on a non-frontier result, the coordinator may perform one bounded repair only when the configured contract or adapter explicitly identifies an unambiguous, metadata-only defect and provides the owning operation; then it must rediscover and Claim from a fresh snapshot. A missing stable Ticket ID may be repaired before publication when the configured identity source is exact and unambiguous, then the formal Ticket must go through the normal publication operation. A generic `Ticket content changed after review registration` or body-digest mismatch is not evidence of metadata-only drift: the current local adapter stores one whole-content digest, cannot classify the changed region, and must remain fail-closed. Never hand-edit publication journals, Claim metadata, blocker relationships, states, or conflict/resume assignments; semantic Ticket-body changes and promoted-run corrections remain human-owned under the terminal-repair policy.
 
 ## Workflow
 
 ### 1. Discover
 
-Read the configured Ticket universe through frontier. Select only IDs in its `claimable` result and report its `non_frontier` diagnostics. If a diagnostic is an adapter-supported identity or publication-integrity repair, perform that one bounded repair and rediscover before Claiming; otherwise preserve the diagnostic and stop that Ticket. Never invent blocker edges from numbering, prose, or likely implementation order.
+Read the configured Ticket universe through frontier. Select only IDs in its `claimable` result and report its `non_frontier` diagnostics. If a diagnostic is an explicitly supported metadata-only repair, perform that one bounded owning operation and rediscover before Claiming; a generic content-digest or semantic-drift diagnostic remains blocked. Never invent blocker edges from numbering, prose, or likely implementation order.
 
 Explicit Ticket IDs bound the selection universe: intersect exactly those Ticket IDs with the current frontier and report every requested non-frontier Ticket. Never add an unrequested blocker or dependent. `--all` bounds the universe to the configured adapter surface and begins with only its current frontier.
 
@@ -251,6 +251,8 @@ Use the smallest preparation tier whose positive predicates fit the Ticket:
 - `L3`: model-evaluation, workflow-evidence, merge-policy, or release-policy governance; retain the full evidence and human-boundary requirements declared by the Ticket or repository policy.
 
 All tiers retain frontier snapshot/Claim, dirty-worktree and writer ownership, final validation, outcome finalization, and release-boundary rules whenever those rules apply. Tiering only selects proportional preparation and review; it never turns a Ticket state or a green check into deployment, merge, migration, smoke, or cutover authority.
+
+Map each material predicate to its extra gates: cross-module or cross-group coupling enables targeted exploration, Group Review, integration validation, and Post-Execution Review; public-contract, data, or migration work enables Design Context, independent review, integration/final validation, and explicit migration/evidence disposition; production or configuration effects enable rollout/config review and release-boundary evidence; external dependencies enable conditional source-backed research and corresponding validation; non-obvious validation or recovery value enables the Digest, Pre-Edit Plan Review, and recovery evidence; L3 governance retains the full evidence and human-boundary policy named by the Ticket or repository.
 
 Keep the stage interfaces narrow: Adoption Routing selects the branch/worktree route; the Checkpoint selects enabled preparation and owns the current plan; the Digest preserves only resumable or material decisions; Pre-Edit Plan Review challenges an enabled complex plan; Pre-Execute Gate verifies live branch/worktree/Claim facts. Later stages consume those results instead of restating or re-planning them.
 
@@ -428,6 +430,8 @@ For implementation groups, pin the group review range against the group branch b
 Also check supporting engineering risks only when relevant to the changed files or risk: side effects and regression risk, test/validation coverage, and dependency or compatibility concerns.
 
 Classify every finding first by **Repairability**, then by **Decision Ownership**. Severity labels P0-P3 rank impact only; they never decide whether the Agent fixes a finding. Fix every in-scope P0-P3 finding whose repair is derivable from the approved Ticket, current code, and repository policy, rerun affected validation, and repeat the affected review. A clearly out-of-scope, non-blocking finding may become a follow-up. Reserve user input for genuinely human-owned scope, product, architecture, ownership, release, data, security, or significant UX choices. Any unresolved acceptance-affecting finding blocks candidate handoff and routes the Attempt to the appropriate recovery outcome regardless of severity.
+
+Group Review is complete when the pinned group range has been compared with the authoritative Ticket/Spec and applicable repository standards, every derivable finding is fixed and revalidated, and every remaining finding is either explicitly routed as human-owned or recorded as a non-blocking follow-up without affecting candidate acceptance.
 
 ### 7. Integrate
 
