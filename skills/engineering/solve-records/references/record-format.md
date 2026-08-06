@@ -164,6 +164,8 @@ Status: passed | unavailable | stale
 - `<command or check>` - passed | unavailable | stale
 
 ## Review
+Requirement-to-evidence audit: passed
+- Evidence summary: <concise strongest scope-matched current evidence across the full Ticket and approved source Spec>
 Post-Execution Review: passed
 - <integrated-candidate review outcome>
 
@@ -189,6 +191,11 @@ Cleanup: pending | done | blocked
 ```
 
 When the Attempt used an Execution Digest, distill each durable decision or deviation here or in `## Review` with its reason, impact, and evidence. Keep the working Digest only while it retains resume value or repo policy requires it; otherwise delete it after this transfer.
+
+The audit lines are a concise conclusion and evidence summary, not a copied
+Ticket, per-requirement checklist, parser field, or second gate. `/ultra solve`
+owns the live full-boundary audit before receipt creation; this receipt only
+preserves a truthful maintainer-facing handoff of that passed conclusion.
 
 Candidate acceptance review, merge, ship, land, and candidate cleanup require
 this candidate-only Git evidence. `post-merge activation required` can be
