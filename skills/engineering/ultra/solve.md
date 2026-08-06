@@ -184,13 +184,13 @@ A blocker reason explains a state transition; it is not a new state.
 
 Discovery must skip Tickets carrying an active `solve-in-progress` Claim and report them as already claimed.
 
-`review-pending` is a Local Markdown adapter state, not a global triage role. It is never claimable. Frontier reports all publication, blocker, state, and Claim diagnostics; do not infer or manually repair claimability.
+`review-pending` is a Local Markdown adapter state, not a global triage role. It is never claimable. Frontier reports all publication, blocker, state, and Claim diagnostics. Before stopping on a non-frontier result, the coordinator may perform one bounded repair when the formal Ticket or its owning adapter can deterministically repair an unambiguous identity or publication-integrity defect within the configured contract, then must rediscover and Claim from a fresh snapshot. Typical repairs include adding a missing stable Ticket ID when the configured identity is unambiguous, or re-registering a formally corrected Ticket set after publication inspection reports body drift. Never hand-edit publication journals, Claim metadata, blocker relationships, states, or conflict/resume assignments; those remain fail-closed or human-owned when the coordinator cannot repair them safely.
 
 ## Workflow
 
 ### 1. Discover
 
-Read the configured Ticket universe through frontier. Select only IDs in its `claimable` result and report its `non_frontier` diagnostics. Never invent blocker edges from numbering, prose, or likely implementation order.
+Read the configured Ticket universe through frontier. Select only IDs in its `claimable` result and report its `non_frontier` diagnostics. If a diagnostic is an adapter-supported identity or publication-integrity repair, perform that one bounded repair and rediscover before Claiming; otherwise preserve the diagnostic and stop that Ticket. Never invent blocker edges from numbering, prose, or likely implementation order.
 
 Explicit Ticket IDs bound the selection universe: intersect exactly those Ticket IDs with the current frontier and report every requested non-frontier Ticket. Never add an unrequested blocker or dependent. `--all` bounds the universe to the configured adapter surface and begins with only its current frontier.
 
@@ -241,6 +241,19 @@ Completion can unlock a dependent in the next generation. A failed, recovery, hu
 
 For each claimed Ticket, run the Pre-Implementation Checkpoint after Claim and before implementation edits. Read the Ticket body, acceptance criteria, comments, linked docs, optional Agent Brief, and enough current repository context to decide whether the Ticket is executable.
 
+Build a compact **Design Context** index before deciding the execution plan. Read the root `AGENTS.md` and `CONTEXT.md` when present, then follow Ticket/source pointers and inspect only the relevant PRD/Spec, `docs/adr/`, `docs/agents/`, or domain documents for the changed surfaces. Treat an explicitly superseded document as historical context, not live requirements. Record the authoritative sources, consulted sources, and any unresolved conflict in the active context; put the index in the Execution Digest only when the Attempt is otherwise digest-worthy. A simple Ticket needs only a one-line index such as `Design Context: CONTEXT.md; ADR-0012; no unresolved conflict`.
+
+Use the smallest preparation tier whose positive predicates fit the Ticket:
+
+- `L0`: one local surface or tightly coupled local slice; complete acceptance; no cross-Ticket dependency, public contract, data/migration, production, external-fact, or non-obvious-validation signal; obvious validation.
+- `L1`: ordinary local multi-file work in a known module with no L2/L3 signal; use narrow targeted exploration and one proportional group/final review.
+- `L2`: any cross-module or cross-group coupling, public contract, data or migration work, production/configuration effect, external dependency, non-obvious validation, or material recovery decision; use the applicable exploration, Digest, Pre-Edit Plan Review, independent review, integration validation, and Post-Execution Review gates.
+- `L3`: model-evaluation, workflow-evidence, merge-policy, or release-policy governance; retain the full evidence and human-boundary requirements declared by the Ticket or repository policy.
+
+All tiers retain frontier snapshot/Claim, dirty-worktree and writer ownership, final validation, outcome finalization, and release-boundary rules whenever those rules apply. Tiering only selects proportional preparation and review; it never turns a Ticket state or a green check into deployment, merge, migration, smoke, or cutover authority.
+
+Keep the stage interfaces narrow: Adoption Routing selects the branch/worktree route; the Checkpoint selects enabled preparation and owns the current plan; the Digest preserves only resumable or material decisions; Pre-Edit Plan Review challenges an enabled complex plan; Pre-Execute Gate verifies live branch/worktree/Claim facts. Later stages consume those results instead of restating or re-planning them.
+
 Classify the Ticket disposition:
 
 - `executable`: enough information exists or can be inferred.
@@ -250,23 +263,26 @@ Classify the Ticket disposition:
 
 If a Ticket becomes `needs-info` or `ready-for-human`, record the blocker reason and route the Attempt through Outcome Finalization. A substantive assessment with durable findings creates the matching recovery receipt; an immediate no-value stop releases its Claim without a record. Continue with the rest of the batch after the Ticket, Claim, resources, and backlink reflect that disposition.
 
-The root Agent records, without requesting approval:
+The root Agent records, without requesting approval, only the selected preparation decisions and their evidence:
 
-- exploration disposition: `direct root exploration`, `narrow root exploration`, `adaptive read-only subagent fan-out`, or `conditional external research`
+- Design Context index and any unresolved source conflict
+- exploration disposition when exploration is needed: `direct root exploration`, `narrow root exploration`, `adaptive read-only subagent fan-out`, or `conditional external research`
 - implementation disposition: `direct root implementation`, `one bounded implementation subagent`, or `objective root implementation fallback`, with current evidence for every required predicate or fallback
-- bounded analysis, verification, and independent-review dispositions, including any root-execution exception
+- bounded analysis, verification, or independent-review dispositions only when those stages are enabled
 - validation plan: commands, manual evidence, check-run links, or why no meaningful automated check exists
-- Digest disposition: `simple` or `digest-worthy`
+- Digest disposition: `none` or `digest-worthy`, using the conditional rule below
 
 Direct root implementation requires positive evidence that the Ticket is simple, familiar, local, low-risk, fully specified, and obviously verifiable. Existing high-quality exploration in the active context may satisfy part of that evidence and avoid duplicate fan-out. A clear local fix alone is not enough.
 
-Bias most non-trivial or uncertain Tickets toward adaptive read-only subagent fan-out. Use task-shaped lenses only when they add independent evidence: affected modules, contracts, risks, dependencies, validation, or relevant external facts. Subagents return compressed findings—relevant modules, constraints, risks, validation paths, and unresolved questions. The root Agent retains synthesis, integration, final validation, tracker transitions, Post-Execution Review closure, and Solve Record finalization; implementation edits follow the recorded Stage Ownership disposition. Raw exploration output stays outside the Ticket, Execution Digest, and Solve Record.
+Use adaptive read-only fan-out only when the Ticket's affected surfaces, contracts, risks, dependencies, validation, or external facts are not already covered by the Design Context and current conversation. A simple local Ticket may use direct root exploration or no additional exploration. Subagents return compressed findings—relevant modules, constraints, risks, validation paths, and unresolved questions. The root Agent retains synthesis, integration, final validation, tracker transitions, Post-Execution Review closure, and Solve Record finalization; implementation edits follow the recorded Stage Ownership disposition. Raw exploration output stays outside the Ticket, Execution Digest, and Solve Record.
 
 Use external research only when a source-verifiable external API, framework, standard, platform, compatibility, or security fact affects implementation or validation and local approved context cannot settle it. Link the source and keep the finding factual. Research never substitutes for a human-owned product, architecture, data-policy, or security-policy choice.
 
 ### Execution Digest: Conditional Working Memory
 
-An Execution Digest is a separate Ticket-level working file, never a Ticket-body section, tracker state, schema gate, or second requirement source. Create it at the start of a digest-worthy Attempt: a multi-module, delegated, resumable, interrupted, non-obvious-validation, or likely record-worthy-decision Attempt. A simple Attempt creates no Digest until its first material decision or deviation; create it at that event without rewriting the Ticket.
+An Execution Digest is a separate Ticket-level working file, never a Ticket-body section, tracker state, schema gate, or second requirement source. The default is `Digest: none`. Create it only when at least one positive trigger applies: the Attempt is multi-module, delegated, resumable or likely to be interrupted; validation is non-obvious or externally dependent; or a non-obvious decision/deviation affects acceptance, observable behavior, compatibility, validation, rollout, or recovery. A simple Attempt creates no Digest until its first material decision or deviation; create it at that event without rewriting the Ticket.
+
+Do not create a Digest merely because the Ticket changes multiple files, the Agent performed ordinary exploration, a routine check failed and was fixed, or the implementation is expected to finish in one session. If no trigger applies, record one short reason such as `Digest: none — local, single-module, obvious validation, no material decision`.
 
 For a local Ticket at `.scratch/<feature>/issues/<ticket-file>.md` or `.scratch/<feature>/issue.md`, use exactly:
 
@@ -305,7 +321,7 @@ Complex, delegated, resumable, or digest-worthy Attempts receive a Pre-Edit Plan
 
 Record-worthy low-risk decisions go in the active Digest and outcome Solve Record. Human-owned product, API, data, security, architecture, or significant UX choices set the Ticket to `ready-for-human`; missing core requirements set it to `needs-info`.
 
-The Pre-Implementation Checkpoint is complete when each claimed Ticket has a Ticket disposition; exploration, implementation, analysis, verification, and independent-review dispositions; a validation plan; a Digest disposition; and any required Digest or Pre-Edit Plan Review incorporated before implementation edits. Later stages must revalidate the recorded evidence when repository state, runtime capability, worktree ownership, or Ticket context changes.
+The Pre-Implementation Checkpoint is complete when each claimed Ticket has a Ticket disposition, a Design Context index, an execution and validation plan, the selected stage dispositions, and a Digest decision; any required Digest or Pre-Edit Plan Review is incorporated before implementation edits. Unselected heavy stages are not recreated as empty checklist entries. Later stages must revalidate the recorded evidence when repository state, runtime capability, worktree ownership, or Ticket context changes.
 
 ### 4. Group
 
@@ -434,6 +450,8 @@ The integration stage exists to catch hidden coupling between parallel work: sha
 
 Follow and revalidate the Checkpoint's verification disposition, then run the repo-appropriate validation commands in the integration worktree. The root owns the final validation conclusion even when a bounded verification pass is delegated. Prefer the project's documented commands; otherwise use the narrowest meaningful test/build/lint set first and expand when risk requires it.
 
+Final Validate proves executable validation facts: the required commands/checks, integration result, clean committed candidate, and current evidence status. It does not redo Group Review's local Spec/Standards comparison or decide whether the Ticket was well-shaped.
+
 If final validation passes:
 
 - ensure the integration worktree is clean and all intended changes are committed
@@ -457,6 +475,8 @@ When a blocked, needs-info, ready-for-human, abandoned, superseded, or retained-
 ### 8.4 Post-Execution Review
 
 After final validation and before Outcome Finalization, the root re-reads and reviews the integrated candidate against the claimed Tickets, acceptance criteria, source Specs, approved decisions, optional Agent Briefs, applicable living Execution Digests, repository standards, side effects, validation evidence, and receipt readiness. Follow and revalidate the Checkpoint's independent-review disposition: bias independent review toward suitable read-only subagents when available, using the documented root exceptions only when their current evidence still holds. A subagent summary supplements but never replaces the root's integrated-candidate read.
+
+Post-Execution Review consumes the Group Review and Final Validate results; it focuses on integrated-candidate scope, cross-group coupling, side effects/regressions, Design Context or Digest decisions that must be handed off, and whether the Solve Record evidence is truthful and complete. It does not repeat a clean local Group Review or rerun a validation command unless a finding or changed candidate requires it.
 
 Check for:
 
