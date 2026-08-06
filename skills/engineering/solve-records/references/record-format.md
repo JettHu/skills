@@ -91,6 +91,32 @@ a candidate merely because `outcome` is absent. Legacy `## Issues`,
 `## Changes`, and `## Checks` sections remain readable alongside the new names
 below.
 
+### Legacy terminal outcome compatibility
+
+The read-only dashboard also accepts the historical terminal values
+`merged`, `landed`, and `completed` when the record has `state: merged`. It
+does not rewrite the receipt or treat these values as canonical outcomes. The
+record is routed to Recently merged when `cleanup_done: true`, or Cleanup
+pending otherwise. The same values remain malformed when paired with an open
+or otherwise non-terminal state, so an invalid lifecycle cannot be hidden by
+this compatibility path.
+
+### Closed evidence and superseded candidate compatibility
+
+A historical `state: closed`, `outcome: candidate` receipt may omit current
+candidate ref fields when its body explicitly records either `Next action:
+supersede...` or a zero-diff/evidence-only result with no repository change.
+The read-only dashboard treats that receipt as terminal: `cleanup_done: false`
+routes to Cleanup pending, and `cleanup_done: true` routes to the terminal
+recent view. This is read-only compatibility; new receipts must still use the
+canonical outcome-specific contract.
+
+Canonical recovery receipts with `state: closed` and `outcome: superseded` or
+`abandoned` use the same terminal routing when their explicit cleanup
+disposition is complete. They remain Cleanup pending while `cleanup_done` is
+false, and are not treated as active Recovery after cleanup. The outcome still
+records why the Attempt ended; it is not rewritten to `candidate` or `merged`.
+
 ## Common body header
 
 Every new record starts with this header before its outcome-specific sections:

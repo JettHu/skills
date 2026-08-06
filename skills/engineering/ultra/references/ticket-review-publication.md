@@ -99,7 +99,7 @@ bundled helper; never retry a completed operation through the other route.
 | Operation | Stage and required inputs | Success evidence | Error and resume boundary |
 | --- | --- | --- | --- |
 | `register` | After draft creation and every semantic repair; repository, configured representation/location, stable run ID, and explicit membership-change authorization when needed | `review-pending` phase with exact member IDs and reviewed content evidence | Fail closed without Ticket mutation; repair the reported artifact/contract and re-run `register` |
-| `inspect` | Review or recovery diagnosis; repository, configured representation/location, run ID | Current phase, exact members, and canonical statuses | Read-only structured refusal; repair the reported mismatch and re-run |
+| `inspect` | Review or recovery diagnosis; repository, configured representation/location, run ID | Current phase, exact members, canonical statuses, and current bodies matching registered digests | Read-only structured refusal, including digest drift; repair the reported mismatch and re-run |
 | `promote` | Only after semantic review passes; repository, configured representation/location, registered run ID | `promoted` phase after complete-set verification | Retain resumable state; fix the reported failure and re-run the same `promote` |
 | `cleanup` | Cancelled review-pending run only; repository, configured representation/location, run ID, and explicit authorization when policy requires | Exact cleaned member IDs | Retain artifacts; repair policy/artifact mismatch, or resume promotion when instructed |
 

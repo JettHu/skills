@@ -26,6 +26,20 @@ sections through the canonical local publication adapter, and it keeps
 Tickets out of ready and claimed buckets. Run-tagged readiness requires the
 same complete-set promoted gate used by `/ultra solve`.
 
+Issue classification follows explicit Ticket state after those safety gates:
+`completed` remains in a completed lane even when an old publication warning is
+retained on the card; `needs-triage` has its own lane; active Tickets whose
+publication journal cannot be verified go to Publication attention and remain
+out of ready/claimed; `solve-in-progress` enters Claimed only when publication
+verification is valid. Completed lanes scan and count every Ticket, while the
+HTML view shows the most recently completed items first and keeps the rest
+behind Show more.
+
+Closed recovery receipts are terminal when their explicit disposition is
+complete: `state: closed` with `outcome: superseded` or `abandoned` goes to the
+historical recent lane after `cleanup_done: true`, and to Cleanup pending while
+cleanup remains false. The outcome is preserved as historical disposition.
+
 If the user gives another checkout, pass it explicitly:
 
 ```bash

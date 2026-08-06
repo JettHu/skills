@@ -15,6 +15,8 @@ ISSUE_BUCKETS = [
     "ready_for_agent",
     "claimed_or_in_progress",
     "needs_human",
+    "needs_triage",
+    "publication_attention",
     "blocked_or_dependent",
     "completed_with_solve_record",
     "completed_without_solve_record",
@@ -37,6 +39,7 @@ SOLVE_RECORD_OUTCOMES = {
     "abandoned",
     "superseded",
 }
+LEGACY_TERMINAL_OUTCOMES = {"merged", "landed", "completed"}
 RECOVERY_OUTCOMES = SOLVE_RECORD_OUTCOMES - {"candidate"}
 COMMON_RECORD_FIELDS = {"id", "kind", "state", "issues", "created_at", "cleanup_done"}
 CANDIDATE_RECORD_FIELDS = {"base", "base_sha", "head", "head_sha", "worktree"}
@@ -408,18 +411,30 @@ def apply_publication_gates(repo, issues, contract):
 def classify_issue(issue):
     flags = set(issue["flags"])
     status = issue["status"]
-    if status == "review-pending" or (
-        issue.get("publication_run") and not issue.get("publication_promoted")
-    ):
+    warning_codes = {warning.get("code") for warning in issue.get("warnings", [])}
+    publication_attention = warning_codes & {
+        "publication_invalid",
+        "publication_not_promoted",
+        "publication_adapter_missing",
+    }
+    if status == "review-pending":
         return "other"
-    if "solve-in-progress" in flags:
-        return "claimed_or_in_progress"
-    if status in {"ready-for-human", "needs-info"}:
-        return "needs_human"
     if status == "completed":
         if issue["solve_records"]:
             return "completed_with_solve_record"
         return "completed_without_solve_record"
+    if status == "wontfix":
+        return "other"
+    if status == "needs-triage":
+        return "needs_triage"
+    if status in {"ready-for-human", "needs-info"}:
+        return "needs_human"
+    if publication_attention or (
+        issue.get("publication_run") and not issue.get("publication_promoted")
+    ):
+        return "publication_attention"
+    if "solve-in-progress" in flags:
+        return "claimed_or_in_progress"
     if issue["blocked_by"]:
         return "blocked_or_dependent"
     if status == "ready-for-agent":
@@ -546,6 +561,31 @@ def record_section(text, name):
     return text[start:] if end == -1 else text[start:end]
 
 
+def closed_candidate_terminal(text, state, outcome):
+    if state != "closed" or outcome != "candidate":
+        return False
+    body = text.lower()
+    resume = record_section(text, "Resume Or Cleanup").lower()
+    merge = re.sub(r"\s+", " ", record_section(text, "Merge").lower())
+    superseded = "next action:" in resume and "supersed" in resume
+    zero_diff = (
+        ("zero diff" in body or "zero-diff" in body or "zero repository commits" in body or "zero commits" in body or "there is no diff" in body or "零 diff" in body)
+        and (
+            "not applicable" in merge
+            or "no changes" in merge
+            or "no repository changes" in merge
+            or ("no application code" in merge and "changed" in merge)
+            or ("no code" in merge and "schema change" in merge)
+        )
+    )
+    return superseded or zero_diff
+
+
+def closed_recovery_terminal(state, outcome):
+    """Treat cleaned closed recovery receipts as historical terminals."""
+    return state == "closed" and outcome in RECOVERY_OUTCOMES
+
+
 def record_labeled_value(block, label):
     prefix = f"{label.lower()}:"
     for line in block.splitlines():
@@ -629,7 +669,11 @@ def fallback_parse_record(repo, path):
     current = None
     for line in text[4:end].splitlines():
         if line.startswith("  - ") and current:
-            record.setdefault(current, []).append(line[4:].strip())
+            existing = record.get(current)
+            if not isinstance(existing, list):
+                existing = [] if existing in (None, "") else [existing]
+            existing.append(line[4:].strip())
+            record[current] = existing
             continue
         if ":" not in line:
             record["malformed"] = f"invalid frontmatter line: {line}"
@@ -663,6 +707,10 @@ def fallback_parse_record(repo, path):
     elif not outcome:
         record["malformed"] = "missing outcome"
         return record
+    elif closed_candidate_terminal(text, record.get("state"), outcome):
+        record["closed_candidate_terminal"] = True
+    elif outcome in LEGACY_TERMINAL_OUTCOMES and record.get("state") == "merged":
+        record["legacy_terminal_outcome"] = outcome
     elif outcome not in SOLVE_RECORD_OUTCOMES:
         record["malformed"] = f"invalid outcome: {outcome}"
         return record
@@ -916,9 +964,15 @@ def fallback_record_summary(repo, record):
     }
     summary["issues"] = record.get("issues", [])
     summary["legacy_outcome"] = bool(record.get("legacy_outcome"))
+    summary["legacy_terminal_outcome"] = record.get("legacy_terminal_outcome")
+    summary["closed_candidate_terminal"] = bool(record.get("closed_candidate_terminal"))
     summary["resource_cleanup"] = record_resource_field(record, "Cleanup")
     if record.get("malformed"):
         summary["malformed"] = record["malformed"]
+    elif record.get("closed_candidate_terminal"):
+        summary["terminal_view"] = "closed"
+    elif closed_recovery_terminal(record.get("state"), record.get("outcome")):
+        summary["terminal_view"] = "closed"
     elif record.get("outcome") == "candidate":
         refs_ok, ref_reason = fallback_ref_check(repo, record)
         summary.update(
@@ -946,6 +1000,24 @@ def fallback_solve_records_dashboard(repo):
         summary = fallback_record_summary(repo, record)
         if record.get("malformed"):
             buckets["stale_or_malformed"].append(summary)
+        elif record.get("closed_candidate_terminal"):
+            if str(record.get("cleanup_done")).lower() != "true":
+                summary["cleanup_plan"] = fallback_cleanup_plan(repo, record)
+                buckets["cleanup"].append(summary)
+            else:
+                recent.append(summary)
+        elif closed_recovery_terminal(record.get("state"), record.get("outcome")):
+            if str(record.get("cleanup_done")).lower() != "true":
+                summary["cleanup_plan"] = fallback_cleanup_plan(repo, record)
+                buckets["cleanup"].append(summary)
+            else:
+                recent.append(summary)
+        elif record.get("legacy_terminal_outcome"):
+            if str(record.get("cleanup_done")).lower() != "true":
+                summary["cleanup_plan"] = fallback_cleanup_plan(repo, record)
+                buckets["cleanup"].append(summary)
+            else:
+                recent.append(summary)
         elif record.get("outcome") in RECOVERY_OUTCOMES:
             buckets["recovery"].append(summary)
         elif summary.get("body_conflict"):
@@ -1216,6 +1288,19 @@ def titleize_bucket(bucket):
     return bucket.replace("_", " ").title()
 
 
+def issue_display_items(bucket, items):
+    if bucket not in {"completed_with_solve_record", "completed_without_solve_record"}:
+        return items
+    return sorted(
+        items,
+        key=lambda item: (
+            item.get("completed") or item.get("updated") or item.get("created") or "",
+            item.get("path") or "",
+        ),
+        reverse=True,
+    )
+
+
 def render_html(snapshot):
     issue_counts = snapshot["issues"]["counts"]
     record_counts = snapshot["solve_records"]["counts"]
@@ -1228,7 +1313,11 @@ def render_html(snapshot):
         for bucket, count in record_counts.items()
     )
     issue_sections = "".join(
-        render_bucket(titleize_bucket(bucket), snapshot["issues"]["buckets"].get(bucket, []), render_issue_card)
+        render_bucket(
+            titleize_bucket(bucket),
+            issue_display_items(bucket, snapshot["issues"]["buckets"].get(bucket, [])),
+            render_issue_card,
+        )
         for bucket in ISSUE_BUCKETS
     )
     record_sections = "".join(
