@@ -52,8 +52,6 @@ for heading in (
     "# Complementary Enhancement Profiles",
     "## Skill aliases",
     "## Evidence-based context sufficiency",
-    "### to-spec overrides",
-    "### to-tickets overrides",
 ):
     assert heading in profiles, f"profile guidance lost its required section: {heading}"
 
@@ -62,6 +60,8 @@ for row in (
     "| to-tickets | Context gathering and repository exploration are conditional `target-native`",
 ):
     assert row in profiles, f"canonical profile row missing: {row}"
+
+assert profiles.count("complete normative target conditions") == 1
 
 for proxy in ("20+ messages", "completely unfamiliar area", "already traced the code path"):
     assert proxy not in profiles, f"context proxy returned: {proxy}"

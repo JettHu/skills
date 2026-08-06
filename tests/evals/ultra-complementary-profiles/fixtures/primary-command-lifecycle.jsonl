@@ -1,3 +1,0 @@
-{"type":"thread.started","thread_id":"primary-command-lifecycle"}
-{"type":"item.started","item":{"id":"item_13","type":"command_execution","command":"/bin/zsh -lc 'python3 scripts/check.py'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_13","type":"command_execution","command":"/bin/zsh -lc 'python3 scripts/check.py'","aggregated_output":"","exit_code":0,"status":"completed"}}

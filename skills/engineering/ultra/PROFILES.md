@@ -42,31 +42,6 @@ An eligible Ultra-additive stage may narrow or skip only when current, traceable
 | A target owns unconditional exploration | Run the target-native stage regardless of prior context |
 | A conditional shaping target has no prior exploration, but no objective additive trigger matches | Let the target decide its native exploration; do not add Ultra exploration |
 
-### to-spec overrides
-
-The target owns its conditional repository exploration. Ultra adds only the distinct lenses below.
-
-**Add independent code lens when:**
-- The Spec's requested change affects two or more subsystems, or a security/data boundary
-- A dependency-and-validation-path pass supplies evidence distinct from the target's architecture understanding
-
-**Add Research when:**
-- An unfamiliar external API, standard, or security requirement affects the Spec and approved local context cannot settle the source-verifiable fact
-- The fact directly determines the Spec; a research request alone is not sufficient
-
-**Add Review when:**
-- The Spec is large, ambiguous, cross-system, or high-risk
-
-### to-tickets overrides
-
-The target owns conditional repository exploration. Ultra owns complete-set review, repair, publication, and promotion.
-
-**Add independent code lens when:**
-- The source outcome spans two or more subsystems or a security/data boundary
-- A dependency, blocker, and validation-path pass supplies evidence distinct from the target's optional repository understanding
-
-**Add Research only when:**
-- A source-verifiable external fact directly determines an acceptance criterion or blocker edge
-- Approved local context cannot settle that fact
-
-Use research for official platform limits, SDK behavior, standards, or compatibility requirements. Keep product semantics, architecture direction, data/security policy, ownership, and release policy with approved input or an explicit human decision; do not use research for generic decomposition frameworks or unrelated open-source examples.
+The profile rows above contain the complete normative target conditions and evidence
+goals. Apply the evidence-sufficiency examples only to narrow or cover an eligible
+goal; they never create another trigger or routing rule.

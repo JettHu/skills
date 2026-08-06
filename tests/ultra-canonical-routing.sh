@@ -34,14 +34,10 @@ for text in (
 for text in (
     "| to-spec | Repository exploration is conditional `target-native`",
     "| to-tickets | Context gathering and repository exploration are conditional `target-native`",
-    "### to-spec overrides",
-    "### to-tickets overrides",
-    "An unfamiliar external API, standard, or security requirement affects the Spec and approved local context cannot settle the source-verifiable fact",
-    "The fact directly determines the Spec; a research request alone is not sufficient",
-    "The Spec is large, ambiguous, cross-system, or high-risk",
-    "A source-verifiable external fact directly determines an acceptance criterion or blocker edge",
-    "Approved local context cannot settle that fact",
-    "do not use research for generic decomposition frameworks or unrelated open-source examples",
+    "Add research only for an unresolved source-verifiable external fact that directly determines the Spec",
+    "Spec is large, ambiguous, cross-system, or high-risk",
+    "Research only when a source-verifiable external fact directly determines acceptance or a blocker",
+    "complete normative target conditions",
 ):
     assert text in profiles, f"canonical profile condition missing: {text}"
 
