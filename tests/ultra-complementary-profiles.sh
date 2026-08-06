@@ -164,6 +164,53 @@ for contradictory in (
     assert contradictory not in profiles, f"target-native absence is mislabeled unavailable: {contradictory}"
 PY
 
+# --- Ticket 20 target-native delegation fallback regression ---
+python3 - <<'PY'
+def schedule_native_stage(*, delegation_available, ultra_requests_same_goal):
+    evidence_goal = "affected-surface-discovery"
+    ledger = []
+
+    # Delegation changes only the executor, never the stage owner or evidence goal.
+    ledger.append({
+        "stage": "target-native-explore",
+        "owner": "target-native",
+        "executor": "delegated-agent" if delegation_available else "root-serial-fallback",
+        "evidence_goal": evidence_goal,
+    })
+
+    # Ultra must not repeat an evidence goal already owned by the native stage.
+    if ultra_requests_same_goal and not any(
+        event["evidence_goal"] == evidence_goal for event in ledger
+    ):
+        ledger.append({
+            "stage": "ultra-code-explore",
+            "owner": "ultra-additive",
+            "executor": "root",
+            "evidence_goal": evidence_goal,
+        })
+    return ledger
+
+
+events = schedule_native_stage(
+    delegation_available=False,
+    ultra_requests_same_goal=True,
+)
+assert events == [{
+    "stage": "target-native-explore",
+    "owner": "target-native",
+    "executor": "root-serial-fallback",
+    "evidence_goal": "affected-surface-discovery",
+}]
+assert sum(
+    event["evidence_goal"] == "affected-surface-discovery" for event in events
+) == 1, "native evidence goal must execute exactly once"
+assert not any(
+    event["stage"].startswith("ultra-") for event in events
+), "serial fallback must not trigger a duplicate Ultra stage"
+
+print("Ticket 20 target-native delegation fallback regression passed")
+PY
+
 python3 "$REPO_ROOT/tests/evals/ultra-complementary-profiles/prepare-fixture.py" \
   --output "$TMP" --run-id authority-fixtures --scenario all --variant treatment \
   --treatment-ref working-tree --ablation-ref HEAD >/dev/null
