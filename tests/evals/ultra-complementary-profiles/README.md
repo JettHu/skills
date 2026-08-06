@@ -1,5 +1,18 @@
 # Ultra Complementary Profiles Eval Harness
 
+## Current portable acceptance boundary
+
+Ticket 20 now accepts the portable profile contract through deterministic validation.
+Model-adherence runs are optional, separately reported evidence: an absent or failed
+model run does not block acceptance of the portable catalog contract. Historical
+attempts, raw traces, grader output, policies, and `NOT ACCEPTED` verdicts remain
+immutable evidence and are not reinterpreted by this scope change.
+
+The prospective policies below document the historical model-evaluation program and
+the gates that applied within that program. They do not define the current portable
+contract gate. A future model-evaluation Ticket may reuse them only under its own
+explicit authorization and immutable-evidence rules.
+
 ## Prospective acceptance policy
 
 Ticket 20's required model-adherence gate is frozen in
