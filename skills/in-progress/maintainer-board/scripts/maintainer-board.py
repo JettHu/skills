@@ -28,6 +28,7 @@ SOLVE_RECORD_BUCKETS = [
     "manual",
     "cleanup",
     "recent",
+    "historical",
     "recovery",
     "stale_or_malformed",
 ]
@@ -1005,19 +1006,25 @@ def fallback_solve_records_dashboard(repo):
                 summary["cleanup_plan"] = fallback_cleanup_plan(repo, record)
                 buckets["cleanup"].append(summary)
             else:
-                recent.append(summary)
+                buckets["historical"].append(summary)
         elif closed_recovery_terminal(record.get("state"), record.get("outcome")):
             if str(record.get("cleanup_done")).lower() != "true":
                 summary["cleanup_plan"] = fallback_cleanup_plan(repo, record)
                 buckets["cleanup"].append(summary)
             else:
-                recent.append(summary)
+                buckets["historical"].append(summary)
         elif record.get("legacy_terminal_outcome"):
             if str(record.get("cleanup_done")).lower() != "true":
                 summary["cleanup_plan"] = fallback_cleanup_plan(repo, record)
                 buckets["cleanup"].append(summary)
             else:
-                recent.append(summary)
+                buckets["historical"].append(summary)
+        elif (
+            record.get("state") == "closed"
+            and record.get("outcome") == "candidate"
+            and str(record.get("cleanup_done")).lower() == "true"
+        ):
+            buckets["historical"].append(summary)
         elif record.get("outcome") in RECOVERY_OUTCOMES:
             buckets["recovery"].append(summary)
         elif summary.get("body_conflict"):
