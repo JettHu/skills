@@ -1072,7 +1072,38 @@ def load_solve_records_dashboard(repo):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     records = module.discover(repo)
-    return module.dashboard(repo, records)
+    dashboard = module.dashboard(repo, records)
+
+    # Board-only compatibility: keep solve-records strict, but place explicit
+    # historical terminal receipts in Historical when the canonical helper
+    # still exposes them through a legacy/manual/recovery lane. This is a
+    # read-only presentation adapter; it never rewrites or relaxes receipts.
+    paths = sorted(repo.glob(".scratch/solve-records/*.md"))
+    paths += sorted(repo.glob(".scratch/*/solve-records/*.md"))
+    compat_ids = set()
+    for path in paths:
+        record = fallback_parse_record(repo, path)
+        if record.get("malformed"):
+            continue
+        cleaned = str(record.get("cleanup_done")).lower() == "true"
+        if not cleaned:
+            continue
+        if record.get("closed_candidate_terminal") or record.get("legacy_terminal_outcome"):
+            compat_ids.add(record.get("id"))
+        elif (
+            record.get("state") == "closed"
+            and record.get("outcome") in {"superseded", "abandoned"}
+        ):
+            compat_ids.add(record.get("id"))
+
+    if compat_ids:
+        historical = dashboard.setdefault("buckets", {}).setdefault("historical", [])
+        for bucket in ("manual", "cleanup", "recent", "recovery", "stale_or_malformed"):
+            items = dashboard.get("buckets", {}).get(bucket, [])
+            moved = [item for item in items if item.get("id") in compat_ids]
+            historical.extend(moved)
+            dashboard["buckets"][bucket] = [item for item in items if item.get("id") not in compat_ids]
+    return dashboard
 
 
 def build_snapshot(repo):

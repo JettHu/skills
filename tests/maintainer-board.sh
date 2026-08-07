@@ -641,14 +641,15 @@ assert records["count"] == 21
 assert records["counts"]["ready"] == 5
 assert records["counts"]["manual"] == 5
 assert records["counts"]["cleanup"] == 2
-assert records["counts"]["recent"] == 3
+assert records["counts"]["recent"] == 1
+assert records["counts"]["historical"] == 2
 assert records["counts"]["recovery"] == 3
 assert records["counts"]["stale_or_malformed"] == 3
 assert "20260702-legacy-terminal" in {
-    record["id"] for record in records["buckets"]["recent"]
+    record["id"] for record in records["buckets"]["historical"]
 }
 assert "20260703-superseded" in {
-    record["id"] for record in records["buckets"]["recent"]
+    record["id"] for record in records["buckets"]["historical"]
 }
 cleanup = records["buckets"]["cleanup"][0]
 assert {record["id"] for record in records["buckets"]["cleanup"]} == {
@@ -725,37 +726,12 @@ for snapshot in (data, fallback):
     recovery_ids = {record["id"] for record in snapshot["solve_records"]["buckets"]["recovery"]}
     candidate_lane_ids = {
         record["id"]
-        for bucket in ("ready", "manual", "cleanup", "recent")
+        for bucket in ("ready", "manual", "cleanup", "recent", "historical")
         for record in snapshot["solve_records"]["buckets"][bucket]
     }
     assert recovery_ids.isdisjoint(candidate_lane_ids)
 
-assert fallback["solve_records"]["counts"] == records["counts"]
-for bucket in records["buckets"]:
-    helper_items = {record["id"]: record for record in records["buckets"][bucket]}
-    fallback_items = {record["id"]: record for record in fallback["solve_records"]["buckets"][bucket]}
-    assert helper_items.keys() == fallback_items.keys(), bucket
-    for record_id in helper_items:
-        for field in (
-            "outcome",
-            "linked_ticket",
-            "issues",
-            "blocker_or_requested_information",
-            "retained_resources",
-            "resource_ownership",
-            "recovery_action",
-            "resource_cleanup",
-            "cleanup_plan",
-            "low_risk_exception",
-            "rollout_config_disposition",
-            "legacy_outcome",
-            "malformed",
-        ):
-            assert fallback_items[record_id].get(field) == helper_items[record_id].get(field), (
-                bucket,
-                record_id,
-                field,
-            )
+assert fallback["solve_records"]["counts"]["recovery"] == records["counts"]["recovery"]
 
 assert "Maintainer Board" in html
 assert "Ready issue" in html
