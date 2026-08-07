@@ -40,6 +40,19 @@ complete: `state: closed` with `outcome: superseded` or `abandoned` goes to the
 historical recent lane after `cleanup_done: true`, and to Cleanup pending while
 cleanup remains false. The outcome is preserved as historical disposition.
 
+Recovery validation is state-aware: open recovery records need an explicit next
+action, while closed `abandoned` or `superseded` records may omit synthetic
+`Blocker Or Requested Information` and `Resume Or Cleanup` sections when their
+outcome, ownership, and cleanup disposition are clear.
+
+`rejected` is a terminal outcome for an evidence-backed candidate explicitly
+declined for landing or rollout. It is not a recovery route; closed rejected
+records appear with terminal results.
+
+Closed `abandoned` or `superseded` records with completed cleanup are historical
+terminal evidence. Only open recovery records belong in the Recovery lane;
+closed recovery records with pending cleanup belong in Cleanup.
+
 If the user gives another checkout, pass it explicitly:
 
 ```bash

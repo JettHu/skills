@@ -34,14 +34,15 @@ SOLVE_RECORD_BUCKETS = [
 ]
 SOLVE_RECORD_OUTCOMES = {
     "candidate",
+    "rejected",
     "blocked",
     "needs-info",
     "ready-for-human",
     "abandoned",
     "superseded",
 }
-LEGACY_TERMINAL_OUTCOMES = {"merged", "landed", "completed"}
-RECOVERY_OUTCOMES = SOLVE_RECORD_OUTCOMES - {"candidate"}
+LEGACY_COMPLETED_OUTCOMES = {"merged", "landed", "completed"}
+RECOVERY_OUTCOMES = SOLVE_RECORD_OUTCOMES - {"candidate", "rejected"}
 COMMON_RECORD_FIELDS = {"id", "kind", "state", "issues", "created_at", "cleanup_done"}
 CANDIDATE_RECORD_FIELDS = {"base", "base_sha", "head", "head_sha", "worktree"}
 RECOVERY_SECTIONS = {
@@ -636,21 +637,29 @@ def fallback_body_error(record):
     result = record_labeled_value(outcome, "Result").lower()
     if not result:
         return "missing outcome result"
+    if result in LEGACY_COMPLETED_OUTCOMES:
+        result = "candidate"
     if result != record["outcome"]:
         return "body/frontmatter outcome conflict"
     if not record_labeled_value(outcome, "Branch/worktree/commit/PR"):
         return "missing retained resource disposition"
     if not record_labeled_value(outcome, "Resource ownership"):
         return "missing resource ownership"
-    sections = NEW_CANDIDATE_SECTIONS if result == "candidate" else RECOVERY_SECTIONS
+    if result in {"candidate", "rejected"}:
+        sections = NEW_CANDIDATE_SECTIONS
+    else:
+        # Recovery receipts share a small core. Open receipts need a next
+        # action; closed abandoned/superseded receipts may be concise and do
+        # not need synthetic blocker/resume sections.
+        sections = {"Ticket", "Outcome", "Resources"}
     missing = sorted(section for section in sections if not record_has_section(text, section))
     if missing:
         return "missing sections: " + ",".join(missing)
     if not record_labeled_value(record_section(text, "Resources"), "Cleanup"):
         return "missing resource cleanup disposition"
-    if result == "candidate" and record_review_status(record_section(text, "Review")) != "passed":
+    if result in {"candidate", "rejected"} and record_review_status(record_section(text, "Review")) != "passed":
         return "candidate requires passed Post-Execution Review"
-    if result != "candidate" and not record_labeled_value(
+    if result != "candidate" and record.get("state") == "open" and not record_labeled_value(
         record_section(text, "Resume Or Cleanup"), "Next action"
     ):
         return "missing recovery next action"
@@ -710,14 +719,18 @@ def fallback_parse_record(repo, path):
         return record
     elif closed_candidate_terminal(text, record.get("state"), outcome):
         record["closed_candidate_terminal"] = True
-    elif outcome in LEGACY_TERMINAL_OUTCOMES and record.get("state") == "merged":
-        record["legacy_terminal_outcome"] = outcome
+    elif outcome in LEGACY_COMPLETED_OUTCOMES:
+        if record.get("state") == "merged":
+            record["legacy_terminal_outcome"] = outcome
+        else:
+            record["legacy_outcome"] = outcome
+            record["outcome"] = "candidate"
     elif outcome not in SOLVE_RECORD_OUTCOMES:
         record["malformed"] = f"invalid outcome: {outcome}"
         return record
     else:
         record["outcome"] = outcome
-        if outcome == "candidate":
+        if outcome in {"candidate", "rejected"}:
             missing = record_missing(record, CANDIDATE_RECORD_FIELDS)
             if missing:
                 record["malformed"] = "missing candidate fields: " + ",".join(missing)
@@ -974,7 +987,7 @@ def fallback_record_summary(repo, record):
         summary["terminal_view"] = "closed"
     elif closed_recovery_terminal(record.get("state"), record.get("outcome")):
         summary["terminal_view"] = "closed"
-    elif record.get("outcome") == "candidate":
+    elif record.get("outcome") in {"candidate", "rejected"}:
         refs_ok, ref_reason = fallback_ref_check(repo, record)
         summary.update(
             refs_ok=refs_ok,
@@ -1007,26 +1020,25 @@ def fallback_solve_records_dashboard(repo):
                 buckets["cleanup"].append(summary)
             else:
                 buckets["historical"].append(summary)
-        elif closed_recovery_terminal(record.get("state"), record.get("outcome")):
-            if str(record.get("cleanup_done")).lower() != "true":
+        elif record.get("outcome") in RECOVERY_OUTCOMES:
+            if (
+                record.get("state") == "closed"
+                and str(record.get("cleanup_done")).lower() == "true"
+            ):
+                buckets["historical"].append(summary)
+            elif record.get("state") == "open":
+                buckets["recovery"].append(summary)
+            else:
                 summary["cleanup_plan"] = fallback_cleanup_plan(repo, record)
                 buckets["cleanup"].append(summary)
-            else:
-                buckets["historical"].append(summary)
-        elif record.get("legacy_terminal_outcome"):
-            if str(record.get("cleanup_done")).lower() != "true":
-                summary["cleanup_plan"] = fallback_cleanup_plan(repo, record)
-                buckets["cleanup"].append(summary)
-            else:
-                buckets["historical"].append(summary)
+        elif record.get("outcome") == "rejected" and record.get("state") == "closed":
+            buckets["historical"].append(summary)
         elif (
             record.get("state") == "closed"
             and record.get("outcome") == "candidate"
             and str(record.get("cleanup_done")).lower() == "true"
         ):
             buckets["historical"].append(summary)
-        elif record.get("outcome") in RECOVERY_OUTCOMES:
-            buckets["recovery"].append(summary)
         elif summary.get("body_conflict"):
             summary["stale_reason"] = summary["body_conflict"]
             buckets["stale_or_malformed"].append(summary)
