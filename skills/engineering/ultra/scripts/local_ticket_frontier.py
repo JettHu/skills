@@ -263,6 +263,7 @@ def heading_blockers(text: str, heading: str) -> list[str]:
     collecting = False
     level = 0
     result: list[str] = []
+    saw_no_blocker = False
     for line in lines:
         match = re.match(r"^(#+)\s+(.*)$", line)
         if match:
@@ -281,9 +282,17 @@ def heading_blockers(text: str, heading: str) -> list[str]:
             continue
         value = stripped[2:].strip()
         quoted = re.findall(r"`([^`]+)`", value)
-        result.extend(item.strip() for item in quoted if item.strip())
-        if not quoted and value:
+        if quoted:
+            result.extend(item.strip() for item in quoted if item.strip())
+            continue
+        if re.fullmatch(r"none(?:\.|\s+[-—–]\s+.+)?", value, re.IGNORECASE):
+            saw_no_blocker = True
+        elif value:
             result.append(value)
+    if saw_no_blocker and result:
+        raise FrontierError(
+            f"Ticket mixes a no-blocker sentinel with blocker IDs under {heading}"
+        )
     return result
 
 

@@ -73,6 +73,8 @@ claim() {
 REPO="$TMPDIR_ROOT/file-per"
 init_repo "$REPO"
 write_ticket "$REPO" A ready-for-agent '' ''
+write_ticket "$REPO" NONE-DOT ready-for-agent '- None.' ''
+write_ticket "$REPO" NONE-EXPLAINED ready-for-agent '- None — can start immediately.' ''
 write_ticket "$REPO" B ready-for-agent '- `A`' ''
 write_ticket "$REPO" C ready-for-agent '- `A`' ''
 write_ticket "$REPO" D ready-for-agent $'- `B`\n- `C`' ''
@@ -95,7 +97,7 @@ python3 - "$TMPDIR_ROOT/initial.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1], encoding="utf-8"))
 assert data["safe_for_batch"] is True
-assert data["claimable"] == ["A", "NO-BLOCKER-FIELD"]
+assert data["claimable"] == ["A", "NO-BLOCKER-FIELD", "NONE-DOT", "NONE-EXPLAINED"]
 reasons = data["non_frontier"]
 assert "blocked-by:A:ready-for-agent" in reasons["B"]
 assert "provisional-state:review-pending" in reasons["PROVISIONAL"]
@@ -104,6 +106,15 @@ assert "human-blocked-state:ready-for-human" in reasons["HUMAN"]
 assert "missing-blocker-target:DOES-NOT-EXIST" in reasons["MISSING"]
 assert "dependency-cycle" in reasons["X"] and "dependency-cycle" in reasons["Y"]
 PY
+
+# A no-blocker sentinel cannot hide a real blocker in the same section.
+write_ticket "$REPO" MIXED ready-for-agent $'- None.\n- `A`' ''
+if frontier "$REPO" >"$TMPDIR_ROOT/mixed.out" 2>&1; then
+  echo 'mixed no-blocker sentinel and blocker ID unexpectedly parsed' >&2
+  exit 1
+fi
+grep -Fq 'mixes a no-blocker sentinel with blocker IDs' "$TMPDIR_ROOT/mixed.out"
+rm "$REPO/.scratch/feature/issues/MIXED.md"
 
 # Explicit selection never expands to blockers or dependents.
 frontier "$REPO" --ticket-id D >"$TMPDIR_ROOT/explicit.json"
@@ -139,7 +150,7 @@ frontier "$REPO" >"$TMPDIR_ROOT/second.json"
 python3 - "$TMPDIR_ROOT/second.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1], encoding="utf-8"))
-assert data["claimable"] == ["B", "C", "NO-BLOCKER-FIELD"]
+assert data["claimable"] == ["B", "C", "NO-BLOCKER-FIELD", "NONE-DOT", "NONE-EXPLAINED"]
 assert "blocked-by:B:ready-for-agent" in data["non_frontier"]["D"]
 PY
 
