@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 ADAPTER="$REPO_ROOT/skills/engineering/ultra/scripts/local_ticket_publication.py"
+FRONTIER="$REPO_ROOT/skills/engineering/ultra/scripts/local_ticket_frontier.py"
 TMPDIR_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ultra-local-publication.XXXXXX")"
 trap 'rm -rf "$TMPDIR_ROOT"' EXIT
 
@@ -15,7 +16,7 @@ write_contract() {
   local representation="${3:-file-per-ticket}"
   local location="${4:-.scratch/<feature>/issues/<ticket-file>.md}"
   mkdir -p "$repo/docs/agents"
-  printf 'Publication strategy: local-review-pending\nLocal Ticket representation: %s\nLocal Ticket path: %s\nCancellation policy: %s\nTicket ID field aliases: Ticket ID, ID\nPublication Run field aliases: Publication Run\nSource field aliases: Source Spec, Parent\nTicket state fields: Status, State\nTicket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info\nReady state: ready-for-agent\nCompleted state: completed\nHuman-blocked states: ready-for-human, needs-info\nBlocker metadata fields: Blocked By, Blockers\nClaim field aliases: Flags, Labels\nSolve branch field aliases: Solve Branch, Branch\nSolve worktree field aliases: Solve Worktree, Worktree\n' "$representation" "$location" "$policy" >"$repo/docs/agents/ultra-tracker.md"
+  printf 'Publication strategy: local-review-pending\nLocal Ticket representation: %s\nLocal Ticket path: %s\nCancellation policy: %s\nFrontier adapter: bundled-local-markdown-v1\nTicket ID field aliases: Ticket ID, ID\nPublication Run field aliases: Publication Run\nSource field aliases: Source Spec, Parent\nTicket state fields: Status, State\nTicket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info\nReady state: ready-for-agent\nCompleted state: completed\nHuman-blocked states: ready-for-human, needs-info\nBlocker metadata fields: Blocked By, Blockers\nBlocker body heading: Blocked by\nClaim field: Flags\nClaim field aliases: Flags, Labels\nClaim value: solve-in-progress\nSolve branch field: Solve Branch\nSolve branch field aliases: Solve Branch, Branch\nSolve worktree field: Solve Worktree\nSolve worktree field aliases: Solve Worktree, Worktree\n' "$representation" "$location" "$policy" >"$repo/docs/agents/ultra-tracker.md"
 }
 
 write_contract "$FILE_REPO" retain-until-explicit-cleanup
@@ -88,6 +89,77 @@ if adapter "$CHECKBOX_REPO" file-per-ticket .scratch/feature/issues checkbox-run
   exit 1
 fi
 grep -Fq 'Ticket content changed after review registration' "$TMPDIR_ROOT/checkbox-semantic-change.out"
+
+# Publication digests cover reviewed semantics, not adapter-owned lifecycle
+# evidence. A complete run must remain valid while one member is claimed and
+# finalized, while a real body edit must still invalidate the run.
+LIFECYCLE_REPO="$TMPDIR_ROOT/publication-lifecycle"
+mkdir -p "$LIFECYCLE_REPO/.scratch/feature/issues"
+git -C "$LIFECYCLE_REPO" init -q
+write_contract "$LIFECYCLE_REPO" retain-until-explicit-cleanup
+for ticket_id in LIFE-1 LIFE-2; do
+  write_file_ticket "$LIFECYCLE_REPO/.scratch/feature/issues/$ticket_id.md" \
+    "$ticket_id" lifecycle-run review-pending "" "Lifecycle $ticket_id"
+  python3 - "$LIFECYCLE_REPO/.scratch/feature/issues/$ticket_id.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(
+    path.read_text(encoding="utf-8").replace("Flags:\n\n", "\n", 1),
+    encoding="utf-8",
+)
+PY
+done
+adapter "$LIFECYCLE_REPO" file-per-ticket .scratch/feature/issues lifecycle-run register >/dev/null
+adapter "$LIFECYCLE_REPO" file-per-ticket .scratch/feature/issues lifecycle-run promote >/dev/null
+python3 "$FRONTIER" frontier --repo "$LIFECYCLE_REPO" --ticket-id LIFE-1 >"$TMPDIR_ROOT/lifecycle-frontier.json"
+lifecycle_snapshot="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["snapshot"])' "$TMPDIR_ROOT/lifecycle-frontier.json")"
+python3 "$FRONTIER" claim --repo "$LIFECYCLE_REPO" --ticket-id LIFE-1 \
+  --expected-snapshot "$lifecycle_snapshot" --branch solve/LIFE-1 \
+  --worktree "$LIFECYCLE_REPO-worktree" >/dev/null
+adapter "$LIFECYCLE_REPO" file-per-ticket .scratch/feature/issues lifecycle-run inspect >/dev/null
+
+python3 - "$LIFECYCLE_REPO/.scratch/feature/issues/LIFE-1.md" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = re.sub(r"(?m)^Status:[ \t]*.*$", "Status: completed", text, count=1)
+text = re.sub(r"(?m)^(?:Flags|Solve Branch|Solve Worktree):[ \t]*.*\n?", "", text)
+metadata_end = text.index("\n\n")
+text = text[:metadata_end] + "\ncompleted: 2026-08-21" + text[metadata_end:]
+text = text.rstrip() + "\n\n## Comments\n\n### Solve Record\n\n- `../solve-records/life-1.md`\n"
+path.write_text(text, encoding="utf-8")
+PY
+adapter "$LIFECYCLE_REPO" file-per-ticket .scratch/feature/issues lifecycle-run inspect >/dev/null
+python3 "$FRONTIER" frontier --repo "$LIFECYCLE_REPO" --ticket-id LIFE-2 >"$TMPDIR_ROOT/lifecycle-sibling.json"
+python3 - "$TMPDIR_ROOT/lifecycle-sibling.json" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+assert payload["claimable"] == ["LIFE-2"], payload
+PY
+python3 - "$LIFECYCLE_REPO/.scratch/feature/issues/LIFE-1.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(
+    path.read_text(encoding="utf-8").replace(
+        "independently verifiable", "semantically changed", 1
+    ),
+    encoding="utf-8",
+)
+PY
+if adapter "$LIFECYCLE_REPO" file-per-ticket .scratch/feature/issues lifecycle-run inspect >"$TMPDIR_ROOT/lifecycle-semantic-change.out" 2>&1; then
+  echo "publication accepted changed lifecycle Ticket body" >&2
+  exit 1
+fi
+grep -Fq 'Ticket content changed after review registration' "$TMPDIR_ROOT/lifecycle-semantic-change.out"
 
 # Every adapter operation is authorized by the one configured Local Markdown
 # representation and durable surface, never by CLI coordinates alone.

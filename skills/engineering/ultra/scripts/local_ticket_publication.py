@@ -221,6 +221,23 @@ def replace_metadata_field(text: str, field: str, value: str) -> str:
     return text[:start] + updated + text[end:]
 
 
+def remove_terminal_solve_record_backlink(text: str) -> str:
+    """Exclude the standard path-only outcome backlink from reviewed content."""
+    prefix, separator, comments = text.rpartition("\n## Comments\n\n")
+    if not separator:
+        return text
+
+    lines = [line for line in comments.rstrip("\n").splitlines() if line]
+    if len(lines) < 2 or lines[0] not in {"### Solve Record", "### Solve Records"}:
+        return text
+    if not all(
+        line.startswith("- `") and line.endswith("`") and "solve-records/" in line
+        for line in lines[1:]
+    ):
+        return text
+    return prefix
+
+
 def normalize_operational_fields(
     text: str,
     state_fields: tuple[str, ...],
@@ -228,16 +245,18 @@ def normalize_operational_fields(
     branch_fields: tuple[str, ...],
     worktree_fields: tuple[str, ...],
 ) -> str:
+    text = remove_terminal_solve_record_backlink(text)
     text = re.sub(
         r"(?m)^([ \t]*[-*+] [ \t]*\[)[ xX](\][ \t]+)",
         r"\1 \2",
         text,
     )
-    start, end, _kind = metadata_region(text)
+    start, end, kind = metadata_region(text)
     region = text[start:end]
     groups = (
         ({normalize_key(field) for field in state_fields}, "state", False),
-        ({normalize_key(field) for field in claim_fields}, "claim", False),
+        ({"completed"}, "completed", True),
+        ({normalize_key(field) for field in claim_fields}, "claim", True),
         ({normalize_key(field) for field in branch_fields}, "branch", True),
         ({normalize_key(field) for field in worktree_fields}, "worktree", True),
     )
@@ -259,6 +278,8 @@ def normalize_operational_fields(
         return match.group(0)
 
     region = pattern.sub(replacement, region)
+    if kind == "frontmatter":
+        region = region.rstrip("\r\n")
     return text[:start] + region + text[end:]
 
 
