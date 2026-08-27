@@ -1,6 +1,6 @@
 interface:
   display_name: "Ultra To Spec"
   short_description: "Run to-spec through ultra"
-  default_prompt: "Use $ultra-to-spec to turn the current conversation, plan, or requirements into a Spec through ultra's conditional exploration and review."
+  default_prompt: "Use $ultra-to-spec to preserve to-spec's native workflow and add only profile-declared independent evidence or fresh-context review when its explicit conditions match."
 policy:
   allow_implicit_invocation: false

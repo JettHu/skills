@@ -1,6 +1,6 @@
 interface:
   display_name: "Ultra Diagnose"
   short_description: "Run diagnose through ultra"
-  default_prompt: "Use $ultra-diagnose to debug a bug or regression with ultra's exploration and review."
+  default_prompt: "Use $ultra-diagnose to run the target-owned red-capable diagnosis loop first, then add only profile-declared research or post-fix review for distinct evidence goals."
 policy:
   allow_implicit_invocation: false

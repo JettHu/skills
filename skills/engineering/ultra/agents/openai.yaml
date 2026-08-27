@@ -1,6 +1,6 @@
 interface:
   display_name: "Ultra"
-  short_description: "Wrap skills with exploration and review"
-  default_prompt: "Use $ultra to run an agent skill with adaptive pre-exploration and post-review, or use /ultra solve to execute AFK-ready Tickets through meaningful candidate or recovery outcome receipts."
+  short_description: "Add profile-declared evidence to target workflows"
+  default_prompt: "Use $ultra to preserve an agent skill's target-native workflow and add only its profile-declared distinct evidence passes, or use /ultra solve to execute AFK-ready Tickets through meaningful candidate or recovery outcome receipts."
 policy:
   allow_implicit_invocation: true

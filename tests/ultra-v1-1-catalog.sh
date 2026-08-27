@@ -38,6 +38,9 @@ brief = (engineering / "ultra-to-tickets/references/agent-brief.md").read_text(
     encoding="utf-8"
 )
 ticket_wrapper = (engineering / "ultra-to-tickets/SKILL.md").read_text(encoding="utf-8")
+core_metadata = (engineering / "ultra/agents/openai.yaml").read_text(encoding="utf-8")
+diagnose_metadata = (engineering / "ultra-diagnose/agents/openai.yaml").read_text(encoding="utf-8")
+spec_metadata = (engineering / "ultra-to-spec/agents/openai.yaml").read_text(encoding="utf-8")
 assert "[Agent Brief contract](references/agent-brief.md)" in ticket_wrapper
 assert "only when its optional, non-duplicative fields would add approved execution context" in ticket_wrapper
 assert "Context:" not in brief
@@ -100,6 +103,12 @@ assert re.search(r"^\| to-tickets \| Context gathering and repository exploratio
 assert "For `to-tickets`, first read and follow [Ticket Review Publication]" in core
 assert "The main Agent fixes every derivable finding in those same artifacts" in core
 assert "only verified promotion yields `ready-for-agent`" in core
+assert "target-native workflow" in core_metadata and "profile-declared distinct evidence passes" in core_metadata
+assert "target-owned red-capable diagnosis loop first" in diagnose_metadata
+assert "profile-declared independent evidence" in spec_metadata
+for stale_metadata in (core_metadata, diagnose_metadata, spec_metadata):
+    assert "adaptive pre-exploration" not in stale_metadata
+    assert "ultra's exploration and review" not in stale_metadata
 assert "review-pending" in publication and "publication-run identity" in publication
 assert "Manual fallback is prohibited for every operation" in publication
 assert "Publication has no public" in publication
