@@ -94,9 +94,9 @@ assert "| to-issues | to-tickets |" not in profiles
 
 # Wrapper smoke: both exact routes resolve to canonical profile rows. The target-specific
 # behavior stays owned by core Ultra, not duplicated into the thin wrappers.
-assert re.search(r"^\| to-spec \| yes \| cond \| cond \|", profiles, re.MULTILINE)
-assert "The Spec is large, ambiguous, cross-system, or high-risk" in profiles
-assert re.search(r"^\| to-tickets \| yes \| cond \| yes \|", profiles, re.MULTILINE)
+assert re.search(r"^\| to-spec \| Repository exploration is conditional `target-native`", profiles, re.MULTILINE)
+assert "Spec is large, ambiguous, cross-system, or high-risk" in profiles
+assert re.search(r"^\| to-tickets \| Context gathering and repository exploration are conditional `target-native`", profiles, re.MULTILINE)
 assert "For `to-tickets`, first read and follow [Ticket Review Publication]" in core
 assert "The main Agent fixes every derivable finding in those same artifacts" in core
 assert "only verified promotion yields `ready-for-agent`" in core

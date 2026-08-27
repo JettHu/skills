@@ -45,26 +45,26 @@ for heading in profile_template_headings:
     assert heading not in profiles, f"profile prompt template returned: {heading}"
 
 assert not any(line.startswith(">") for line in profiles.splitlines()), (
-    "profiles must retain flags, overrides, and rationale rather than prompt templates"
+    "profiles must retain ownership contracts and overrides rather than prompt templates"
 )
 
 for heading in (
-    "# Enhancement Profiles",
+    "# Complementary Enhancement Profiles",
     "## Skill aliases",
-    "## When to skip or narrow pre-exploration",
-    "### to-spec overrides",
-    "### to-tickets overrides",
+    "## Evidence-based context sufficiency",
 ):
     assert heading in profiles, f"profile guidance lost its required section: {heading}"
 
 for row in (
-    "| to-spec | yes | cond | cond | — |",
-    "| to-tickets | yes | cond | yes | — |",
+    "| to-spec | Repository exploration is conditional `target-native`",
+    "| to-tickets | Context gathering and repository exploration are conditional `target-native`",
 ):
     assert row in profiles, f"canonical profile row missing: {row}"
 
-assert "| to-prd | yes |" not in profiles, "legacy to-prd cannot remain a canonical profile row"
-assert "| to-issues | yes |" not in profiles, "legacy to-issues cannot remain a canonical profile row"
+assert profiles.count("complete normative target conditions") == 1
+
+for proxy in ("20+ messages", "completely unfamiliar area", "already traced the code path"):
+    assert proxy not in profiles, f"context proxy returned: {proxy}"
 
 print("ultra lens ownership fixture passed")
 PY

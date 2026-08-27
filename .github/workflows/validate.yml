@@ -17,6 +17,8 @@ jobs:
         run: bash tests/ultra-lenses.sh
       - name: Test Ultra canonical routing
         run: bash tests/ultra-canonical-routing.sh --contract
+      - name: Test Ultra complementary profiles
+        run: bash tests/ultra-complementary-profiles.sh
       - name: Test Ultra v1.1 catalog
         run: bash tests/ultra-v1-1-catalog.sh
       - name: Test Ultra solve boundaries

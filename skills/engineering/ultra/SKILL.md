@@ -1,11 +1,11 @@
 ---
 name: ultra
-description: Multi-agent enhancement wrapper for agent skills and ultra subcommands. Adds parallel codebase exploration before and structured review after skill execution, and supports /ultra solve for AFK-ready Ticket execution with outcome receipts. Use when user says "/ultra skill-name" or "/ultra solve", wants deeper analysis before a skill runs, wants multi-perspective review after, or wants to execute ready-for-agent issues. Examples — /ultra to-spec, /ultra diagnosing-bugs, /ultra to-tickets, /ultra solve --all.
+description: Multi-agent enhancement wrapper for agent skills and ultra subcommands. Preserves target-native workflows and adds only profile-declared evidence passes, and supports /ultra solve for AFK-ready Ticket execution with outcome receipts. Use when user says "/ultra skill-name" or "/ultra solve", wants complementary analysis before a skill runs, wants distinct review after, or wants to execute ready-for-agent issues. Examples — /ultra to-spec, /ultra diagnosing-bugs, /ultra to-tickets, /ultra solve --all.
 ---
 
 # Ultra
 
-Wrap an agent skill with adaptive pre-exploration and post-review. The target skill runs unmodified — ultra adds richer context before it and validation after.
+Wrap an agent skill with complementary enhancement. The target skill runs unmodified and owns its native exploration, research, review, code-review, and delegation. Ultra adds a stage only when the selected profile declares a distinct evidence goal.
 
 ## Usage
 
@@ -17,14 +17,16 @@ If the first argument is `solve`, dispatch directly to the [solve.md](solve.md) 
 
 ## Runtime adaptivity
 
-This skill is capability-oriented. The workflow describes outcomes; parenthetical hints describe the *capability needed*, not a specific tool. "Spawn agents" means "run exploration or review passes; use parallel subagents when available, otherwise serial passes."
+This skill is capability-oriented. The workflow describes outcomes; parenthetical hints describe the *capability needed*, not a specific tool. "Spawn agents" means delegate exploration or review passes when the runtime offers delegation, running independent passes in parallel when useful or ordered passes serially. If the runtime offers no delegation, the root Agent executes the capability-equivalent passes serially.
+
+Delegation availability and parallel scheduling are separate. A pass may use a delegated Agent even when it must run serially. When a declared review goal requires an independent lens, available delegation cannot be replaced by root self-review.
 
 If a named tool is unavailable, use the nearest equivalent workflow (serial passes, direct file reads, manual diff inspection) and state the substitution briefly. A missing specific tool is never by itself a blocker.
 
 Fallback examples:
-- Parallel exploration or review -> run the same passes serially with available read/search tools.
+- Parallel exploration or review -> delegate the same passes serially when delegation is available; use root read/search tools only when delegation is unavailable.
 - Web-search agent -> use direct web-search/fetch tools when available; if unavailable and research is optional or low-value, state the skip.
-- Team review -> run a manual two-lens review: completeness, then consistency.
+- Team review -> use one independent reviewer Agent for the required lenses; only without delegation, run a manual root two-lens review: completeness, then consistency.
 
 Example runtime mappings, not requirements: `parallel codebase exploration` -> Agent tool with `subagent_type=Explore`; `with web search` -> Agent tool with `subagent_type=general-purpose`; multi-reviewer code review -> TeamCreate/TeamDelete.
 
@@ -42,44 +44,46 @@ Before lookup, resolve compatibility aliases from [PROFILES.md](PROFILES.md) `Sk
 
 Project-local guidance from `AGENTS.md`, `CONTEXT.md`, ADRs, issue briefs, or tracker conventions should guide the actual run when present; profiles provide portable defaults.
 
-If the skill has no profile or all flags are off (grill-me, grill-with-docs, handoff), invoke it directly — no enhancement overhead.
+If the skill has no profile or its Ultra additions are unavailable (grill-me, grill-with-docs, handoff), invoke it directly — no enhancement overhead.
 
-If the profile has `code_review: true`, record the current HEAD commit SHA (`base_sha`) now. This is needed in step 5 to detect code changes produced by the target skill.
+For every native capability and possible Ultra addition, take the disposition directly from the profile: `target-native`, `ultra-additive`, or `unavailable`. Do not rediscover target ownership from the target runbook at runtime. Target-native stages remain owned by the target and run according to its instructions. Ultra-additive stages are eligible only under their declared trigger. Unavailable stages do not run.
+
+Create a small stage ledger keyed by the profile's evidence goals. A goal may have only one owner and must run at most once. If a target-native stage and a possible Ultra stage would collect the same evidence, keep the target-native stage and suppress the Ultra stage. When the profile has `code_review: ultra-additive`, record the current HEAD commit SHA (`base_sha`) now. This is needed in step 5 to detect code changes produced by the target skill.
 
 ### 2. Context sufficiency check
 
-Before spawning exploration agents, assess whether the current conversation already contains sufficient context for the task:
+Assess current task-relevant evidence against the selected profile's declared goal. Evidence is sufficient only when it is current, traceable to an approved artifact or repository observation, and covers all three dimensions needed by that goal:
 
-- Has the user already discussed the relevant code areas in this conversation?
-- Are there recent exploration results in context that cover the target modules?
-- Has the user provided detailed requirements that reduce ambiguity?
+1. affected surfaces and governing contracts;
+2. material risks, dependencies, or unresolved facts;
+3. a credible validation path for the requested outcome.
 
-**If context is already sufficient**: Skip pre-exploration entirely and proceed to step 4 (invoke the target skill). State briefly why you're skipping (e.g., "Skipping pre-exploration — the conversation already covers the review_status code path in detail").
+Short evidence that covers these dimensions can justify narrowing or skipping an eligible Ultra pass. Long discussion, message count, broad familiarity, a prior `/ultra` run, or the mere presence of a detailed request cannot. Stale or unrelated evidence does not cover a current goal.
 
-**If context is partially sufficient**: Narrow the exploration scope. Only spawn agents for the dimensions the profile enables *and* that are actually lacking from context. State what you're spawning and why, and what you're omitting and why. For example: "Architecture is covered in context; spawning only Industry agent for batch-operation patterns."
+**If the goal is evidence-complete**: Mark the eligible Ultra-additive stage `covered` in the stage ledger and do not run it. State which current evidence covers the declared goal.
 
-**If context is insufficient**: Proceed with full pre-exploration per the profile.
+**If the goal is partially covered**: Narrow the Ultra-additive stage to the missing dimensions only. State the covered and missing evidence.
 
-**Safety rule**: Default to exploration until *specific* prior messages or explore results prove the target area is already covered. A redundant exploration costs tokens; a skipped necessary exploration costs quality.
+**If the goal is not covered**: Run the eligible Ultra-additive stage at its declared scope.
+
+This sufficiency check never suppresses an unconditional target-native stage. Conditional target-native stages remain governed by the target. Missing evidence in conversation context is not, by itself, a trigger for a conditional Ultra-additive pass; the profile's objective trigger must also match.
 
 ### 3. Pre-exploration (parallel agents, adaptive scope)
 
-Spawn agents based on the profile flags AND the context sufficiency assessment AND the profile's task-specific rationale. Each agent returns a concise summary (under 500 words). These summaries become conversation context that the target skill benefits from naturally.
+Run only eligible `ultra-additive` pre-target stages whose objective trigger matches and whose evidence goal is not already covered. Each eligible pre-target pass must complete before the target workflow and any target-native stage begins; its result becomes input context for the target. Each pass returns a concise summary (under 500 words). These summaries become conversation context that the target skill benefits from naturally. Record the goal as completed so no later pass repeats it.
 
-**Profile flag semantics**: `yes` = enabled by default. `cond` = disabled unless the profile's override conditions match (see PROFILES.md). `—` = unavailable.
-
-**Task-specific narrowing**: The profile's Rationale column may specify conditions under which certain modules should be narrowed even when context is insufficient. For example, the `to-spec` profile defaults to code-only for well-bounded Specs; research and review are enabled only for its stated external-fact and risk conditions. Apply these task-specific rules before spawning agents.
+For conditionally exploring targets such as `to-spec` and `to-tickets`, absence of prior exploration is never enough to add an Ultra code pass. The profile must name an independent lens and an objective task condition that makes its evidence distinct from the target's optional exploration.
 
 When cited `CONTEXT.md` or `docs/adr/` files are absent, use the nearest project docs, tracker context, or code context.
 
-**When `code: true`** — by default, spawn up to two code-exploration agents:
+**When the profile declares an Ultra-additive code pass** — spawn only the lenses named by its evidence goal, up to two code-exploration agents:
 
 - **Architecture agent** (parallel codebase exploration): Read CONTEXT.md, relevant ADRs, and the modules the task touches. Summarize the current architecture, key abstractions, relevant domain vocabulary, and patterns to follow.
 - **Risk agent** (parallel codebase exploration): Identify affected files, cross-cutting dependencies, edge cases, breaking changes, and unexpected constraints.
 
 These are default exploration roles, not a fixed taxonomy. For tasks with a clearer split, replace or narrow them while staying within the total pre-exploration cap.
 
-**When `research: true`** — spawn one additional agent:
+**When the profile declares an Ultra-additive research pass** — spawn one additional agent only after its objective trigger matches:
 
 - **Industry agent** (with web search): Search for how similar problems are solved elsewhere — established patterns, common pitfalls, design trade-offs. Focus on actionable insights, not surveys, and cite sources when available.
 
@@ -88,7 +92,9 @@ Within the total cap, adapt the exploration roles to the specific task — don't
 - A `to-spec` task in an unfamiliar domain might need an external-API research agent
 - An architecture task spanning multiple subsystems might need agents split by subsystem
 
-Cap at 3 pre-exploration agents total. Run them in parallel when available; otherwise run the same passes serially.
+Cap Ultra additions at 3 pre-exploration agents total. Target-native delegation is outside this cap and remains intact. If the runtime cannot delegate, execute the capability-equivalent stage serially; do not omit it or transfer its ownership to Ultra.
+
+For `diagnosing-bugs`, invoke the target first so it can build and run its red-capable feedback loop. Research is unavailable until that loop produces a concrete evidence-backed question; only then may the profile's conditional Ultra research pass answer that question. Do not explore toward hypotheses before the target-owned loop exists.
 
 ### 4. Invoke the target skill
 
@@ -98,7 +104,9 @@ Invoke the target skill unmodified, passing through any remaining arguments (e.g
 
 ### 5. Post-review
 
-**When `review: true`** — run two review passes after the skill completes, in parallel when available:
+**When the profile declares an Ultra-additive review** — run the declared distinct review goal after the skill completes, using these lenses only when they contribute to that goal:
+
+When delegation is available, assign every Ultra-additive post-review to an independent reviewer Agent and consume its returned findings. Root self-review does not complete that stage. Only when delegation is unavailable may the root Agent run the same review lenses serially; record that capability fallback before reporting the review complete.
 
 - **Completeness reviewer**: Cross-reference the skill's output against pre-exploration findings (or conversation context). Flag only concrete omissions, especially *scope blindness* — issues or edge cases raised during exploration that the skill output silently dropped.
 - **Consistency reviewer**: Check that the output uses correct domain vocabulary (CONTEXT.md), respects ADRs, and follows project conventions. Flag only real *convention drift* — patterns, naming, or structures that deviate without justification.
@@ -109,7 +117,7 @@ For `to-tickets`, the main Agent then selects the configured promotion operation
 
 For other targets, present findings as a brief checklist of potential gaps. Do not auto-fix them through this generic review step.
 
-**When `code_review: true`** — only if the skill produced code changes:
+**When `code_review: ultra-additive`** — only if the skill produced code changes:
 
 If step 1 did not record `base_sha`, report that the change-detection baseline is missing and use the safest fixed point available (for example, an explicit user-supplied base or the current branch merge-base).
 

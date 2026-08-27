@@ -20,31 +20,28 @@ profiles = (repo / "skills/engineering/ultra/PROFILES.md").read_text(encoding="u
 
 for text in (
     "Examples — /ultra to-spec, /ultra diagnosing-bugs, /ultra to-tickets, /ultra solve --all.",
-    "the `to-spec` profile defaults to code-only for well-bounded Specs",
+    "take the disposition directly from the profile: `target-native`, `ultra-additive`, or `unavailable`",
+    "affected surfaces and governing contracts",
+    "Long discussion, message count, broad familiarity",
     "For canonical shaping targets `to-spec` and `to-tickets`, review the exact generated artifact",
-    "The main Agent fixes every finding derivable from approved context and current code",
-    "canonical Spec/Ticket terminology (use `Ticket`, not `Issue`)",
-    "Re-run the affected review after each repair",
-    "Ask the user only for an unresolved scope, product-semantic, ownership, release-policy",
+    "The main Agent fixes every derivable finding in those same artifacts",
+    "The fresh-context reviewer checks Spec coverage, canonical terminology",
+    "re-registers the repaired set, and re-runs affected review",
+    "Ask only for unresolved human-owned scope, product/API/data/security/architecture/significant-UX",
 ):
     assert text in core, f"core routing/review-fix contract missing: {text}"
 
 for text in (
-    "| to-spec | yes | cond | cond | — |",
-    "| to-tickets | yes | cond | yes | — |",
-    "### to-spec overrides",
-    "### to-tickets overrides",
-    "An unfamiliar external API, standard, or security requirement affects the Spec and approved local context cannot settle it",
-    "The user explicitly requests external research and approved local context is insufficient",
-    "The Spec is large, ambiguous, cross-system, or high-risk",
-    "A source-verifiable external fact directly determines an acceptance criterion or blocker edge",
-    "Approved local context cannot settle that fact",
-    "do not use research for generic decomposition frameworks or unrelated open-source examples",
+    "| to-spec | Repository exploration is conditional `target-native`",
+    "| to-tickets | Context gathering and repository exploration are conditional `target-native`",
+    "Add research only for an unresolved source-verifiable external fact that directly determines the Spec",
+    "Spec is large, ambiguous, cross-system, or high-risk",
+    "Research only when a source-verifiable external fact directly determines acceptance or a blocker",
+    "complete normative target conditions",
 ):
     assert text in profiles, f"canonical profile condition missing: {text}"
 
-assert "| to-prd | yes |" not in profiles, "legacy to-prd is still a profile row"
-assert "| to-issues | yes |" not in profiles, "legacy to-issues is still a profile row"
+assert "20+ messages" not in profiles, "message-count proxy is still present"
 
 bridge_rows = (
     "| to-prd | to-spec | Temporary internal bridge",
