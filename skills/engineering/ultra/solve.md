@@ -456,10 +456,13 @@ Follow and revalidate the Checkpoint's verification disposition, then run the re
 
 Final Validate proves executable validation facts: the required commands/checks, integration result, clean committed candidate, and current evidence status. It does not redo Group Review's local Spec/Standards comparison or decide whether the Ticket was well-shaped.
 
+Populate the executable-evidence side of the final requirement audit from the current integrated head. For every required validation gate and every explicit requirement, acceptance criterion, named artifact, invariant, or required deliverable that depends on executable behavior, record the exact current command, check result, artifact inspection, diff/ref fact, or other authoritative observation that bears on it. Evidence is requirement-specific: a green narrow check proves only its tested scope, and absence of errors proves nothing beyond the operation actually observed. Mark contradictory, incomplete, weak or indirect, stale, and narrower-than-required evidence as such instead of upgrading it to a pass. This population is working review state inside Final Validate and Post-Execution Review, not a new artifact or lifecycle object.
+
 If final validation passes:
 
 - ensure the integration worktree is clean and all intended changes are committed
 - have the root re-read the integrated candidate, claimed Tickets, and validation evidence instead of accepting group summaries as final evidence
+- have the root confirm delegated evidence still describes the current candidate head and rerun or directly revalidate evidence that is stale, unpinned, or narrower than the requirement it is offered for
 - capture the landing `base`, `base_sha`, candidate `head`, `head_sha`, Ticket paths, worktree path, checks status, validation evidence, rollout/config disposition, and cleanup ownership for solve record creation
 - proceed to finalization before marking linked Tickets completed
 
@@ -480,6 +483,16 @@ When a blocked, needs-info, ready-for-human, abandoned, superseded, or retained-
 
 After final validation and before Outcome Finalization, the root re-reads and reviews the integrated candidate against the claimed Tickets, acceptance criteria, source Specs, approved decisions, optional Agent Briefs, applicable living Execution Digests, repository standards, side effects, validation evidence, and receipt readiness. Follow and revalidate the Checkpoint's independent-review disposition: bias independent review toward suitable read-only subagents when available, using the documented root exceptions only when their current evidence still holds. A subagent summary supplements but never replaces the root's integrated-candidate read.
 
+The root now completes the full **requirement-to-evidence audit**. The complete acceptance boundary is every claimed Ticket plus each approved source Spec; context limits, interruptions, execution limits, an easier compatible result, or the available tests never narrow it. Enumerate every explicit requirement, acceptance criterion, named artifact, validation gate, invariant, and required deliverable from that boundary, then map each one to authoritative evidence from the current integrated head. Classify each mapping as:
+
+- **scope-matched proof**: current, authoritative evidence directly covers the requirement's full stated scope
+- **contradictory evidence**: a current authoritative observation conflicts with the claimed outcome
+- **incomplete, weak, or indirect evidence**: the observation is relevant but does not directly establish the requirement
+- **stale delegated evidence**: a delegated result is not pinned to, or no longer describes, the current integrated head
+- **narrower-than-required evidence**: the evidence covers only a subset, example, component, or narrow check while the requirement is broader
+
+A plan, Execution Digest, delegated summary, manifest, search result, green narrow check, or absence of errors is an audit input, not proof by itself. It may point to evidence that the root verifies against the current head. The audit passes only when every enumerated item has scope-matched proof, no current contradictory evidence remains, and every stale, weak, indirect, incomplete, or narrow mapping has been replaced by sufficient current evidence or the underlying work has been completed and revalidated. Keep the mapping in active review context; do not copy the Ticket into the Execution Digest, create a Ticket Decision Log or standalone review artifact, or turn the Solve Record into a requirement checklist.
+
 Post-Execution Review consumes the Group Review and Final Validate results; it focuses on integrated-candidate scope, cross-group coupling, side effects/regressions, Design Context or Digest decisions that must be handed off, and whether the Solve Record evidence is truthful and complete. It does not repeat a clean local Group Review or rerun a validation command unless a finding or changed candidate requires it.
 
 Check for:
@@ -490,10 +503,13 @@ Check for:
 - side effects, regressions, or public-contract changes not covered by validation
 - validation gaps, unavailable required checks, or missing manual gates
 - solve-record evidence that would be incomplete or misleading
+- an explicit Ticket or approved source-Spec item without scope-matched current evidence, including a broad criterion supported only by a narrow green check
 
 Apply the same Repairability and Decision Ownership rules as group review. Fix every derivable in-scope finding across P0-P3, rerun the relevant validation, and repeat Post-Execution Review on the corrected candidate. Escalate only genuinely human-owned choices. A clearly out-of-scope non-blocking finding may become a follow-up, but any unresolved acceptance-affecting finding blocks candidate handoff and routes the Attempt to the appropriate recovery outcome regardless of severity. Do not create a **candidate** solve record for that Ticket. During Outcome Finalization, create a recovery receipt when the stopped Attempt leaves meaningful decision, evidence, or retained-resource context; a transient Attempt that is fully cleaned up stays recordless. If the candidate is finished but still has human acceptance, merge review, rollout approval, or another manual gate, keep the Ticket completed and record the gate in the solve record.
 
-Post-Execution Review is complete when no fixable findings remain, unresolved state-relevant residue is routed to the Ticket or solve record, and every record-worthy Digest item is ready to distill into the applicable outcome section.
+Post-Execution Review is complete only when the root's full requirement-to-evidence audit passes, no fixable findings remain, unresolved state-relevant residue is routed to the Ticket or solve record, and every record-worthy Digest item is ready to distill into the applicable outcome section. The root owns this conclusion, the Ticket transition, and the receipt outcome; delegated reviews supply evidence but cannot advance any of them.
+
+If an interruption, context boundary, or execution limit arrives before this pass, preserve the same unabridged acceptance boundary. Meaningful unfinished work follows the existing recovery/resume handoff and remains non-candidate; a fully cleaned transient Attempt with no recovery value remains recordless. Resumption re-reads the complete Ticket and approved source Spec, verifies the live head, and refreshes stale evidence rather than treating the prior partial audit as completion.
 
 ### 8.5 Outcome Finalization
 
@@ -503,7 +519,7 @@ Classify the handoff before applying any candidate-only Git gate:
 
 | Attempt result | Receipt outcome | Actionable Ticket state | Claim disposition |
 | --- | --- | --- | --- |
-| Finished, validated, and Post-Execution Review passed | `candidate` | `completed` | release |
+| Finished, full requirement-to-evidence audit passed, validated, and Post-Execution Review passed | `candidate` | `completed` | release |
 | Required validation, integration, or tooling failure with retained evidence or resources | `blocked` | `ready-for-human` unless the tracker contract provides a more specific actionable blocker state | retain only for the same actively assigned resume; otherwise release |
 | Substantive assessment discovers missing core information | `needs-info` | `needs-info` | retain only for the same actively assigned resume; otherwise release |
 | A human-owned decision or review finding prevents a finished candidate | `ready-for-human` | `ready-for-human` | retain only for the same actively assigned resume; otherwise release |
@@ -531,6 +547,7 @@ Create a `candidate` receipt only after a finished, reviewable merge candidate e
 - recorded `base_sha` and `head_sha`
 - linked Ticket paths
 - checks status and validation evidence
+- a passed full-boundary requirement-to-evidence audit, summarized concisely rather than copied as a checklist
 - passed Post-Execution Review
 - merge-gate and rollout/config dispositions
 - worktree and cleanup resource notes

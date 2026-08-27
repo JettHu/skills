@@ -58,8 +58,11 @@ operation are all unambiguous.
 
 For a new candidate receipt, read [record-format.md](references/record-format.md)
 and record it only after a finished candidate has passed verification and
-Post-Execution Review. A meaningful candidate needs the Ticket, optional
-source Spec, retained resources, ownership, and candidate sections.
+the root's full-boundary requirement-to-evidence audit and Post-Execution
+Review. A meaningful candidate needs the Ticket, optional source Spec,
+retained resources, ownership, and candidate sections. The receipt summarizes
+the audit conclusion and strongest current evidence; it does not duplicate the
+Ticket or become a requirement checklist.
 
 Before every candidate acceptance review, merge, ship, land, close, or
 cleanup request, read [candidate-gates.md](references/candidate-gates.md). It

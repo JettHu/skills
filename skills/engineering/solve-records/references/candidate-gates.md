@@ -16,6 +16,8 @@ the requested operation:
 - Candidate worktree is registered and clean whenever merge or cleanup uses it.
 - Checks are passed, or the complete low-risk unavailable-check evidence is
   present.
+- The receipt records a passed full-boundary requirement-to-evidence audit and
+  concise evidence summary, and the live head still matches the audited head.
 - Post-Execution Review is passed, dependencies are satisfied, and the
   rollout/config disposition is explicit.
 - A remote-primary PR/MR record remains a remote merge artifact.
