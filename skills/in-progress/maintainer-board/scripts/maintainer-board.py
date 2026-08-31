@@ -536,7 +536,12 @@ def load_solve_records_dashboard(repo):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     records = module.discover(repo)
-    return module.dashboard(repo, records)
+    dashboard = module.dashboard(repo, records)
+    head_shas = {record.get("path"): record.get("head_sha") for record in records}
+    for bucket in dashboard.get("buckets", {}).values():
+        for record in bucket:
+            record["head_sha"] = head_shas.get(record.get("path"))
+    return dashboard
 
 
 def build_snapshot(repo):
@@ -558,7 +563,7 @@ def build_snapshot(repo):
                 continue
             recovery_outcomes = {"blocked", "needs-info", "ready-for-human"}
             terminal_outcomes = {"abandoned", "superseded"}
-            if outcome not in recovery_outcomes | terminal_outcomes:
+            if outcome not in recovery_outcomes | terminal_outcomes | {"candidate"}:
                 continue
             linked = [issues_by_path.get(path) for path in record.get("issues", [])]
             identities = record.get("retained_resource_identities") or []
@@ -587,6 +592,24 @@ def build_snapshot(repo):
                 )
                 for issue in linked
             )
+            if outcome == "candidate":
+                candidate_consistent = (
+                    record.get("state") == "open"
+                    and backlinks_valid
+                    and all(
+                        issue
+                        and issue.get("status") == "completed"
+                        and "solve-in-progress" not in issue.get("flags", [])
+                        for issue in linked
+                    )
+                    and ref_map(repo).get(record.get("head")) == record.get("head_sha")
+                )
+                record["handoff_projection"] = (
+                    "normal_candidate"
+                    if candidate_consistent
+                    else "inconsistent_handoff_attention"
+                )
+                continue
             if outcome in terminal_outcomes:
                 allowed_statuses = (
                     {"ready-for-agent"}

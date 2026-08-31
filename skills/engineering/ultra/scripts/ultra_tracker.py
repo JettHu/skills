@@ -178,7 +178,12 @@ def parse_args() -> argparse.Namespace:
     claim.add_argument("--worktree", required=True, help="configured Ticket coordination worktree assignment")
     handoff = ticket_actions.add_parser("handoff", help="converge one candidate or recovery outcome handoff")
     handoff.add_argument("--repo", default=".")
-    handoff.add_argument("--ticket-id", required=True, help="exact active Ticket identity")
+    handoff.add_argument(
+        "--ticket-id",
+        action="append",
+        required=True,
+        help="exact active Ticket identity; repeatable",
+    )
     handoff.add_argument("--handoff-key", required=True, help="caller-generated durable opaque key")
     handoff.add_argument("--outcome", required=True, help="semantic candidate, recovery, or terminal outcome")
     handoff.add_argument("--summary", required=True, help="concise outcome Summary")
@@ -222,10 +227,12 @@ def main() -> int:
         if args.group == "ticket":
             if args.action == "handoff":
                 delegated = [
-                    "--repo", str(repo), "--ticket-id", args.ticket_id,
-                    "--handoff-key", args.handoff_key, "--outcome", args.outcome,
+                    "--repo", str(repo), "--handoff-key", args.handoff_key,
+                    "--outcome", args.outcome,
                     "--summary", args.summary,
                 ]
+                for ticket_id in args.ticket_id:
+                    delegated.extend(["--ticket-id", ticket_id])
                 if args.recovery_next_action is not None:
                     delegated.extend(["--recovery-next-action", args.recovery_next_action])
                 for resource in args.retained_resource:

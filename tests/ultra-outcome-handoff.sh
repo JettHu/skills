@@ -80,6 +80,17 @@ def handoff(key: str, summary: str = "Implemented and validated the candidate.",
     )
 
 
+def grouped_handoff(key: str, *ticket_ids: str, check: bool = True, env=None):
+    command = [
+        sys.executable, str(facade), "ticket", "handoff", "--repo", str(repo),
+        "--handoff-key", key, "--outcome", "candidate",
+        "--summary", "Implemented and validated the grouped candidate.",
+    ]
+    for ticket_id in ticket_ids:
+        command.extend(["--ticket-id", ticket_id])
+    return run(*command, check=check, env=env)
+
+
 def recovery(
     key: str,
     outcome: str,
@@ -259,6 +270,142 @@ head_conflict = json.loads(handoff(key, check=False).stdout)["data"]
 assert head_conflict["status"] == "conflict"
 assert head_conflict["next_action"]
 assert receipt.read_text(encoding="utf-8") == text
+
+# Equivalent grouped Ticket scopes normalize independently of caller ordering.
+group_a = repo / ".scratch/group/issues/A.md"
+group_b = repo / ".scratch/group/issues/B.md"
+group_a.parent.mkdir(parents=True)
+for group_ticket, group_id in ((group_a, "GROUP-A"), (group_b, "GROUP-B")):
+    group_ticket.write_text(f"""Status: ready-for-agent
+Ticket ID: {group_id}
+Flags: solve-in-progress
+Solve Branch: solve/A
+Solve Worktree: {repo}
+Blocked By:
+
+# Ticket {group_id}
+""", encoding="utf-8")
+run("git", "-C", str(repo), "add", ".scratch/group")
+run("git", "-C", str(repo), "commit", "-qm", "add grouped Tickets")
+
+group_key = "grouped-order-independent"
+group_partial = json.loads(grouped_handoff(
+    group_key, "GROUP-B", "GROUP-A",
+    env=dict(os.environ, ULTRA_HANDOFF_FAIL_AFTER_MEMBER="1"),
+).stdout)["data"]
+assert group_partial["status"] == "retryable", group_partial
+group_name = hashlib.sha256(group_key.encode()).hexdigest() + ".md"
+group_receipt = repo / ".scratch/group/solve-records" / group_name
+group_text = group_receipt.read_text(encoding="utf-8")
+assert "tickets:\n  - .scratch/group/issues/A.md\n  - .scratch/group/issues/B.md" in group_text
+assert sum("Status: completed" in p.read_text(encoding="utf-8") for p in (group_a, group_b)) == 1
+
+group_success = json.loads(grouped_handoff(group_key, "GROUP-A", "GROUP-B").stdout)["data"]
+assert group_success["status"] == "success", group_success
+for group_ticket in (group_a, group_b):
+    final_group_text = group_ticket.read_text(encoding="utf-8")
+    assert "Status: completed" in final_group_text
+    assert "solve-in-progress" not in final_group_text
+    assert final_group_text.count(f"- `../solve-records/{group_name}`") == 1
+assert json.loads(grouped_handoff(group_key, "GROUP-B", "GROUP-A").stdout)["data"] == group_success
+assert len(list(group_receipt.parent.glob(f"{group_name}"))) == 1
+
+# A changed grouped membership is an immutable same-key conflict.
+changed_group = json.loads(grouped_handoff(group_key, "GROUP-A", check=False).stdout)["data"]
+assert changed_group["status"] == "conflict"
+assert changed_group["next_action"] == "use a new handoff key for changed immutable facts"
+run("git", "-C", str(repo), "add", ".scratch/group")
+run("git", "-C", str(repo), "commit", "-qm", "record grouped handoff")
+
+# Every cross-surface interruption remains the same retryable operation, projects
+# handoff attention, and converges on restart without duplicate actions.
+boundary_faults = (
+    ("member", "ULTRA_HANDOFF_FAIL_AFTER_MEMBER", "2"),
+    ("backlink", "ULTRA_HANDOFF_FAIL_AFTER_BACKLINK", "2"),
+    ("claim", "ULTRA_HANDOFF_FAIL_DURING_CLAIM", "2"),
+)
+for boundary, fault_name, fault_value in boundary_faults:
+    boundary_a = repo / f".scratch/{boundary}/issues/A.md"
+    boundary_b = repo / f".scratch/{boundary}/issues/B.md"
+    boundary_c = repo / f".scratch/{boundary}/issues/C.md"
+    boundary_a.parent.mkdir(parents=True)
+    boundary_members = (
+        (boundary_a, f"{boundary}-A"),
+        (boundary_b, f"{boundary}-B"),
+        (boundary_c, f"{boundary}-C"),
+    )
+    for boundary_ticket, boundary_id in boundary_members:
+        boundary_ticket.write_text(f"""Status: ready-for-agent
+Ticket ID: {boundary_id}
+Flags: solve-in-progress
+Solve Branch: solve/A
+Solve Worktree: {repo}
+Blocked By:
+
+# Ticket {boundary_id}
+""", encoding="utf-8")
+    run("git", "-C", str(repo), "add", f".scratch/{boundary}")
+    run("git", "-C", str(repo), "commit", "-qm", f"add {boundary} boundary Tickets")
+    boundary_key = f"grouped-{boundary}-boundary"
+    boundary_result = json.loads(grouped_handoff(
+        boundary_key, f"{boundary}-C", f"{boundary}-B", f"{boundary}-A",
+        env=dict(os.environ, **{fault_name: fault_value}),
+    ).stdout)["data"]
+    assert boundary_result["status"] == "retryable", (boundary, boundary_result)
+    boundary_board = json.loads(run(sys.executable, str(board), "--repo", str(repo), "--json").stdout)
+    boundary_records = [item for bucket in boundary_board["solve_records"]["buckets"].values() for item in bucket]
+    boundary_record = next(item for item in boundary_records if item["path"] == boundary_result["receipt"])
+    assert boundary_record["handoff_projection"] == "inconsistent_handoff_attention", boundary
+    converged = json.loads(grouped_handoff(
+        boundary_key, f"{boundary}-A", f"{boundary}-B", f"{boundary}-C"
+    ).stdout)["data"]
+    assert converged["status"] == "success", (boundary, converged)
+    final_board = json.loads(run(sys.executable, str(board), "--repo", str(repo), "--json").stdout)
+    final_records = [item for bucket in final_board["solve_records"]["buckets"].values() for item in bucket]
+    final_record = next(item for item in final_records if item["path"] == converged["receipt"])
+    assert final_record["handoff_projection"] == "normal_candidate", boundary
+    for boundary_ticket in (boundary_a, boundary_b, boundary_c):
+        boundary_text = boundary_ticket.read_text(encoding="utf-8")
+        assert boundary_text.count(f"- `../solve-records/{Path(converged['receipt']).name}`") == 1
+    run("git", "-C", str(repo), "add", f".scratch/{boundary}")
+    run("git", "-C", str(repo), "commit", "-qm", f"record {boundary} boundary handoff")
+
+# Whole-group preflight refuses an incompatible or disappeared later member
+# before changing any still-compatible member.
+preflight_a = repo / ".scratch/preflight/issues/A.md"
+preflight_b = repo / ".scratch/preflight/issues/B.md"
+preflight_a.parent.mkdir(parents=True)
+for preflight_ticket, preflight_id in ((preflight_a, "preflight-A"), (preflight_b, "preflight-B")):
+    preflight_ticket.write_text(f"""Status: ready-for-agent
+Ticket ID: {preflight_id}
+Flags: solve-in-progress
+Solve Branch: solve/A
+Solve Worktree: {repo}
+Blocked By:
+
+# Ticket {preflight_id}
+""", encoding="utf-8")
+run("git", "-C", str(repo), "add", ".scratch/preflight")
+run("git", "-C", str(repo), "commit", "-qm", "add preflight Tickets")
+preflight_key = "grouped-preflight"
+installed = json.loads(grouped_handoff(
+    preflight_key, "preflight-A", "preflight-B",
+    env=dict(os.environ, ULTRA_HANDOFF_FAIL_AFTER_RECEIPT="1"),
+).stdout)["data"]
+assert installed["status"] == "retryable"
+untouched_a = preflight_a.read_text(encoding="utf-8")
+canonical_b = preflight_b.read_text(encoding="utf-8")
+preflight_b.write_text(canonical_b.replace("Status: ready-for-agent", "Status: needs-info"), encoding="utf-8")
+incompatible = json.loads(grouped_handoff(preflight_key, "preflight-B", "preflight-A").stdout)["data"]
+assert incompatible["status"] == "conflict", incompatible
+assert preflight_a.read_text(encoding="utf-8") == untouched_a
+preflight_b.unlink()
+missing_member = json.loads(grouped_handoff(preflight_key, "preflight-A", "preflight-B").stdout)["data"]
+assert missing_member["status"] == "conflict", missing_member
+assert "unavailable" in missing_member["reason"]
+assert preflight_a.read_text(encoding="utf-8") == untouched_a
+preflight_b.write_text(canonical_b, encoding="utf-8")
+assert json.loads(grouped_handoff(preflight_key, "preflight-A", "preflight-B").stdout)["data"]["status"] == "success"
 
 # Recovery outcomes use the same facade while keeping Ticket state and Claim
 # disposition as separate postconditions.

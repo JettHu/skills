@@ -89,20 +89,21 @@ raise SystemExit(result.returncode)
     run("git", "init", "-q", "-b", "solve/eval-A", cwd=repo)
     run("git", "config", "user.name", "handoff-eval", cwd=repo)
     run("git", "config", "user.email", "handoff-eval@example.test", cwd=repo)
-    ticket = repo / ".scratch/outcome/issues/A.md"
-    write(ticket, f"""Status: ready-for-agent
-Ticket ID: A
+    for ticket_id in ("A", "B"):
+        ticket = repo / f".scratch/outcome/issues/{ticket_id}.md"
+        write(ticket, f"""Status: ready-for-agent
+Ticket ID: {ticket_id}
 Flags: solve-in-progress
 Solve Branch: solve/eval-A
 Solve Worktree: {repo}
 Blocked By:
 
-# Eval Ticket A
+# Eval Ticket {ticket_id}
 """)
     write(repo / "candidate.txt", "candidate\n")
-    write(repo / "EVAL_PROMPT.md", """Finalize Ticket A's candidate outcome using only `python3 scripts/tracker.py ticket handoff` and the configured facade. Use handoff key `model-eval-candidate-A` and Summary `Candidate behavior and deterministic validation are complete.` Do not edit lifecycle artifacts directly. Stop after the facade reports success.
+    write(repo / "EVAL_PROMPT.md", """Finalize Tickets A and B as one grouped candidate outcome using only `python3 scripts/tracker.py ticket handoff` and the configured facade. Use handoff key `model-eval-grouped-candidate-AB` and Summary `Grouped candidate behavior and deterministic validation are complete.` Pass both exact Ticket identities. Do not edit lifecycle artifacts directly. Stop after the facade reports success.
 """)
-    write(repo / "EVAL_EXPECTATIONS.json", json.dumps({"key": "model-eval-candidate-A", "ticket": "A"}, indent=2) + "\n")
+    write(repo / "EVAL_EXPECTATIONS.json", json.dumps({"key": "model-eval-grouped-candidate-AB", "tickets": ["A", "B"]}, indent=2) + "\n")
     run("git", "add", ".", cwd=repo)
     run("git", "commit", "-qm", "candidate fixture", cwd=repo)
     print(repo)

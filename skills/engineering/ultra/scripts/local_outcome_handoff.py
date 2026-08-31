@@ -61,13 +61,15 @@ def result(status, key, receipt="", reason="", next_action=""):
     return data
 
 
-def receipt_path(repo, ticket, key):
+def receipt_path(repo, tickets, key):
     name = hashlib.sha256(key.encode()).hexdigest() + ".md"
-    return (
-        ticket.path.parent.parent / "solve-records" / name
-        if ticket.representation == "file-per-ticket"
-        else repo / ".scratch/solve-records" / name
-    )
+    roots = {ticket.path.parent.parent for ticket in tickets}
+    if (
+        all(ticket.representation == "file-per-ticket" for ticket in tickets)
+        and len(roots) == 1
+    ):
+        return roots.pop() / "solve-records" / name
+    return repo / ".scratch/solve-records" / name
 
 
 def find_receipt(repo, key):
@@ -233,7 +235,17 @@ def resumable_supported(text):
     return m is not None and m.group(1).strip().lower() in {"supported", "true", "yes"}
 
 
-def handoff(repo, ticket_id, key, outcome, body, next_action, declared):
+def fail_at_boundary(name, member_number):
+    value = os.environ.get(name)
+    if not value:
+        return False
+    try:
+        return int(value) == member_number
+    except ValueError:
+        return value == "1" and member_number == 1
+
+
+def handoff(repo, ticket_ids, key, outcome, body, next_action, declared):
     if not key.strip():
         raise HandoffError("handoff key is required")
     if outcome not in {"candidate"} | RECOVERY | TERMINAL:
@@ -242,11 +254,25 @@ def handoff(repo, ticket_id, key, outcome, body, next_action, declared):
         raise HandoffError("outcome Summary is required")
     with frontier.frontier_lock(repo):
         contract, contract_text = frontier.read_contract(repo)
-        ticket = {
+        indexed = {
             a: t for t in frontier.load_tickets(repo, contract) for a in t.aliases
-        }.get(ticket_id)
-        if ticket is None:
-            raise HandoffError(f"active Ticket is unavailable: {ticket_id}")
+        }
+        if not ticket_ids:
+            raise HandoffError("at least one Ticket identity is required")
+        selected = []
+        for ticket_id in ticket_ids:
+            ticket = indexed.get(ticket_id)
+            if ticket is None:
+                raise HandoffError(f"active Ticket is unavailable: {ticket_id}")
+            selected.append(ticket)
+        tickets = sorted(
+            {ticket.path.resolve(): ticket for ticket in selected}.values(),
+            key=lambda item: item.path.relative_to(repo).as_posix(),
+        )
+        if len(tickets) != len(ticket_ids):
+            raise HandoffError("Ticket membership contains ambiguous duplicate members")
+        if outcome == "superseded" and len({ticket.status for ticket in tickets}) != 1:
+            raise HandoffError("grouped Tickets have incompatible actionable states")
         declared, candidate = resources(declared), outcome == "candidate"
         if candidate and (next_action or declared):
             raise HandoffError("candidate handoff does not accept recovery inputs")
@@ -264,11 +290,12 @@ def handoff(repo, ticket_id, key, outcome, body, next_action, declared):
                 )
             if not resumable_supported(contract_text):
                 raise HandoffError("tracker does not support resumable Claims")
-            verify_resources(repo, ticket, declared)
+            for ticket in tickets:
+                verify_resources(repo, ticket, declared)
         elif declared:
             raise HandoffError("retained resources require resume intent")
-        rel_ticket = ticket.path.relative_to(repo).as_posix()
-        canonical, found = receipt_path(repo, ticket, key), find_receipt(repo, key)
+        rel_tickets = [ticket.path.relative_to(repo).as_posix() for ticket in tickets]
+        canonical, found = receipt_path(repo, tickets, key), find_receipt(repo, key)
         path = found or canonical
         rel_receipt = path.relative_to(repo).as_posix()
         if found is not None and found != canonical:
@@ -279,18 +306,42 @@ def handoff(repo, ticket_id, key, outcome, body, next_action, declared):
                 "handoff key is bound to different immutable facts",
                 "use a new handoff key for changed immutable facts",
             )
-        backlink = Path(os.path.relpath(path, ticket.path.parent)).as_posix()
-        allowed = {rel_ticket, rel_receipt}
+        if found is not None:
+            old_membership = [
+                line[4:].strip()
+                for line in re.search(
+                    r"(?m)^tickets:\n((?:  - .+\n?)+)", found.read_text()
+                )
+                .group(1)
+                .splitlines()
+            ]
+            if old_membership != rel_tickets:
+                return result(
+                    "conflict",
+                    key,
+                    rel_receipt,
+                    "handoff key is bound to different immutable facts",
+                    "use a new handoff key for changed immutable facts",
+                )
+        backlinks = {
+            ticket.path: Path(os.path.relpath(path, ticket.path.parent)).as_posix()
+            for ticket in tickets
+        }
+        allowed = set(rel_tickets) | {rel_receipt}
         binding = {
             "repo": str(repo),
             "handoff_key": key,
-            "tickets": [rel_ticket],
+            "tickets": rel_tickets,
             "outcome": outcome,
         }
         if candidate:
-            head, sha = candidate_identity(
-                repo, ticket, allowed if path.is_file() else set()
-            )
+            identities = {
+                candidate_identity(repo, ticket, allowed if path.is_file() else set())
+                for ticket in tickets
+            }
+            if len(identities) != 1:
+                raise HandoffError("grouped Tickets have mixed candidate resource evidence")
+            head, sha = identities.pop()
             binding.update(head=head, head_sha=sha)
         elif outcome in RECOVERY:
             binding.update(
@@ -311,7 +362,7 @@ def handoff(repo, ticket_id, key, outcome, body, next_action, declared):
                     "handoff key is bound to different immutable facts",
                     "use a new handoff key for changed immutable facts",
                 )
-            tickets = [
+            stored_tickets = [
                 line[4:].strip()
                 for line in re.search(r"(?m)^tickets:\n((?:  - .+\n?)+)", old)
                 .group(1)
@@ -320,7 +371,7 @@ def handoff(repo, ticket_id, key, outcome, body, next_action, declared):
             stored = {
                 "repo": str(repo),
                 "handoff_key": stored_key,
-                "tickets": tickets,
+                "tickets": stored_tickets,
                 "outcome": scalar(old, "outcome"),
             }
             if candidate:
@@ -363,14 +414,15 @@ def handoff(repo, ticket_id, key, outcome, body, next_action, declared):
             allowed_initial_states = {contract.ready_state}
             if outcome == "superseded":
                 allowed_initial_states.update(contract.human_states)
-            if (
-                ticket.status not in allowed_initial_states
-                or contract.claim_value not in ticket.flags
-                or backlink_count(ticket.container_text, backlink)
-            ):
-                raise HandoffError(
-                    "outcome handoff requires a valid active Ticket and Claim"
-                )
+            for ticket in tickets:
+                if (
+                    ticket.status not in allowed_initial_states
+                    or contract.claim_value not in ticket.flags
+                    or backlink_count(ticket.container_text, backlinks[ticket.path])
+                ):
+                    raise HandoffError(
+                        "outcome handoff requires valid active grouped Tickets and Claims"
+                    )
             path.parent.mkdir(parents=True, exist_ok=True)
             publication.atomic_write(path, expected)
             if os.environ.get("ULTRA_HANDOFF_FAIL_AFTER_RECEIPT") == "1":
@@ -384,79 +436,132 @@ def handoff(repo, ticket_id, key, outcome, body, next_action, declared):
             if outcome == "needs-info"
             else "ready-for-human"
             if outcome in {"blocked", "ready-for-human"}
-            else ticket.status
+            else tickets[0].status
             if outcome == "superseded"
             else contract.ready_state
         )
-        claimed, links = (
-            contract.claim_value in ticket.flags,
-            backlink_count(ticket.container_text, backlink),
+        initial_states = {contract.ready_state} | (
+            set(contract.human_states) if outcome == "superseded" else set()
         )
-        if ticket.status == status and claimed == retain and links == 1:
-            transition = False
-        elif (
-            ticket.status
-            in (
-                {contract.ready_state}
-                | (set(contract.human_states) if outcome == "superseded" else set())
+
+        def reload_ticket(ticket):
+            return next(
+                (
+                    item
+                    for item in frontier.load_tickets(repo, contract)
+                    if item.path.resolve() == ticket.path.resolve()
+                ),
+                None,
             )
-            and claimed
-            and links == 0
-        ):
-            transition = True
-        else:
-            return result(
-                "conflict",
-                key,
-                rel_receipt,
-                "Ticket state, Claim, and backlink do not match an allowed handoff transition",
-                "inspect Ticket state, Claim, and backlink manually; do not retry unchanged",
-            )
-        if transition:
-            current = ticket.path.read_text()
-            inner = current[ticket.inner_start : ticket.inner_end]
-            inner = frontier.replace_or_insert_field(
-                inner,
-                contract.state_fields,
-                ticket.state_field or contract.state_fields[0],
-                status,
-            )
-            flags = ", ".join(
-                ticket.flags
-                if retain
-                else [f for f in ticket.flags if f != contract.claim_value]
-            )
-            inner = frontier.replace_or_insert_field(
-                inner, contract.claim_aliases, contract.claim_field, flags
-            )
-            updated = add_backlink(
-                current[: ticket.inner_start] + inner + current[ticket.inner_end :],
-                backlink,
-            )
+
+        preflight = [reload_ticket(ticket) for ticket in tickets]
+        for original, ticket in zip(tickets, preflight):
+            if ticket is None:
+                return result(
+                    "conflict",
+                    key,
+                    rel_receipt,
+                    f"grouped Ticket is unavailable: {original.path.relative_to(repo)}",
+                    "restore or inspect grouped Ticket membership manually; do not retry unchanged",
+                )
+            backlink = backlinks[original.path]
+            claimed = contract.claim_value in ticket.flags
+            links = backlink_count(ticket.container_text, backlink)
+            if (
+                ticket.status not in initial_states | {status}
+                or claimed not in {True, retain}
+                or links not in {0, 1}
+            ):
+                return result(
+                    "conflict",
+                    key,
+                    rel_receipt,
+                    "grouped Ticket state, Claim, or backlink is incompatible with this handoff",
+                    "inspect Ticket state, Claim, and backlink manually; do not retry unchanged",
+                )
+
+        for member_index, original in enumerate(tickets):
+            member_number = member_index + 1
+            ticket = reload_ticket(original)
+            backlink = backlinks[original.path]
             try:
-                if os.environ.get("ULTRA_HANDOFF_FAIL_BEFORE_TICKET_WRITE") == "1":
-                    raise OSError("injected Ticket transition failure")
-                publication.atomic_write(ticket.path, updated)
+                if ticket.status != status:
+                    current = ticket.path.read_text()
+                    inner = frontier.replace_or_insert_field(
+                        current[ticket.inner_start : ticket.inner_end],
+                        contract.state_fields,
+                        ticket.state_field or contract.state_fields[0],
+                        status,
+                    )
+                    publication.atomic_write(
+                        ticket.path,
+                        current[: ticket.inner_start]
+                        + inner
+                        + current[ticket.inner_end :],
+                    )
+                ticket = reload_ticket(original)
+                if backlink_count(ticket.container_text, backlink) == 0:
+                    if os.environ.get("ULTRA_HANDOFF_FAIL_BEFORE_TICKET_WRITE") == "1":
+                        raise OSError("injected Ticket transition failure")
+                    publication.atomic_write(ticket.path, add_backlink(ticket.container_text, backlink))
+                if fail_at_boundary(
+                    "ULTRA_HANDOFF_FAIL_AFTER_BACKLINK", member_number
+                ):
+                    raise RetryableHandoff("receipt installed but backlink transition was interrupted")
+                ticket = reload_ticket(original)
+                if (contract.claim_value in ticket.flags) != retain:
+                    if fail_at_boundary(
+                        "ULTRA_HANDOFF_FAIL_DURING_CLAIM", member_number
+                    ):
+                        raise OSError("injected Claim transition failure")
+                    current = ticket.path.read_text()
+                    flags = ", ".join(
+                        ticket.flags
+                        if retain
+                        else [
+                            flag
+                            for flag in ticket.flags
+                            if flag != contract.claim_value
+                        ]
+                    )
+                    inner = frontier.replace_or_insert_field(
+                        current[ticket.inner_start : ticket.inner_end],
+                        contract.claim_aliases,
+                        contract.claim_field,
+                        flags,
+                    )
+                    publication.atomic_write(
+                        ticket.path,
+                        current[: ticket.inner_start]
+                        + inner
+                        + current[ticket.inner_end :],
+                    )
+                if (
+                    fail_at_boundary("ULTRA_HANDOFF_FAIL_AFTER_MEMBER", member_number)
+                ):
+                    raise RetryableHandoff(
+                        "receipt installed but grouped member transition was interrupted"
+                    )
             except OSError as e:
                 raise RetryableHandoff(
                     f"receipt installed but Ticket transition failed: {e}"
                 ) from e
-        final = {
-            a: t for t in frontier.load_tickets(repo, contract) for a in t.aliases
-        }.get(ticket_id)
-        if (
+
+        finals = [reload_ticket(ticket) for ticket in tickets]
+        if path.read_text() != expected or any(
             final is None
             or final.status != status
             or (contract.claim_value in final.flags) != retain
-            or backlink_count(ticket.path.read_text(), backlink) != 1
-            or path.read_text() != expected
+            or backlink_count(final.container_text, backlinks[original.path]) != 1
+            for original, final in zip(tickets, finals)
         ):
             return result(
                 "retryable", key, rel_receipt, "handoff postcondition is incomplete"
             )
-        if candidate and candidate_identity(repo, final, allowed) != (
-            binding["head"],
-            binding["head_sha"],
+        if candidate and any(
+            candidate_identity(repo, final, allowed)
+            != (binding["head"], binding["head_sha"])
+            for final in finals
         ):
             return result(
                 "retryable",
@@ -465,13 +570,15 @@ def handoff(repo, ticket_id, key, outcome, body, next_action, declared):
                 "candidate identity postcondition is incomplete",
             )
         if retain:
-            verify_resources(repo, final, declared)
+            for final in finals:
+                verify_resources(repo, final, declared)
         return result("success", key, rel_receipt)
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    for name in ("ticket-id", "handoff-key", "outcome", "summary"):
+    p.add_argument("--ticket-id", action="append", required=True)
+    for name in ("handoff-key", "outcome", "summary"):
         p.add_argument(f"--{name}", required=True)
     p.add_argument("--repo", default=".")
     p.add_argument("--recovery-next-action", default="")
@@ -488,7 +595,10 @@ def main():
             a.retained_resource,
         )
     except RetryableHandoff as e:
-        payload = result("retryable", a.handoff_key, reason=str(e))
+        repo = Path(a.repo).resolve()
+        installed = find_receipt(repo, a.handoff_key)
+        receipt = installed.relative_to(repo).as_posix() if installed else ""
+        payload = result("retryable", a.handoff_key, receipt=receipt, reason=str(e))
     except (HandoffError, frontier.FrontierError, OSError) as e:
         payload = result("conflict", a.handoff_key, reason=str(e))
     print(json.dumps(payload, indent=2, sort_keys=True))
