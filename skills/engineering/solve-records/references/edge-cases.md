@@ -38,16 +38,18 @@ For a resume request:
    are not a defect in a recovery receipt that does not own them.
 3. Treat the linked Ticket, exact retained-resource set, unresolved blocker or
    requested information, and next action as the recovery identity. When all
-   still match, reclaim the Ticket through its tracker contract and reuse the
-   receipt. At the next meaningful handoff, atomically replace its prior
-   outcome-specific fields and sections with the current canonical candidate
-   or recovery outcome. Repeated resumes keep one receipt and one Ticket
-   backlink.
-4. When that identity changed materially or a clean restart is safer, close or
-   supersede the old receipt, preserve its Ticket backlink, record the old
-   resources' disposition, and release the old Claim before the new Claim.
-   The new Attempt creates its own receipt only when it later reaches a
-   meaningful handoff.
+   still match, reclaim the Ticket through its tracker contract and resume the
+   recorded context without changing the receipt.
+4. At the next meaningful handoff, use a new handoff key and receipt. Bind the
+   open recovery receipt through `supersedes`. A successful successor handoff
+   closes the predecessor, preserves its creation-time outcome and Ticket
+   backlink, and records reciprocal `superseded_by` plus `closed_at`. A failed
+   successor leaves the predecessor open; retry the same successor key to
+   converge missing relation work without creating another receipt.
+5. When the recovery identity changed materially or a clean restart is safer,
+   explicitly close the old receipt and release its Claim before the new Claim.
+   Later replacement still uses the successor relation; `outcome: superseded`
+   is reserved for a receipt whose Attempt was already replaced at creation.
 
 For an explicit close or supersede request, set the lifecycle state and reason
 on the selected receipt only. Do not silently change the linked Ticket state or

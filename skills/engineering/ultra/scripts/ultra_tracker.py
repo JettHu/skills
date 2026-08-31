@@ -189,6 +189,7 @@ def parse_args() -> argparse.Namespace:
     handoff.add_argument("--summary", required=True, help="concise outcome Summary")
     handoff.add_argument("--recovery-next-action", help="recovery intent; use resume only when retaining ownership")
     handoff.add_argument("--retained-resource", action="append", default=[], help="complete retained resource declaration")
+    handoff.add_argument("--supersedes", help="canonical open recovery receipt replaced by this new handoff")
 
     records = groups.add_parser("solve-record", help="read-only Attempt and Solve Record inspection and gates")
     record_actions = records.add_subparsers(
@@ -237,6 +238,8 @@ def main() -> int:
                     delegated.extend(["--recovery-next-action", args.recovery_next_action])
                 for resource in args.retained_resource:
                     delegated.extend(["--retained-resource", resource])
+                if args.supersedes is not None:
+                    delegated.extend(["--supersedes", args.supersedes])
                 return delegate(operation, "handoff", delegated)
             delegated = [args.action, "--repo", str(repo)]
             if args.action == "frontier":

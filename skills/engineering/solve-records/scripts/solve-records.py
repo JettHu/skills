@@ -443,6 +443,9 @@ def parse_record(repo, path):
     # Keep the normalized legacy alias until existing dashboard and gate
     # consumers migrate to the canonical domain field.
     data["issues"] = canonical_membership
+    for relation_field in ("supersedes", "superseded_by", "closed_at"):
+        if relation_field in data:
+            data[relation_field] = normalized_scalar(data[relation_field])
 
     missing = missing_fields(data, COMMON_REQUIRED)
     if missing:
@@ -1197,6 +1200,9 @@ def record_summary(repo, record, include_merge_gate=False):
         "recovery_action": record.get("recovery_action"),
         "external_provider": record.get("external_provider"),
         "external_url": record.get("external_url"),
+        "supersedes": record.get("supersedes"),
+        "superseded_by": record.get("superseded_by"),
+        "closed_at": record.get("closed_at"),
     }
     if record.get("malformed"):
         summary["malformed"] = record["malformed"]
@@ -1255,6 +1261,13 @@ def dashboard(repo, records):
         summary = record_summary(repo, record)
         if record.get("malformed"):
             buckets["stale_or_malformed"].append(summary)
+            continue
+        if (
+            record.get("outcome") != "candidate"
+            and record.get("state") == "closed"
+            and record.get("superseded_by")
+        ):
+            buckets["historical"].append(summary)
             continue
         if record.get("closed_candidate_terminal"):
             if not is_true(record.get("cleanup_done")):

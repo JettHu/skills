@@ -30,10 +30,33 @@ def main() -> int:
         if legacy_field in receipt_text:
             failures.append(f"canonical writer emitted legacy field {legacy_field.strip()}")
     if "tickets:\n  - .scratch/outcome/issues/A.md\n  - .scratch/outcome/issues/B.md" not in receipt_text:
-        failures.append("receipt is missing canonical Ticket membership")
+        if expected["tickets"] == ["A", "B"]:
+            failures.append("receipt is missing canonical Ticket membership")
+    if expected.get("scenario") == "successor":
+        predecessor = repo / expected["supersedes"]
+        predecessor_text = predecessor.read_text(encoding="utf-8") if predecessor.is_file() else ""
+        successor_rel = receipt.relative_to(repo).as_posix()
+        for expected_text in (
+            "state: closed",
+            "outcome: blocked",
+            f"superseded_by: {json.dumps(successor_rel)}",
+            "closed_at:",
+        ):
+            if expected_text not in predecessor_text:
+                failures.append(f"predecessor is missing {expected_text}")
+        if f"supersedes: {json.dumps(expected['supersedes'])}" not in receipt_text:
+            failures.append("successor is missing the predecessor relation")
+        ticket_text = (repo / ".scratch/outcome/issues/A.md").read_text(encoding="utf-8")
+        if ticket_text.count("../solve-records/") != 2:
+            failures.append("Ticket A does not retain both handoff backlinks")
     audit = repo / ".evals/handoff-audit.jsonl"
     events = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()] if audit.is_file() else []
-    if len(events) != 1 or events[0]["argv"][:2] != ["ticket", "handoff"]:
+    matching_events = [
+        event for event in events
+        if event["argv"][:2] == ["ticket", "handoff"]
+        and expected["key"] in event["argv"]
+    ]
+    if len(matching_events) != 1:
         failures.append(f"facade audit was {events!r}")
     if failures:
         print("FAIL outcome-handoff")

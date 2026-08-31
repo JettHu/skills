@@ -524,7 +524,7 @@ Classify the handoff before applying any candidate-only Git gate:
 | Substantive assessment discovers missing core information | `needs-info` | `needs-info` | retain only for the same actively assigned resume; otherwise release |
 | A human-owned decision or review finding prevents a finished candidate | `ready-for-human` | `ready-for-human` | retain only for the same actively assigned resume; otherwise release |
 | The current Attempt is intentionally stopped while the Ticket remains valid | `abandoned` | `ready-for-agent` | release |
-| A prior recovery context is replaced by a clean restart or another Attempt | `superseded` on the prior receipt | preserve the Ticket's current actionable state, then reclaim it for the new Attempt | release the old Claim before reclaiming |
+| A resumed recovery context reaches another meaningful handoff | the new outcome on a successor receipt; retain the predecessor's original outcome | apply the successor outcome state | apply the successor outcome disposition; close the predecessor only after successor success |
 | Immediate Claim release, transient failure, or fully cleaned work with no useful finding | none | restore the prior claimable or actionable state | release |
 
 The meaningful-handoff test is positive: create or update a receipt when durable findings, failed-check evidence, retained resources, a requested decision, or resource disposition gives a future maintainer something to resume, review, close, supersede, or clean. When none of those exists, remove partial solve-owned resources, release the Claim, remove stale Attempt resource links, and leave no receipt or backlink.
@@ -537,6 +537,13 @@ For every recorded outcome, complete one atomic tracker handoff:
 - set the Ticket to the outcome's actionable state
 - release or intentionally retain `solve-in-progress` according to the table, recording the active resume owner when retained
 - distill each durable Digest decision or deviation into candidate `## Review` or `## Notes`, or recovery `## Attempt Summary` or `## Confirmed Findings`; retain the Digest only while the same recovery context has resume value or repo policy requires it
+
+When this handoff succeeds after resuming an open recovery receipt, use a new
+handoff key and bind that receipt through `supersedes`. Preserve both Ticket
+backlinks and both creation-time outcomes. The handoff writes reciprocal
+`superseded_by` and closes the predecessor only after the successor's primary
+postcondition succeeds; same-successor-key retry converges missing relation
+work.
 
 For resume or clean restart, follow the linked recovery edge cases. Outcome Finalization completes after the resulting receipt identity, Ticket backlink, Claim state, and resource disposition satisfy the atomic handoff above.
 

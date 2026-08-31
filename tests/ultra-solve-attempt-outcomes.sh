@@ -37,11 +37,15 @@ for link in (format_link, edge_link):
     assert (root / "skills/engineering/ultra" / link).resolve().is_file(), link
 assert "outcome: candidate" in record_format
 edge_cases = (root / "skills/engineering/solve-records/references/edge-cases.md").read_text(encoding="utf-8")
-assert "Repeated resumes keep one receipt and one Ticket" in edge_cases
-assert "backlink." in edge_cases
+assert "use a new handoff key and receipt" in edge_cases
+assert "preserves its creation-time outcome" in edge_cases
 assert "exact retained-resource set" in edge_cases
-assert "release the old Claim before the new Claim" in edge_cases
-assert "The new Attempt creates its own receipt only when it later reaches a" in edge_cases
+assert "successor leaves the predecessor open" in edge_cases
+assert "outcome: superseded" in edge_cases
+assert "new handoff key and a new receipt" in record_format
+assert "supersedes" in record_format
+assert "superseded_by" in record_format
+assert "reuses the linked\nrecovery record" not in record_format
 for outcome in ("blocked", "needs-info", "ready-for-human", "abandoned", "superseded"):
     assert outcome in solve
     assert outcome in record_format

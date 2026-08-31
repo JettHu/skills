@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 import argparse, hashlib, json, os, re, subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 import local_ticket_frontier as frontier
 import local_ticket_publication as publication
@@ -101,6 +102,13 @@ def list_field(text, field):
         raise HandoffError(f"canonical receipt {field} is malformed") from e
 
 
+def ticket_membership(text):
+    match = re.search(r"(?m)^tickets:\n((?:  - .+\n?)+)", text)
+    if match is None:
+        raise HandoffError("canonical receipt must define tickets")
+    return [line[4:].strip() for line in match.group(1).splitlines()]
+
+
 def summary(text):
     values = re.findall(r"(?ms)^## Summary[ \t]*\n(.+?)(?=\n## |\Z)", text)
     if len(values) != 1 or not values[0].strip():
@@ -122,6 +130,8 @@ def render(binding, body):
         f"handoff_key: {json.dumps(key)}",
         f"binding_digest: {digest(binding)}",
     ]
+    if binding.get("supersedes"):
+        lines.append(f"supersedes: {json.dumps(binding['supersedes'])}")
     if outcome == "candidate":
         lines += [f"head: {binding['head']}", f"head_sha: {binding['head_sha']}"]
     elif outcome in RECOVERY:
@@ -145,6 +155,60 @@ def render(binding, body):
     )
 
 
+def replace_scalar(text, field, value):
+    updated, count = re.subn(
+        rf"(?m)^{re.escape(field)}:[ \t]*.*$", f"{field}: {value}", text
+    )
+    if count != 1:
+        raise HandoffError(f"canonical receipt must define exactly one {field}")
+    return updated
+
+
+def relation_value(text, field):
+    try:
+        return json.loads(scalar(text, field))
+    except json.JSONDecodeError as e:
+        raise HandoffError(f"canonical receipt {field} is malformed") from e
+
+
+def predecessor_binding(repo, path):
+    try:
+        text = path.read_text()
+        key = relation_value(text, "handoff_key")
+        outcome = scalar(text, "outcome")
+        tickets = ticket_membership(text)
+        binding = {
+            "repo": str(repo),
+            "handoff_key": key,
+            "tickets": tickets,
+            "outcome": outcome,
+            "recovery_next_action": relation_value(text, "recovery_next_action"),
+            "retained_resources": list_field(text, "retained_resources"),
+        }
+        if outcome not in RECOVERY:
+            raise HandoffError("predecessor is not a recovery receipt")
+        if scalar(text, "binding_digest") != digest(binding):
+            raise HandoffError("predecessor binding digest failed verification")
+        if find_receipt(repo, key) != path:
+            raise HandoffError("predecessor is not the canonical receipt for its handoff key")
+        summary(text)
+        return text, binding
+    except AttributeError as e:
+        raise HandoffError("predecessor receipt is malformed") from e
+
+
+def close_predecessor(text, successor):
+    updated = replace_scalar(text, "state", "closed")
+    frontmatter_end = updated.find("\n---", 4)
+    if frontmatter_end == -1:
+        raise HandoffError("predecessor receipt is malformed")
+    relation = (
+        f"\nsuperseded_by: {json.dumps(successor)}"
+        f"\nclosed_at: {json.dumps(datetime.now(timezone.utc).isoformat())}"
+    )
+    return updated[:frontmatter_end] + relation + updated[frontmatter_end:]
+
+
 def backlink_count(text, backlink):
     return len(re.findall(rf"(?m)^- `{re.escape(backlink)}`[ \t]*$", text))
 
@@ -153,9 +217,18 @@ def add_backlink(text, backlink):
     count = backlink_count(text, backlink)
     if count > 1:
         raise HandoffError("Ticket contains duplicate receipt backlinks")
-    return (
-        text if count else text.rstrip() + f"\n\n## Solve Records\n\n- `{backlink}`\n"
-    )
+    if count:
+        return text
+    heading = re.search(r"(?m)^## Solve Records[ \t]*$", text)
+    if heading:
+        next_heading = re.search(r"(?m)^## ", text[heading.end() :])
+        insert_at = (
+            heading.end() + next_heading.start()
+            if next_heading
+            else len(text.rstrip())
+        )
+        return text[:insert_at].rstrip() + f"\n\n- `{backlink}`\n" + text[insert_at:].lstrip("\n")
+    return text.rstrip() + f"\n\n## Solve Records\n\n- `{backlink}`\n"
 
 
 def candidate_identity(repo, ticket, allowed=frozenset(), require_clean=True):
@@ -245,7 +318,7 @@ def fail_at_boundary(name, member_number):
         return value == "1" and member_number == 1
 
 
-def handoff(repo, ticket_ids, key, outcome, body, next_action, declared):
+def handoff(repo, ticket_ids, key, outcome, body, next_action, declared, supersedes=""):
     if not key.strip():
         raise HandoffError("handoff key is required")
     if outcome not in {"candidate"} | RECOVERY | TERMINAL:
@@ -307,14 +380,7 @@ def handoff(repo, ticket_ids, key, outcome, body, next_action, declared):
                 "use a new handoff key for changed immutable facts",
             )
         if found is not None:
-            old_membership = [
-                line[4:].strip()
-                for line in re.search(
-                    r"(?m)^tickets:\n((?:  - .+\n?)+)", found.read_text()
-                )
-                .group(1)
-                .splitlines()
-            ]
+            old_membership = ticket_membership(found.read_text())
             if old_membership != rel_tickets:
                 return result(
                     "conflict",
@@ -334,6 +400,38 @@ def handoff(repo, ticket_ids, key, outcome, body, next_action, declared):
             "tickets": rel_tickets,
             "outcome": outcome,
         }
+        predecessor_path = None
+        predecessor_text = ""
+        if supersedes:
+            predecessor_path = (repo / supersedes).resolve()
+            try:
+                predecessor_rel = predecessor_path.relative_to(repo).as_posix()
+            except ValueError as e:
+                raise HandoffError("predecessor must be a repository-relative canonical receipt") from e
+            if predecessor_path == canonical:
+                raise HandoffError("successor cannot refer to itself as predecessor")
+            if not predecessor_path.is_file():
+                raise HandoffError("predecessor receipt is unavailable")
+            predecessor_text, predecessor_facts = predecessor_binding(repo, predecessor_path)
+            if predecessor_facts["tickets"] != rel_tickets:
+                raise HandoffError("predecessor Ticket membership does not match successor membership")
+            predecessor_state = scalar(predecessor_text, "state")
+            related_successor = ""
+            if re.search(r"(?m)^superseded_by:", predecessor_text):
+                related_successor = relation_value(predecessor_text, "superseded_by")
+            has_closed_at = bool(
+                re.search(r"(?m)^closed_at:[ \t]*\S", predecessor_text)
+            )
+            if predecessor_state == "open" and (related_successor or has_closed_at):
+                raise HandoffError("open predecessor contains a partial successor relation")
+            if predecessor_state == "closed" and not (
+                related_successor == rel_receipt and has_closed_at
+            ):
+                raise HandoffError("predecessor is already closed")
+            if predecessor_state not in {"open", "closed"}:
+                raise HandoffError("predecessor state is malformed")
+            binding["supersedes"] = predecessor_rel
+            allowed.add(predecessor_rel)
         if candidate:
             identities = {
                 candidate_identity(repo, ticket, allowed if path.is_file() else set())
@@ -362,18 +460,15 @@ def handoff(repo, ticket_ids, key, outcome, body, next_action, declared):
                     "handoff key is bound to different immutable facts",
                     "use a new handoff key for changed immutable facts",
                 )
-            stored_tickets = [
-                line[4:].strip()
-                for line in re.search(r"(?m)^tickets:\n((?:  - .+\n?)+)", old)
-                .group(1)
-                .splitlines()
-            ]
+            stored_tickets = ticket_membership(old)
             stored = {
                 "repo": str(repo),
                 "handoff_key": stored_key,
                 "tickets": stored_tickets,
                 "outcome": scalar(old, "outcome"),
             }
+            if re.search(r"(?m)^supersedes:", old):
+                stored["supersedes"] = relation_value(old, "supersedes")
             if candidate:
                 stored.update(
                     head=scalar(old, "head"), head_sha=scalar(old, "head_sha")
@@ -572,6 +667,69 @@ def handoff(repo, ticket_ids, key, outcome, body, next_action, declared):
         if retain:
             for final in finals:
                 verify_resources(repo, final, declared)
+        if predecessor_path is not None:
+            try:
+                if os.environ.get("ULTRA_HANDOFF_FAIL_BEFORE_PREDECESSOR_RELATION_READ") == "1":
+                    raise OSError("injected predecessor relation read failure")
+                predecessor_text, predecessor_facts = predecessor_binding(
+                    repo, predecessor_path
+                )
+            except OSError as e:
+                raise RetryableHandoff(
+                    f"successor handoff completed but predecessor relation read failed: {e}"
+                ) from e
+            predecessor_state = scalar(predecessor_text, "state")
+            successor_value = (
+                relation_value(predecessor_text, "superseded_by")
+                if re.search(r"(?m)^superseded_by:", predecessor_text)
+                else ""
+            )
+            if predecessor_state == "open":
+                if os.environ.get("ULTRA_HANDOFF_FAIL_BEFORE_PREDECESSOR_CLOSE") == "1":
+                    raise RetryableHandoff(
+                        "successor handoff completed but predecessor relation remains open"
+                    )
+                try:
+                    if os.environ.get("ULTRA_HANDOFF_FAIL_DURING_PREDECESSOR_CLOSE") == "1":
+                        raise OSError("injected predecessor closure failure")
+                    publication.atomic_write(
+                        predecessor_path,
+                        close_predecessor(predecessor_text, rel_receipt),
+                    )
+                    if os.environ.get("ULTRA_HANDOFF_FAIL_AFTER_PREDECESSOR_CLOSE") == "1":
+                        raise OSError("injected predecessor relation verification failure")
+                except OSError as e:
+                    raise RetryableHandoff(
+                        f"successor handoff completed but predecessor closure failed: {e}"
+                    ) from e
+                try:
+                    predecessor_text, predecessor_facts = predecessor_binding(
+                        repo, predecessor_path
+                    )
+                except OSError as e:
+                    raise RetryableHandoff(
+                        f"predecessor closed but relation verification failed: {e}"
+                    ) from e
+                predecessor_state = scalar(predecessor_text, "state")
+                successor_value = relation_value(predecessor_text, "superseded_by")
+            try:
+                if os.environ.get("ULTRA_HANDOFF_FAIL_BEFORE_SUCCESSOR_RELATION_READ") == "1":
+                    raise OSError("injected successor relation read failure")
+                successor_text = path.read_text()
+            except OSError as e:
+                raise RetryableHandoff(
+                    f"successor handoff completed but successor relation read failed: {e}"
+                ) from e
+            if (
+                predecessor_facts["tickets"] != rel_tickets
+                or predecessor_state != "closed"
+                or successor_value != rel_receipt
+                or not re.search(r"(?m)^closed_at:[ \t]*\S", predecessor_text)
+                or relation_value(successor_text, "supersedes") != predecessor_path.relative_to(repo).as_posix()
+            ):
+                return result(
+                    "retryable", key, rel_receipt, "predecessor relation postcondition is incomplete"
+                )
         return result("success", key, rel_receipt)
 
 
@@ -583,6 +741,7 @@ def main():
     p.add_argument("--repo", default=".")
     p.add_argument("--recovery-next-action", default="")
     p.add_argument("--retained-resource", action="append", default=[])
+    p.add_argument("--supersedes", default="")
     a = p.parse_args()
     try:
         payload = handoff(
@@ -593,6 +752,7 @@ def main():
             a.summary,
             a.recovery_next_action,
             a.retained_resource,
+            a.supersedes,
         )
     except RetryableHandoff as e:
         repo = Path(a.repo).resolve()

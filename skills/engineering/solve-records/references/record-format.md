@@ -241,10 +241,13 @@ Cleanup: pending | done | blocked | none
 ```
 
 `blocked`, `needs-info`, and `ready-for-human` normally remain open and enter
-the Needs Attention or Resume view. `abandoned` and `superseded` normally
-close after their disposition is recorded. A resumed Attempt reuses the linked
-recovery record only when it keeps the same retained resources and recovery
-context; a clean restart closes or supersedes the old receipt first.
+the Needs Attention or Resume view. `abandoned` and creation-time `superseded`
+normally close after their disposition is recorded. A resumed Attempt reuses
+the recovery context and retained resources, but every new meaningful handoff
+uses a new handoff key and a new receipt. The successor receipt records
+`supersedes`; only after its handoff postcondition succeeds does the predecessor
+close with `closed_at` and reciprocal `superseded_by`. The predecessor keeps
+its creation-time outcome and remains open when successor handoff fails.
 
 When the Attempt used an Execution Digest, distill durable decisions and deviations into `## Attempt Summary` or `## Confirmed Findings` with their reason, impact, and evidence. Keep the working Digest only while the retained recovery context has resume value or repo policy requires it; otherwise delete it after this transfer.
 

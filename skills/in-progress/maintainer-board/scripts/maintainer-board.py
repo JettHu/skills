@@ -553,6 +553,11 @@ def build_snapshot(repo):
     issue_buckets = bucket_items(issues, ISSUE_BUCKETS)
     solve_records = load_solve_records_dashboard(repo)
     solve_buckets = solve_records.get("buckets", {})
+    records_by_path = {
+        record.get("path"): record
+        for records in solve_buckets.values()
+        for record in records
+    }
     issues_by_path = {issue["path"]: issue for issue in issues}
     live_worktrees = registered_worktrees(repo)
     for records in solve_buckets.values():
@@ -592,6 +597,28 @@ def build_snapshot(repo):
                 )
                 for issue in linked
             )
+            def relation_backlinks_valid(other):
+                other_linked = [
+                    issues_by_path.get(path) for path in other.get("issues", [])
+                ]
+                return bool(other_linked) and all(
+                    issue and any(
+                        (repo / issue["path"]).parent.joinpath(backlink).resolve()
+                        == (repo / other["path"]).resolve()
+                        for backlink in issue.get("solve_records", [])
+                    )
+                    for issue in other_linked
+                )
+
+            predecessor = records_by_path.get(record.get("supersedes"))
+            relation_consistent = not record.get("supersedes") or bool(
+                predecessor
+                and predecessor.get("state") == "closed"
+                and predecessor.get("closed_at")
+                and predecessor.get("superseded_by") == record.get("path")
+                and predecessor.get("issues") == record.get("issues")
+                and relation_backlinks_valid(predecessor)
+            )
             if outcome == "candidate":
                 candidate_consistent = (
                     record.get("state") == "open"
@@ -603,10 +630,27 @@ def build_snapshot(repo):
                         for issue in linked
                     )
                     and ref_map(repo).get(record.get("head")) == record.get("head_sha")
+                    and relation_consistent
                 )
                 record["handoff_projection"] = (
                     "normal_candidate"
                     if candidate_consistent
+                    else "inconsistent_handoff_attention"
+                )
+                continue
+            if record.get("state") == "closed" and record.get("superseded_by"):
+                successor = records_by_path.get(record.get("superseded_by"))
+                predecessor_consistent = bool(
+                    record.get("closed_at")
+                    and successor
+                    and successor.get("supersedes") == record.get("path")
+                    and successor.get("issues") == record.get("issues")
+                    and backlinks_valid
+                    and relation_backlinks_valid(successor)
+                )
+                record["handoff_projection"] = (
+                    "closed_predecessor_history"
+                    if predecessor_consistent
                     else "inconsistent_handoff_attention"
                 )
                 continue
@@ -625,6 +669,7 @@ def build_snapshot(repo):
                         and "solve-in-progress" not in issue.get("flags", [])
                         for issue in linked
                     )
+                    and relation_consistent
                 )
                 record["handoff_projection"] = (
                     "closed_terminal_history"
@@ -649,6 +694,7 @@ def build_snapshot(repo):
                     (action == "resume" and resources_valid)
                     or (action != "resume" and not retained)
                 )
+                and relation_consistent
             )
             if not recovery_consistent:
                 record["handoff_projection"] = "inconsistent_handoff_attention"

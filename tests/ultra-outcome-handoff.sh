@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -542,6 +543,197 @@ unsupported = json.loads(recovery(
 assert unsupported["status"] == "conflict"
 assert "resumable Claims" in unsupported["reason"]
 contract_path.write_text(contract_text, encoding="utf-8")
+
+# A resumed Attempt creates a distinct successor receipt. The predecessor stays
+# open until the successor's primary handoff succeeds and the relation converges.
+ticket.write_text(claimed_text, encoding="utf-8")
+predecessor = json.loads(recovery(
+    "successor-predecessor", "blocked", "inspect",
+).stdout)["data"]
+assert predecessor["status"] == "success", predecessor
+predecessor_path = repo / predecessor["receipt"]
+original_predecessor = predecessor_path.read_text(encoding="utf-8")
+assert "state: open" in original_predecessor
+assert "outcome: blocked" in original_predecessor
+
+# Model the resumed Claim after the inspectable recovery handoff.
+ticket.write_text(
+    ticket.read_text(encoding="utf-8")
+    .replace("Status: ready-for-human", "Status: ready-for-agent")
+    .replace("Flags:", "Flags: solve-in-progress", 1),
+    encoding="utf-8",
+)
+run("git", "-C", str(repo), "add", ".scratch")
+run("git", "-C", str(repo), "commit", "-qm", "resume from recovery predecessor")
+successor_key = "successor-candidate"
+successor_command = [
+    sys.executable, str(facade), "ticket", "handoff",
+    "--repo", str(repo), "--ticket-id", "A", "--handoff-key", successor_key,
+    "--outcome", "candidate", "--summary", "Resumed work completed successfully.",
+    "--supersedes", predecessor["receipt"],
+]
+relation_failure = run(
+    *successor_command,
+    env=dict(os.environ, ULTRA_HANDOFF_FAIL_BEFORE_PREDECESSOR_CLOSE="1"),
+)
+relation_failure_data = json.loads(relation_failure.stdout)["data"]
+assert relation_failure_data["status"] == "retryable", relation_failure_data
+successor_path = repo / relation_failure_data["receipt"]
+assert successor_path.is_file()
+assert predecessor_path.read_text(encoding="utf-8") == original_predecessor
+
+relation_read_failure = run(
+    *successor_command,
+    env=dict(os.environ, ULTRA_HANDOFF_FAIL_BEFORE_PREDECESSOR_RELATION_READ="1"),
+)
+relation_read_failure_data = json.loads(relation_read_failure.stdout)["data"]
+assert relation_read_failure_data["status"] == "retryable", relation_read_failure_data
+assert "predecessor relation read failed" in relation_read_failure_data["reason"]
+assert predecessor_path.read_text(encoding="utf-8") == original_predecessor
+
+closure_failure = run(
+    *successor_command,
+    env=dict(os.environ, ULTRA_HANDOFF_FAIL_DURING_PREDECESSOR_CLOSE="1"),
+)
+closure_failure_data = json.loads(closure_failure.stdout)["data"]
+assert closure_failure_data["status"] == "retryable", closure_failure_data
+assert "predecessor closure failed" in closure_failure_data["reason"]
+assert predecessor_path.read_text(encoding="utf-8") == original_predecessor
+
+verification_failure = run(
+    *successor_command,
+    env=dict(os.environ, ULTRA_HANDOFF_FAIL_AFTER_PREDECESSOR_CLOSE="1"),
+)
+verification_failure_data = json.loads(verification_failure.stdout)["data"]
+assert verification_failure_data["status"] == "retryable", verification_failure_data
+assert "predecessor closure failed" in verification_failure_data["reason"]
+assert "state: closed" in predecessor_path.read_text(encoding="utf-8")
+
+successor_read_failure = run(
+    *successor_command,
+    env=dict(os.environ, ULTRA_HANDOFF_FAIL_BEFORE_SUCCESSOR_RELATION_READ="1"),
+)
+successor_read_failure_data = json.loads(successor_read_failure.stdout)["data"]
+assert successor_read_failure_data["status"] == "retryable", successor_read_failure_data
+assert "successor relation read failed" in successor_read_failure_data["reason"]
+
+converged_successor = json.loads(run(*successor_command).stdout)["data"]
+assert converged_successor["status"] == "success", converged_successor
+assert converged_successor["receipt"] == relation_failure_data["receipt"]
+assert len(list(predecessor_path.parent.glob("*.md"))) >= 2
+predecessor_text = predecessor_path.read_text(encoding="utf-8")
+successor_text = successor_path.read_text(encoding="utf-8")
+assert "state: closed" in predecessor_text
+assert "outcome: blocked" in predecessor_text
+assert f"superseded_by: {json.dumps(converged_successor['receipt'])}" in predecessor_text
+assert "closed_at:" in predecessor_text
+assert f"supersedes: {json.dumps(predecessor['receipt'])}" in successor_text
+assert "\npredecessor:" not in successor_text
+assert "\nsuccessor:" not in predecessor_text
+ticket_text = ticket.read_text(encoding="utf-8")
+assert ticket_text.count(f"- `../solve-records/{predecessor_path.name}`") == 1
+assert ticket_text.count(f"- `../solve-records/{successor_path.name}`") == 1
+
+successor_board = json.loads(run(sys.executable, str(board), "--repo", str(repo), "--json").stdout)
+successor_records = [item for bucket in successor_board["solve_records"]["buckets"].values() for item in bucket]
+projected_predecessor = next(item for item in successor_records if item["path"] == predecessor["receipt"])
+projected_successor = next(item for item in successor_records if item["path"] == converged_successor["receipt"])
+assert projected_predecessor["handoff_projection"] == "closed_predecessor_history", projected_predecessor
+assert projected_predecessor["superseded_by"] == converged_successor["receipt"]
+assert projected_successor["supersedes"] == predecessor["receipt"]
+assert projected_successor["handoff_projection"] == "normal_candidate", projected_successor
+assert predecessor["receipt"] not in {
+    item["path"] for item in successor_board["solve_records"]["buckets"]["recovery"]
+}
+
+# Exact retry stays successful, while invalid predecessor identities conflict
+# without rewriting either side of the established relation.
+assert json.loads(run(*successor_command).stdout)["data"]["status"] == "success"
+stable_predecessor = predecessor_path.read_text(encoding="utf-8")
+stable_successor = successor_path.read_text(encoding="utf-8")
+
+def predecessor_conflict(key: str, predecessor_value: str):
+    command = [
+        sys.executable, str(facade), "ticket", "handoff",
+        "--repo", str(repo), "--ticket-id", "A", "--handoff-key", key,
+        "--outcome", "candidate", "--summary", "Must conflict.",
+        "--supersedes", predecessor_value,
+    ]
+    data = json.loads(run(*command).stdout)["data"]
+    assert data["status"] == "conflict", (key, data)
+    return data
+
+predecessor_conflict("missing-predecessor", ".scratch/feature/solve-records/missing.md")
+predecessor_conflict("closed-predecessor", predecessor["receipt"])
+predecessor_conflict("candidate-predecessor", converged_successor["receipt"])
+predecessor_conflict(successor_key, converged_successor["receipt"])
+
+malformed_key = "malformed-predecessor"
+malformed_path = predecessor_path.parent / (hashlib.sha256(malformed_key.encode()).hexdigest() + ".md")
+malformed_path.write_text("---\nstate: open\n---\n", encoding="utf-8")
+malformed_before = malformed_path.read_text(encoding="utf-8")
+predecessor_conflict("malformed-successor", malformed_path.relative_to(repo).as_posix())
+assert malformed_path.read_text(encoding="utf-8") == malformed_before
+
+cross_ticket = repo / ".scratch/other/issues/B.md"
+cross_ticket.parent.mkdir(parents=True, exist_ok=True)
+cross_ticket.write_text(claimed_text.replace("Ticket ID: A", "Ticket ID: cross-B"), encoding="utf-8")
+cross_predecessor = json.loads(run(
+    sys.executable, str(facade), "ticket", "handoff",
+    "--repo", str(repo), "--ticket-id", "cross-B",
+    "--handoff-key", "cross-predecessor", "--outcome", "blocked",
+    "--summary", "Cross-membership recovery.", "--recovery-next-action", "inspect",
+).stdout)["data"]
+assert cross_predecessor["status"] == "success", cross_predecessor
+predecessor_conflict("cross-membership-successor", cross_predecessor["receipt"])
+predecessor_conflict(successor_key, cross_predecessor["receipt"])
+assert predecessor_path.read_text(encoding="utf-8") == stable_predecessor
+assert successor_path.read_text(encoding="utf-8") == stable_successor
+
+# A relation missing closure time is attention on both sides, never a normal
+# successor or closed-predecessor projection.
+predecessor_path.write_text(
+    re.sub(r"(?m)^closed_at:.*\n", "", stable_predecessor), encoding="utf-8"
+)
+partial_board = json.loads(run(sys.executable, str(board), "--repo", str(repo), "--json").stdout)
+partial_records = [item for bucket in partial_board["solve_records"]["buckets"].values() for item in bucket]
+partial_predecessor = next(item for item in partial_records if item["path"] == predecessor["receipt"])
+partial_successor = next(item for item in partial_records if item["path"] == converged_successor["receipt"])
+assert partial_predecessor["handoff_projection"] == "inconsistent_handoff_attention"
+assert partial_successor["handoff_projection"] == "inconsistent_handoff_attention"
+predecessor_path.write_text(stable_predecessor, encoding="utf-8")
+
+missing_successor_backlink = ticket.read_text(encoding="utf-8").replace(
+    f"- `../solve-records/{successor_path.name}`\n", ""
+)
+ticket.write_text(missing_successor_backlink, encoding="utf-8")
+backlink_board = json.loads(run(sys.executable, str(board), "--repo", str(repo), "--json").stdout)
+backlink_records = [item for bucket in backlink_board["solve_records"]["buckets"].values() for item in bucket]
+backlink_predecessor = next(item for item in backlink_records if item["path"] == predecessor["receipt"])
+backlink_successor = next(item for item in backlink_records if item["path"] == converged_successor["receipt"])
+assert backlink_predecessor["handoff_projection"] == "inconsistent_handoff_attention"
+assert backlink_successor["handoff_projection"] == "inconsistent_handoff_attention"
+ticket.write_text(ticket_text, encoding="utf-8")
+
+# Recovery outcomes can also be successors and use the same reciprocal board gate.
+cross_ticket.write_text(
+    cross_ticket.read_text(encoding="utf-8")
+    .replace("Status: ready-for-human", "Status: ready-for-agent")
+    .replace("Flags:", "Flags: solve-in-progress", 1),
+    encoding="utf-8",
+)
+recovery_successor = json.loads(run(
+    sys.executable, str(facade), "ticket", "handoff",
+    "--repo", str(repo), "--ticket-id", "cross-B",
+    "--handoff-key", "cross-recovery-successor", "--outcome", "needs-info",
+    "--summary", "A later recovery outcome remains meaningful.",
+    "--recovery-next-action", "inspect", "--supersedes", cross_predecessor["receipt"],
+).stdout)["data"]
+assert recovery_successor["status"] == "success", recovery_successor
+recovery_board = json.loads(run(sys.executable, str(board), "--repo", str(repo), "--json").stdout)
+recovery_records = [item for bucket in recovery_board["solve_records"]["buckets"].values() for item in bucket]
+projected_recovery_successor = next(item for item in recovery_records if item["path"] == recovery_successor["receipt"])
+assert projected_recovery_successor["handoff_projection"] == "normal_active_recovery"
 
 print("ultra outcome handoff fixture passed")
 PY

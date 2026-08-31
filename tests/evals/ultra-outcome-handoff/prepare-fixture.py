@@ -42,6 +42,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
     parser.add_argument("--treatment-ref", default="HEAD")
+    parser.add_argument("--scenario", choices=("candidate", "successor"), default="candidate")
     args = parser.parse_args()
     repo = Path(args.output).resolve()
     if repo.exists():
@@ -52,6 +53,7 @@ def main() -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(git_file(args.treatment_ref, relative))
     write(repo / "AGENTS.md", "Use only `python3 scripts/tracker.py` for the requested outcome handoff. Do not edit Ticket or receipt files directly.\n")
+    write(repo / ".gitignore", ".evals/\n")
     write(repo / "docs/agents/ultra-tracker.md", """Frontier adapter: bundled-local-markdown-v1
 Local Ticket representation: file-per-ticket
 Local Ticket path: .scratch/<feature>/issues/<ticket-file>.md
@@ -101,11 +103,56 @@ Blocked By:
 # Eval Ticket {ticket_id}
 """)
     write(repo / "candidate.txt", "candidate\n")
-    write(repo / "EVAL_PROMPT.md", """Finalize Tickets A and B as one grouped candidate outcome using only `python3 scripts/tracker.py ticket handoff` and the configured facade. Use handoff key `model-eval-grouped-candidate-AB` and Summary `Grouped candidate behavior and deterministic validation are complete.` Pass both exact Ticket identities. Do not edit lifecycle artifacts directly. Stop after the facade reports success.
-""")
-    write(repo / "EVAL_EXPECTATIONS.json", json.dumps({"key": "model-eval-grouped-candidate-AB", "tickets": ["A", "B"]}, indent=2) + "\n")
     run("git", "add", ".", cwd=repo)
     run("git", "commit", "-qm", "candidate fixture", cwd=repo)
+    if args.scenario == "successor":
+        predecessor_key = "model-eval-recovery-predecessor-A"
+        output = run(
+            "python3",
+            "skills/engineering/ultra/scripts/ultra_tracker.py",
+            "ticket",
+            "handoff",
+            "--ticket-id",
+            "A",
+            "--handoff-key",
+            predecessor_key,
+            "--outcome",
+            "blocked",
+            "--summary",
+            "Recovery predecessor awaiting resumed implementation.",
+            "--recovery-next-action",
+            "inspect",
+            cwd=repo,
+        )
+        predecessor = json.loads(output)["data"]["receipt"]
+        ticket_a = repo / ".scratch/outcome/issues/A.md"
+        ticket_a.write_text(
+            ticket_a.read_text(encoding="utf-8")
+            .replace("Status: ready-for-human", "Status: ready-for-agent")
+            .replace("Flags:", "Flags: solve-in-progress", 1),
+            encoding="utf-8",
+        )
+        successor_key = "model-eval-successor-candidate-A"
+        write(
+            repo / "EVAL_PROMPT.md",
+            f"""Finalize resumed Ticket A as a candidate successor using only `python3 scripts/tracker.py ticket handoff` and the configured facade. Use handoff key `{successor_key}`, Summary `Resumed implementation and validation are complete.`, and `--supersedes {predecessor}`. Do not edit lifecycle artifacts directly. Stop after the facade reports success.
+""",
+        )
+        expectations = {
+            "scenario": "successor",
+            "key": successor_key,
+            "tickets": ["A"],
+            "supersedes": predecessor,
+        }
+        write(repo / "EVAL_EXPECTATIONS.json", json.dumps(expectations, indent=2) + "\n")
+        run("git", "add", ".", cwd=repo)
+        run("git", "commit", "-qm", "resumed successor fixture", cwd=repo)
+    else:
+        write(repo / "EVAL_PROMPT.md", """Finalize Tickets A and B as one grouped candidate outcome using only `python3 scripts/tracker.py ticket handoff` and the configured facade. Use handoff key `model-eval-grouped-candidate-AB` and Summary `Grouped candidate behavior and deterministic validation are complete.` Pass both exact Ticket identities. Do not edit lifecycle artifacts directly. Stop after the facade reports success.
+""")
+        write(repo / "EVAL_EXPECTATIONS.json", json.dumps({"scenario": "candidate", "key": "model-eval-grouped-candidate-AB", "tickets": ["A", "B"]}, indent=2) + "\n")
+        run("git", "add", "EVAL_PROMPT.md", "EVAL_EXPECTATIONS.json", cwd=repo)
+        run("git", "commit", "-qm", "candidate eval prompt", cwd=repo)
     print(repo)
 
 
