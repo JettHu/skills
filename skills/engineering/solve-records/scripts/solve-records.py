@@ -9,8 +9,6 @@ from pathlib import Path
 
 
 COMMON_REQUIRED = {
-    "id",
-    "kind",
     "state",
     "issues",
 }
@@ -30,7 +28,7 @@ LEGACY_CANDIDATE_REQUIRED = (
     COMMON_REQUIRED
     | CANDIDATE_IDENTITY_REQUIRED
     | CANDIDATE_GATE_REQUIRED
-    | {"created_at", "cleanup_done"}
+    | {"id", "kind", "created_at", "cleanup_done"}
 )
 
 OUTCOMES = {
@@ -414,13 +412,17 @@ def parse_record(repo, path):
             + ",".join(ticket_membership)
         )
         return data
-    data["issues"] = issue_membership or ticket_membership
+    canonical_membership = ticket_membership or issue_membership
+    data["tickets"] = canonical_membership
+    # Keep the normalized legacy alias until existing dashboard and gate
+    # consumers migrate to the canonical domain field.
+    data["issues"] = canonical_membership
 
     missing = missing_fields(data, COMMON_REQUIRED)
     if missing:
         data["malformed"] = "missing " + ",".join(missing)
         return data
-    if data["kind"] != "solve_record":
+    if "kind" in data and data["kind"] != "solve_record":
         data["malformed"] = f"invalid kind: {data['kind']}"
         return data
 
@@ -558,6 +560,8 @@ def parse_record(repo, path):
     ).strip()
     data["recovery_action"] = labeled_value(section(text, "Resume Or Cleanup"), "Next action")
     data["title"] = first_heading(text)
+    data.setdefault("id", path.stem)
+    data.setdefault("kind", None)
     for optional in (
         "base",
         "base_sha",

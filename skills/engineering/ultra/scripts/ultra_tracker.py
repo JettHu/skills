@@ -75,6 +75,8 @@ def helper_path(name: str) -> Path:
         return ultra / "local_ticket_publication.py"
     if name == "ticket":
         return ultra / "local_ticket_frontier.py"
+    if name == "handoff":
+        return ultra / "local_outcome_handoff.py"
     if name == "solve-record":
         return ultra.parent.parent / "solve-records" / "scripts" / "solve-records.py"
     raise AssertionError(f"unknown helper: {name}")
@@ -174,6 +176,12 @@ def parse_args() -> argparse.Namespace:
     claim.add_argument("--expected-snapshot", required=True, help="frontier snapshot returned by discovery")
     claim.add_argument("--branch", required=True, help="configured Ticket coordination branch assignment")
     claim.add_argument("--worktree", required=True, help="configured Ticket coordination worktree assignment")
+    handoff = ticket_actions.add_parser("handoff", help="converge one candidate outcome handoff")
+    handoff.add_argument("--repo", default=".")
+    handoff.add_argument("--ticket-id", required=True, help="exact active Ticket identity")
+    handoff.add_argument("--handoff-key", required=True, help="caller-generated durable opaque key")
+    handoff.add_argument("--outcome", required=True, help="semantic outcome; this slice accepts candidate")
+    handoff.add_argument("--summary", required=True, help="concise completed-work and validation Summary")
 
     records = groups.add_parser("solve-record", help="read-only Attempt and Solve Record inspection and gates")
     record_actions = records.add_subparsers(
@@ -210,6 +218,13 @@ def main() -> int:
                 delegated.append("--explicit")
             return delegate(operation, "publication", delegated)
         if args.group == "ticket":
+            if args.action == "handoff":
+                delegated = [
+                    "--repo", str(repo), "--ticket-id", args.ticket_id,
+                    "--handoff-key", args.handoff_key, "--outcome", args.outcome,
+                    "--summary", args.summary,
+                ]
+                return delegate(operation, "handoff", delegated)
             delegated = [args.action, "--repo", str(repo)]
             if args.action == "frontier":
                 for ticket_id in args.ticket_id:

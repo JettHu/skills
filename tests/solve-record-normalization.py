@@ -39,6 +39,25 @@ created_at: 2026-08-31T10:00:00+08:00
 cleanup_done: false
 head: solve/compact
 head_sha: abc1234"""
+    canonical = record(
+        repo,
+        "canonical",
+        """state: open
+outcome: candidate
+tickets:
+  - .scratch/feature/issues/01.md
+head: solve/canonical
+head_sha: abc1234""",
+        """# Solve Record: Canonical candidate
+
+## Summary
+Implemented and validated the canonical compact receipt.""",
+    )
+    assert "malformed" not in canonical, canonical
+    assert canonical["id"] == "canonical"
+    assert canonical["tickets"] == [".scratch/feature/issues/01.md"]
+    assert canonical["issues"] == canonical["tickets"]
+    assert canonical["kind"] is None and canonical["cleanup_done"] is None
     compact = record(
         repo,
         "compact",
@@ -49,6 +68,7 @@ head_sha: abc1234"""
 Implemented the normalized parser and its focused fixtures.""",
     )
     assert "malformed" not in compact, compact
+    assert compact["tickets"] == [".scratch/feature/issues/01.md"]
     assert compact["issues"] == [".scratch/feature/issues/01.md"]
     assert compact["outcome"] == "candidate"
     assert compact["summary"].startswith("Implemented")
