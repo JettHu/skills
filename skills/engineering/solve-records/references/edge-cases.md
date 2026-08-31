@@ -47,9 +47,11 @@ For a resume request:
    successor leaves the predecessor open; retry the same successor key to
    converge missing relation work without creating another receipt.
 5. When the recovery identity changed materially or a clean restart is safer,
-   explicitly close the old receipt and release its Claim before the new Claim.
-   Later replacement still uses the successor relation; `outcome: superseded`
-   is reserved for a receipt whose Attempt was already replaced at creation.
+   release or transfer Claim ownership through the tracker contract while the
+   predecessor receipt remains open. Later replacement still closes it only
+   after a meaningful successor handoff records `supersedes` and reciprocal
+   `superseded_by`; `outcome: superseded` is reserved for a receipt whose
+   Attempt was already replaced at creation.
 
 For an explicit close or supersede request, set the lifecycle state and reason
 on the selected receipt only. Do not silently change the linked Ticket state or

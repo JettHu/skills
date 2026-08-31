@@ -268,7 +268,7 @@ with tempfile.TemporaryDirectory() as temp:
     assert before == after == [f"{resume_id}.md"]
     assert issue_file.read_text(encoding="utf-8").count(f"../solve-records/{resume_id}.md") == 1
 
-    # A clean restart supersedes the old receipt before a later candidate handoff.
+    # Historical creation-time superseded recovery receipts remain readable.
     superseded = resume_path.read_text(encoding="utf-8")
     superseded = superseded.replace("state: open", "state: closed", 1).replace("outcome: blocked", "outcome: superseded", 1)
     superseded = superseded.replace("Result: blocked", "Result: superseded", 1).replace("Next action: resume", "Next action: supersede", 1)
