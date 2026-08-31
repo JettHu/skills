@@ -2135,15 +2135,23 @@ for bucket in dashboard["buckets"].values():
 assert len(classified) == len(set(classified)) == len(records), dashboard
 assert set(classified) == {record.get("id") for record in records}, dashboard
 
-recovery_ids = {"blocked", "needs-info", "ready-for-human", "abandoned", "superseded"}
+active_recovery_ids = {"blocked", "needs-info", "ready-for-human"}
+terminal_cleanup_ids = {"abandoned", "superseded"}
 bucket_ids = {
     name: {item["id"] for item in items}
     for name, items in dashboard["buckets"].items()
 }
-assert recovery_ids == bucket_ids["recovery"], dashboard
-assert recovery_ids.isdisjoint(
-    bucket_ids["ready"] | bucket_ids["manual"] | bucket_ids["cleanup"] | bucket_ids["recent"] | bucket_ids["stale_or_malformed"]
+assert active_recovery_ids == bucket_ids["recovery"], dashboard
+assert active_recovery_ids.isdisjoint(
+    bucket_ids["ready"]
+    | bucket_ids["manual"]
+    | bucket_ids["cleanup"]
+    | bucket_ids["recent"]
+    | bucket_ids["historical"]
+    | bucket_ids["stale_or_malformed"]
 ), dashboard
+assert terminal_cleanup_ids <= bucket_ids["cleanup"], dashboard
+assert terminal_cleanup_ids.isdisjoint(bucket_ids["recovery"]), dashboard
 assert {"legacy-candidate", "new-candidate"} <= bucket_ids["ready"], dashboard
 assert {
     "malformed-unknown",
@@ -2158,7 +2166,7 @@ assert {
     "malformed-legacy-recovery",
 } <= bucket_ids["stale_or_malformed"], dashboard
 
-for outcome in recovery_ids:
+for outcome in active_recovery_ids | terminal_cleanup_ids:
     record = by_id[outcome]
     gate = tool.merge_gate(repo, record)
     landing = tool.landing_plan(repo, record)
@@ -2166,7 +2174,12 @@ for outcome in recovery_ids:
     expected = f"outcome is {outcome}; candidate-only operations are unavailable"
     assert gate["eligible"] is False and expected in gate["reasons"], gate
     assert landing["status"] == "blocked" and expected in landing["reasons"], landing
-    assert cleanup["status"] == "blocked" and cleanup["reason"] == expected, cleanup
+    expected_cleanup_reason = (
+        "recovery cleanup facts are unavailable"
+        if outcome in terminal_cleanup_ids
+        else expected
+    )
+    assert cleanup["status"] == "blocked" and cleanup["reason"] == expected_cleanup_reason, cleanup
     assert "refs_ok" not in tool.record_summary(repo, record), record
 
 assert tool.select_records(records, "needs-info") == [by_id["needs-info"]]
