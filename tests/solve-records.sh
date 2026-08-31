@@ -2240,7 +2240,8 @@ attest_fixture() {
     --helper "$SOLVE_RECORDS_SCRIPT" \
     --session-ref "$session_ref" \
     --dashboard-ready "$dashboard_ready" \
-    --dashboard-recovery "blocked,needs-info,abandoned-user-owned" \
+    --dashboard-recovery "blocked,needs-info" \
+    --dashboard-cleanup "abandoned-user-owned" \
     --blocked-merge-result refused \
     --blocked-merge-reason "outcome is blocked; candidate-only operations are unavailable" \
     --abandoned-cleanup-result preserved-user-owned \
