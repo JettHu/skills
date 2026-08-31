@@ -613,6 +613,7 @@ def build_snapshot(repo):
             predecessor = records_by_path.get(record.get("supersedes"))
             relation_consistent = not record.get("supersedes") or bool(
                 predecessor
+                and not predecessor.get("malformed")
                 and predecessor.get("state") == "closed"
                 and predecessor.get("closed_at")
                 and predecessor.get("superseded_by") == record.get("path")
@@ -643,6 +644,7 @@ def build_snapshot(repo):
                 predecessor_consistent = bool(
                     record.get("closed_at")
                     and successor
+                    and not successor.get("malformed")
                     and successor.get("supersedes") == record.get("path")
                     and successor.get("issues") == record.get("issues")
                     and backlinks_valid

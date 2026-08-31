@@ -646,11 +646,70 @@ assert predecessor["receipt"] not in {
     item["path"] for item in successor_board["solve_records"]["buckets"]["recovery"]
 }
 
+# A malformed reciprocal receipt invalidates both sides of the relation. The
+# relation fields that parsed before a body-mirror conflict are not sufficient
+# evidence for a normal Board projection.
+stable_predecessor = predecessor_path.read_text(encoding="utf-8")
+malformed_predecessor_text = stable_predecessor
+stable_successor = successor_path.read_text(encoding="utf-8")
+predecessor_path.write_text(
+    malformed_predecessor_text.rstrip()
+    + "\n\n## Outcome\nResult: candidate\n",
+    encoding="utf-8",
+)
+malformed_predecessor_board = json.loads(run(
+    sys.executable, str(board), "--repo", str(repo), "--json"
+).stdout)
+malformed_predecessor_records = [
+    item
+    for bucket in malformed_predecessor_board["solve_records"]["buckets"].values()
+    for item in bucket
+]
+malformed_predecessor = next(
+    item for item in malformed_predecessor_records if item["path"] == predecessor["receipt"]
+)
+successor_of_malformed = next(
+    item for item in malformed_predecessor_records if item["path"] == converged_successor["receipt"]
+)
+assert malformed_predecessor["malformed"]
+assert (
+    malformed_predecessor["handoff_projection"] == "inconsistent_handoff_attention"
+), malformed_predecessor
+assert (
+    successor_of_malformed["handoff_projection"] == "inconsistent_handoff_attention"
+), successor_of_malformed
+predecessor_path.write_text(stable_predecessor, encoding="utf-8")
+
+successor_path.write_text(
+    stable_successor.rstrip() + "\n\n## Outcome\nResult: blocked\n",
+    encoding="utf-8",
+)
+malformed_successor_board = json.loads(run(
+    sys.executable, str(board), "--repo", str(repo), "--json"
+).stdout)
+malformed_successor_records = [
+    item
+    for bucket in malformed_successor_board["solve_records"]["buckets"].values()
+    for item in bucket
+]
+predecessor_of_malformed = next(
+    item for item in malformed_successor_records if item["path"] == predecessor["receipt"]
+)
+malformed_successor = next(
+    item for item in malformed_successor_records if item["path"] == converged_successor["receipt"]
+)
+assert malformed_successor["malformed"]
+assert (
+    malformed_successor["handoff_projection"] == "inconsistent_handoff_attention"
+), malformed_successor
+assert (
+    predecessor_of_malformed["handoff_projection"] == "inconsistent_handoff_attention"
+), predecessor_of_malformed
+successor_path.write_text(stable_successor, encoding="utf-8")
+
 # Exact retry stays successful, while invalid predecessor identities conflict
 # without rewriting either side of the established relation.
 assert json.loads(run(*successor_command).stdout)["data"]["status"] == "success"
-stable_predecessor = predecessor_path.read_text(encoding="utf-8")
-stable_successor = successor_path.read_text(encoding="utf-8")
 
 def predecessor_conflict(key: str, predecessor_value: str):
     command = [
