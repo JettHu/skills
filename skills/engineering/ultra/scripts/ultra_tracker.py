@@ -176,12 +176,14 @@ def parse_args() -> argparse.Namespace:
     claim.add_argument("--expected-snapshot", required=True, help="frontier snapshot returned by discovery")
     claim.add_argument("--branch", required=True, help="configured Ticket coordination branch assignment")
     claim.add_argument("--worktree", required=True, help="configured Ticket coordination worktree assignment")
-    handoff = ticket_actions.add_parser("handoff", help="converge one candidate outcome handoff")
+    handoff = ticket_actions.add_parser("handoff", help="converge one candidate or recovery outcome handoff")
     handoff.add_argument("--repo", default=".")
     handoff.add_argument("--ticket-id", required=True, help="exact active Ticket identity")
     handoff.add_argument("--handoff-key", required=True, help="caller-generated durable opaque key")
-    handoff.add_argument("--outcome", required=True, help="semantic outcome; this slice accepts candidate")
-    handoff.add_argument("--summary", required=True, help="concise completed-work and validation Summary")
+    handoff.add_argument("--outcome", required=True, help="semantic candidate, recovery, or terminal outcome")
+    handoff.add_argument("--summary", required=True, help="concise outcome Summary")
+    handoff.add_argument("--recovery-next-action", help="recovery intent; use resume only when retaining ownership")
+    handoff.add_argument("--retained-resource", action="append", default=[], help="complete retained resource declaration")
 
     records = groups.add_parser("solve-record", help="read-only Attempt and Solve Record inspection and gates")
     record_actions = records.add_subparsers(
@@ -224,6 +226,10 @@ def main() -> int:
                     "--handoff-key", args.handoff_key, "--outcome", args.outcome,
                     "--summary", args.summary,
                 ]
+                if args.recovery_next_action is not None:
+                    delegated.extend(["--recovery-next-action", args.recovery_next_action])
+                for resource in args.retained_resource:
+                    delegated.extend(["--retained-resource", resource])
                 return delegate(operation, "handoff", delegated)
             delegated = [args.action, "--repo", str(repo)]
             if args.action == "frontier":

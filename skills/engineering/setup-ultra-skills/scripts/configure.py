@@ -300,6 +300,7 @@ def coordination(preset: str) -> list[str]:
             "Solve branch field aliases: Solve Branch, Branch",
             "Solve worktree field: Solve Worktree",
             "Solve worktree field aliases: Solve Worktree, Worktree",
+            "Resumable Claims: supported",
             "",
         ]
     return lines

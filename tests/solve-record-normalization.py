@@ -228,6 +228,26 @@ The environment is unavailable; retry after access is restored.""",
     assert "malformed" not in recovery, recovery
     assert recovery["cleanup_done"] is None
     assert recovery["created_at"] is None
+    retained_recovery = record(
+        repo,
+        "retained-recovery",
+        common.replace("id: compact", "id: retained-recovery")
+        .replace("outcome: candidate", "outcome: blocked")
+        .replace(
+            "head: solve/compact\nhead_sha: abc1234",
+            'recovery_next_action: "resume"\nretained_resources:\n'
+            '  - "solve-owned:branch:solve/compact"\n'
+            '  - "solve-owned:worktree:/tmp/compact"',
+        ),
+        """# Solve Record: Retained recovery
+
+## Summary
+Resume from the retained solve-owned resources.""",
+    )
+    assert retained_recovery["retained_resource_identities"] == [
+        {"owner": "solve-owned", "kind": "branch", "value": "solve/compact"},
+        {"owner": "solve-owned", "kind": "worktree", "value": "/tmp/compact"},
+    ]
     refusal = solve_records.merge_gate(repo, recovery)
     assert refusal["eligible"] is False
     assert refusal["reasons"] == [

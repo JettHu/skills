@@ -43,6 +43,7 @@ OUTCOMES = {
 LEGACY_TERMINAL_OUTCOMES = {"merged", "landed", "completed"}
 
 RECOVERY_OUTCOMES = OUTCOMES - {"candidate"}
+TERMINAL_RECOVERY_OUTCOMES = {"abandoned", "superseded"}
 
 NEW_CANDIDATE_SECTIONS = {
     "Ticket",
@@ -297,7 +298,32 @@ def normalized_membership(value):
 
 
 def normalized_scalar(value):
-    return str(value or "").strip().strip("`")
+    return str(value or "").strip().strip("`\"'")
+
+
+def normalized_retained_resource_identities(resources):
+    """Parse the compact receipt resource schema once for all consumers."""
+    if not isinstance(resources, list):
+        return [], "retained_resources must be a list"
+    identities = []
+    seen_kinds = set()
+    for raw_resource in resources:
+        resource = normalized_scalar(raw_resource)
+        parts = resource.split(":", 2)
+        if len(parts) != 3 or not all(parts):
+            return [], f"malformed retained resource identity: {resource}"
+        owner, kind, value = parts
+        if owner != "solve-owned":
+            return [], f"unsupported retained resource owner: {owner}"
+        if kind not in {"branch", "worktree"}:
+            return [], f"unsupported retained resource kind: {kind}"
+        if kind in seen_kinds:
+            return [], f"duplicate retained resource kind: {kind}"
+        seen_kinds.add(kind)
+        identities.append({"owner": owner, "kind": kind, "value": value})
+    if identities and seen_kinds != {"branch", "worktree"}:
+        return [], "partial retained resource declaration"
+    return identities, ""
 
 
 def missing_fields(data, fields):
@@ -453,6 +479,16 @@ def parse_record(repo, path):
     else:
         data["outcome"] = outcome
 
+    if data.get("outcome") in TERMINAL_RECOVERY_OUTCOMES:
+        recovery_action = normalized_scalar(data.get("recovery_next_action"))
+        retained_resources = data.get("retained_resources") or []
+        if recovery_action:
+            data["malformed"] = "terminal receipt contains recovery next action"
+            return data
+        if retained_resources:
+            data["malformed"] = "terminal receipt contains retained resources"
+            return data
+
     ticket_block = section(text, "Ticket")
     outcome_block = section(text, "Outcome")
     body_memberships = [
@@ -544,10 +580,22 @@ def parse_record(repo, path):
         data["malformed"] = "missing Summary section"
         return data
 
-    data["linked_ticket"] = ", ".join(body_membership) if body_membership else ""
+    projected_membership = body_membership
+    if data.get("outcome") != "candidate" and not has_legacy_fixed_body:
+        projected_membership = data["tickets"]
+    data["linked_ticket"] = ", ".join(projected_membership)
     data["source_spec"] = labeled_value(ticket_block, "Source Spec") or data.get("source_spec", "")
+    frontmatter_resources = data.get("retained_resources") or []
     data["resource_ownership"] = labeled_value(outcome_block, "Resource ownership")
     data["retained_resources"] = labeled_value(outcome_block, "Branch/worktree/commit/PR")
+    if data.get("outcome") != "candidate" and not has_legacy_fixed_body:
+        identities, resource_error = normalized_retained_resource_identities(frontmatter_resources)
+        if resource_error:
+            data["malformed"] = resource_error
+            return data
+        data["retained_resource_identities"] = identities
+        data["resource_ownership"] = "solve-owned" if frontmatter_resources else "no retained resources"
+        data["retained_resources"] = frontmatter_resources
     data["checks"] = status_line(section(text, "Verification")) or status_line(section(text, "Checks"))
     data["review"] = post_execution_review_line(section(text, "Review"))
     data["merge"] = status_line(section(text, "Merge"))
@@ -558,7 +606,10 @@ def parse_record(repo, path):
     data["blocker_or_requested_information"] = section(
         text, "Blocker Or Requested Information"
     ).strip()
-    data["recovery_action"] = labeled_value(section(text, "Resume Or Cleanup"), "Next action")
+    data["recovery_action"] = (
+        labeled_value(section(text, "Resume Or Cleanup"), "Next action")
+        or normalized_scalar(data.get("recovery_next_action"))
+    )
     data["title"] = first_heading(text)
     data.setdefault("id", path.stem)
     data.setdefault("kind", None)
@@ -1139,6 +1190,7 @@ def record_summary(repo, record, include_merge_gate=False):
         "resource_cleanup": resource_field(record, "Cleanup"),
         "resource_ownership": record.get("resource_ownership"),
         "retained_resources": record.get("retained_resources"),
+        "retained_resource_identities": record.get("retained_resource_identities", []),
         "blocker_or_requested_information": record.get(
             "blocker_or_requested_information"
         ),

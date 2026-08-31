@@ -223,6 +223,7 @@ for field in (
     "Completed state: completed",
     "Blocker metadata fields: Blocked By, Blockers",
     "Claim value: solve-in-progress",
+    "Resumable Claims: supported",
     "Solve branch field: Solve Branch",
     "Solve worktree field: Solve Worktree",
     "Publication operation `register`:",

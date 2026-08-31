@@ -1,386 +1,496 @@
 #!/usr/bin/env python3
-"""Converge one Local Markdown Ticket candidate handoff."""
+"""Converge one Local Markdown Ticket outcome handoff."""
 
 from __future__ import annotations
-
-import argparse
-import hashlib
-import json
-import os
+import argparse, hashlib, json, os, re, subprocess
 from pathlib import Path
-import re
-import subprocess
-
 import local_ticket_frontier as frontier
 import local_ticket_publication as publication
 
-
 SCHEMA = "ultra-local-outcome-handoff/v1"
+RECOVERY = {"blocked", "needs-info", "ready-for-human"}
+TERMINAL = {"abandoned", "superseded"}
 
 
 class HandoffError(RuntimeError):
-    """The requested handoff conflicts with canonical tracker state."""
+    pass
 
 
 class RetryableHandoff(HandoffError):
-    """A canonical receipt exists but mechanical convergence is incomplete."""
+    pass
 
 
-def git(worktree: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(worktree), *args],
+def git(cwd, *args):
+    p = subprocess.run(
+        ["git", "-C", str(cwd), *args],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        check=False,
     )
-    if result.returncode:
-        raise HandoffError(result.stderr.strip() or "candidate Git identity is unavailable")
-    return result.stdout.strip()
+    if p.returncode:
+        raise HandoffError(p.stderr.strip() or "Git identity is unavailable")
+    return p.stdout.strip()
 
 
-def binding_digest(binding: dict[str, object]) -> str:
-    return hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+def digest(value):
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
-def receipt_path(repo: Path, ticket: frontier.Ticket, key: str) -> Path:
-    digest = hashlib.sha256(key.encode()).hexdigest()
-    if ticket.representation == "file-per-ticket":
-        return ticket.path.parent.parent / "solve-records" / f"{digest}.md"
-    return repo / ".scratch/solve-records" / f"{digest}.md"
+def result(status, key, receipt="", reason="", next_action=""):
+    next_action = next_action or (
+        "inspect the named conflict manually; do not retry unchanged"
+        if status == "conflict"
+        else "retry same key"
+        if status == "retryable"
+        else ""
+    )
+    data = {"schema": SCHEMA, "status": status, "handoff_key": key}
+    data.update(
+        {
+            k: v
+            for k, v in {
+                "receipt": receipt,
+                "reason": reason,
+                "next_action": next_action,
+            }.items()
+            if v
+        }
+    )
+    return data
 
 
-def existing_receipt(repo: Path, key: str) -> Path | None:
+def receipt_path(repo, ticket, key):
     name = hashlib.sha256(key.encode()).hexdigest() + ".md"
-    matches = sorted(path.resolve() for path in repo.glob(f".scratch/**/solve-records/{name}") if path.is_file())
-    if len(matches) > 1:
+    return (
+        ticket.path.parent.parent / "solve-records" / name
+        if ticket.representation == "file-per-ticket"
+        else repo / ".scratch/solve-records" / name
+    )
+
+
+def find_receipt(repo, key):
+    name = hashlib.sha256(key.encode()).hexdigest() + ".md"
+    found = sorted(
+        p.resolve()
+        for p in repo.glob(f".scratch/**/solve-records/{name}")
+        if p.is_file()
+    )
+    if len(found) > 1:
         raise HandoffError("handoff key resolves to multiple canonical receipts")
-    return matches[0] if matches else None
+    return found[0] if found else None
 
 
-def quoted(value: str) -> str:
-    return json.dumps(value, ensure_ascii=False)
-
-
-def render_receipt(
-    relative_ticket: str,
-    key: str,
-    binding: str,
-    head: str,
-    head_sha: str,
-    summary: str,
-) -> str:
-    record_id = hashlib.sha256(key.encode()).hexdigest()
-    return f"""---
-state: open
-outcome: candidate
-tickets:
-  - {relative_ticket}
-handoff_key: {quoted(key)}
-binding_digest: {binding}
-head: {head}
-head_sha: {head_sha}
----
-
-# Solve Record: Candidate {record_id[:12]}
-
-## Summary
-{summary}
-"""
-
-
-def receipt_scalar(text: str, field: str) -> str:
-    matches = re.findall(rf"(?m)^{re.escape(field)}:[ \t]*(\S(?:.*\S)?)[ \t]*$", text)
-    if len(matches) != 1:
+def scalar(text, field):
+    values = re.findall(rf"(?m)^{re.escape(field)}:[ \t]*(\S(?:.*\S)?)[ \t]*$", text)
+    if len(values) != 1:
         raise HandoffError(f"canonical receipt must define exactly one {field}")
-    return matches[0]
+    return values[0]
 
 
-def receipt_summary(text: str) -> str:
-    matches = re.findall(r"(?ms)^## Summary[ \t]*\n(.+?)(?=\n## |\Z)", text)
-    if len(matches) != 1 or not matches[0].strip():
-        raise HandoffError("canonical receipt must define exactly one non-empty Summary")
-    return matches[0].strip()
+def list_field(text, field):
+    m = re.search(rf"(?m)^{field}:\n((?:  - .+\n?)*)", text)
+    if m is None:
+        raise HandoffError(f"canonical receipt must define {field}")
+    try:
+        return [json.loads(line[4:]) for line in m.group(1).splitlines()]
+    except json.JSONDecodeError as e:
+        raise HandoffError(f"canonical receipt {field} is malformed") from e
 
 
-def receipt_tickets(text: str) -> list[str]:
-    match = re.search(r"(?m)^tickets:[ \t]*\n((?:  - .+\n?)+)", text)
-    if match is None:
-        raise HandoffError("canonical receipt must define Ticket membership")
-    return [line[4:].strip() for line in match.group(1).splitlines()]
+def summary(text):
+    values = re.findall(r"(?ms)^## Summary[ \t]*\n(.+?)(?=\n## |\Z)", text)
+    if len(values) != 1 or not values[0].strip():
+        raise HandoffError(
+            "canonical receipt must define exactly one non-empty Summary"
+        )
+    return values[0].strip()
 
 
-def remove_claim(flags: list[str], claim: str) -> str:
-    return ", ".join(item for item in flags if item != claim)
+def render(binding, body):
+    outcome, key = binding["outcome"], binding["handoff_key"]
+    state = "open" if outcome == "candidate" or outcome in RECOVERY else "closed"
+    lines = [
+        "---",
+        f"state: {state}",
+        f"outcome: {outcome}",
+        "tickets:",
+        *[f"  - {x}" for x in binding["tickets"]],
+        f"handoff_key: {json.dumps(key)}",
+        f"binding_digest: {digest(binding)}",
+    ]
+    if outcome == "candidate":
+        lines += [f"head: {binding['head']}", f"head_sha: {binding['head_sha']}"]
+    elif outcome in RECOVERY:
+        lines += [
+            f"recovery_next_action: {json.dumps(binding['recovery_next_action'])}",
+            "retained_resources:",
+            *[f"  - {json.dumps(x)}" for x in binding["retained_resources"]],
+        ]
+    rid = hashlib.sha256(key.encode()).hexdigest()[:12]
+    return "\n".join(
+        lines
+        + [
+            "---",
+            "",
+            f"# Solve Record: {outcome.title()} {rid}",
+            "",
+            "## Summary",
+            body,
+            "",
+        ]
+    )
 
 
-def add_backlink(text: str, relative_receipt: str) -> str:
-    marker = f"- `{relative_receipt}`"
-    count = backlink_count(text, relative_receipt)
-    if count:
-        if count != 1:
-            raise HandoffError("Ticket contains duplicate receipt backlinks")
-        return text
-    return text.rstrip() + f"\n\n## Solve Records\n\n{marker}\n"
+def backlink_count(text, backlink):
+    return len(re.findall(rf"(?m)^- `{re.escape(backlink)}`[ \t]*$", text))
 
 
-def backlink_count(text: str, relative_receipt: str) -> int:
-    return len(re.findall(rf"(?m)^- `{re.escape(relative_receipt)}`[ \t]*$", text))
+def add_backlink(text, backlink):
+    count = backlink_count(text, backlink)
+    if count > 1:
+        raise HandoffError("Ticket contains duplicate receipt backlinks")
+    return (
+        text if count else text.rstrip() + f"\n\n## Solve Records\n\n- `{backlink}`\n"
+    )
 
 
-def dirty_paths(worktree: Path) -> set[str]:
-    paths: set[str] = set()
+def candidate_identity(repo, ticket, allowed=frozenset(), require_clean=True):
+    if not ticket.branch or not ticket.worktree:
+        raise HandoffError(
+            "outcome handoff requires an active Claim branch and worktree"
+        )
+    wt = Path(ticket.worktree).resolve()
+    if not wt.is_dir():
+        raise HandoffError("claimed worktree is unavailable")
+    branch = git(wt, "symbolic-ref", "--quiet", "--short", "HEAD")
+    if branch != ticket.branch:
+        raise HandoffError("claimed branch does not match worktree HEAD")
+
+    def common(cwd):
+        p = Path(git(cwd, "rev-parse", "--git-common-dir"))
+        return (cwd / p).resolve() if not p.is_absolute() else p.resolve()
+
+    if common(repo) != common(wt):
+        raise HandoffError("claimed worktree does not belong to the repository")
+    dirty = set()
     for args in (
         ("diff", "--name-only"),
         ("diff", "--cached", "--name-only"),
         ("ls-files", "--others", "--exclude-standard"),
     ):
-        paths.update(line for line in git(worktree, *args).splitlines() if line)
-    return paths
-
-
-def current_candidate(
-    repo: Path,
-    ticket: frontier.Ticket,
-    *,
-    allowed_dirty: set[str] | None = None,
-) -> tuple[str, str]:
-    if not ticket.branch or not ticket.worktree:
-        raise HandoffError("candidate handoff requires an active Claim branch and worktree")
-    worktree = Path(ticket.worktree).resolve()
-    if not worktree.is_dir():
-        raise HandoffError("claimed worktree is unavailable")
-    actual_head = git(worktree, "symbolic-ref", "--quiet", "--short", "HEAD")
-    if actual_head != ticket.branch:
-        raise HandoffError("claimed branch does not match worktree HEAD")
-    repo_common = Path(git(repo, "rev-parse", "--git-common-dir"))
-    worktree_common = Path(git(worktree, "rev-parse", "--git-common-dir"))
-    repo_common = (repo / repo_common).resolve() if not repo_common.is_absolute() else repo_common.resolve()
-    worktree_common = (worktree / worktree_common).resolve() if not worktree_common.is_absolute() else worktree_common.resolve()
-    if repo_common != worktree_common:
-        raise HandoffError("claimed worktree does not belong to the repository")
-    unexpected_dirty = dirty_paths(worktree) - (allowed_dirty or set())
-    if unexpected_dirty:
+        dirty.update(filter(None, git(wt, *args).splitlines()))
+    if require_clean and dirty - set(allowed):
         raise HandoffError(
             "candidate worktree contains unrecorded changes: "
-            + ", ".join(sorted(unexpected_dirty))
+            + ", ".join(sorted(dirty - set(allowed)))
         )
-    return actual_head, git(worktree, "rev-parse", "HEAD")
+    return branch, git(wt, "rev-parse", "HEAD")
 
 
-def result(status: str, key: str, receipt: str = "", reason: str = "", next_action: str = "") -> dict:
-    if not next_action and status == "conflict":
-        next_action = "inspect the named conflict manually; do not retry unchanged"
-    elif not next_action and status == "retryable":
-        next_action = "retry same key"
-    payload = {"schema": SCHEMA, "status": status, "handoff_key": key}
-    if receipt:
-        payload["receipt"] = receipt
-    if reason:
-        payload["reason"] = reason
-    if next_action:
-        payload["next_action"] = next_action
-    return payload
+def resources(resources):
+    canonical = sorted(resources)
+    if len(canonical) != len(set(canonical)):
+        raise HandoffError(
+            "retained-resource declaration has ambiguous duplicate members"
+        )
+    return canonical
 
 
-def handoff(repo: Path, ticket_id: str, key: str, outcome: str, summary: str) -> dict:
+def verify_resources(repo, ticket, declared):
+    parsed = {}
+    for item in declared:
+        parts = item.split(":", 2)
+        if len(parts) != 3 or not all(parts):
+            raise HandoffError(
+                f"retained resource has stale or malformed identity: {item}"
+            )
+        owner, kind, value = parts
+        if owner != "solve-owned":
+            raise HandoffError(f"retained resource is not solve-owned: {item}")
+        if kind not in {"branch", "worktree"}:
+            raise HandoffError(f"retained resource type is unsupported: {item}")
+        if kind in parsed:
+            raise HandoffError(f"retained-resource ownership is ambiguous for {kind}")
+        parsed[kind] = value
+    if set(parsed) != {"branch", "worktree"}:
+        raise HandoffError(
+            "retained-resource declaration is partial; branch and worktree are both required"
+        )
+    if parsed["branch"] != ticket.branch:
+        raise HandoffError("retained branch does not match the active Claim")
+    if (
+        not ticket.worktree
+        or Path(parsed["worktree"]).resolve() != Path(ticket.worktree).resolve()
+    ):
+        raise HandoffError("retained worktree does not match the active Claim")
+    candidate_identity(repo, ticket, require_clean=False)
+
+
+def resumable_supported(text):
+    m = re.search(r"(?mi)^Resumable Claims:[ \t]*(.+)$", text)
+    return m is not None and m.group(1).strip().lower() in {"supported", "true", "yes"}
+
+
+def handoff(repo, ticket_id, key, outcome, body, next_action, declared):
     if not key.strip():
         raise HandoffError("handoff key is required")
-    if outcome != "candidate":
-        raise HandoffError("this operation accepts only candidate outcome")
-    if not summary.strip():
-        raise HandoffError("candidate Summary is required")
-
+    if outcome not in {"candidate"} | RECOVERY | TERMINAL:
+        raise HandoffError(f"unsupported outcome: {outcome}")
+    if not body.strip():
+        raise HandoffError("outcome Summary is required")
     with frontier.frontier_lock(repo):
-        contract, _contract_text = frontier.read_contract(repo)
-        tickets = frontier.load_tickets(repo, contract)
-        aliases = {alias: item for item in tickets for alias in item.aliases}
-        ticket = aliases.get(ticket_id)
+        contract, contract_text = frontier.read_contract(repo)
+        ticket = {
+            a: t for t in frontier.load_tickets(repo, contract) for a in t.aliases
+        }.get(ticket_id)
         if ticket is None:
             raise HandoffError(f"active Ticket is unavailable: {ticket_id}")
-        relative_ticket = ticket.path.relative_to(repo).as_posix()
-        canonical_path = receipt_path(repo, ticket, key)
-        found_path = existing_receipt(repo, key)
-        path = found_path or canonical_path
-        relative_receipt = path.relative_to(repo).as_posix()
+        declared, candidate = resources(declared), outcome == "candidate"
+        if candidate and (next_action or declared):
+            raise HandoffError("candidate handoff does not accept recovery inputs")
+        if outcome in RECOVERY and not next_action.strip():
+            raise HandoffError("recovery next action is required")
+        if outcome in TERMINAL and (next_action or declared):
+            raise HandoffError("terminal handoff does not accept recovery inputs")
+        retain = not candidate and next_action == "resume"
+        if retain:
+            if outcome not in RECOVERY:
+                raise HandoffError("terminal outcome cannot retain a resumable Claim")
+            if not declared:
+                raise HandoffError(
+                    "resume requires a non-empty complete retained-resource declaration"
+                )
+            if not resumable_supported(contract_text):
+                raise HandoffError("tracker does not support resumable Claims")
+            verify_resources(repo, ticket, declared)
+        elif declared:
+            raise HandoffError("retained resources require resume intent")
+        rel_ticket = ticket.path.relative_to(repo).as_posix()
+        canonical, found = receipt_path(repo, ticket, key), find_receipt(repo, key)
+        path = found or canonical
+        rel_receipt = path.relative_to(repo).as_posix()
+        if found is not None and found != canonical:
+            return result(
+                "conflict",
+                key,
+                rel_receipt,
+                "handoff key is bound to different immutable facts",
+                "use a new handoff key for changed immutable facts",
+            )
         backlink = Path(os.path.relpath(path, ticket.path.parent)).as_posix()
-
-        existing = path.read_text(encoding="utf-8") if path.is_file() else ""
-        if existing:
-            stored_head = receipt_scalar(existing, "head")
-            stored_head_sha = receipt_scalar(existing, "head_sha")
-            stored_outcome = receipt_scalar(existing, "outcome")
-            stored_tickets = receipt_tickets(existing)
-            stored_binding = receipt_scalar(existing, "binding_digest")
-            stored_key_value = receipt_scalar(existing, "handoff_key")
+        allowed = {rel_ticket, rel_receipt}
+        binding = {
+            "repo": str(repo),
+            "handoff_key": key,
+            "tickets": [rel_ticket],
+            "outcome": outcome,
+        }
+        if candidate:
+            head, sha = candidate_identity(
+                repo, ticket, allowed if path.is_file() else set()
+            )
+            binding.update(head=head, head_sha=sha)
+        elif outcome in RECOVERY:
+            binding.update(
+                recovery_next_action=next_action, retained_resources=declared
+            )
+        expected = render(binding, body.strip())
+        if path.is_file():
+            old = path.read_text()
             try:
-                stored_key = json.loads(stored_key_value)
-            except json.JSONDecodeError as error:
-                raise HandoffError("canonical receipt handoff key is malformed") from error
-            if path != canonical_path:
+                stored_key = json.loads(scalar(old, "handoff_key"))
+            except json.JSONDecodeError as e:
+                raise HandoffError("canonical receipt handoff key is malformed") from e
+            if path != canonical or stored_key != key:
                 return result(
                     "conflict",
                     key,
-                    relative_receipt,
+                    rel_receipt,
                     "handoff key is bound to different immutable facts",
                     "use a new handoff key for changed immutable facts",
                 )
-            if stored_key != key:
-                return result(
-                    "conflict",
-                    key,
-                    relative_receipt,
-                    "canonical receipt handoff key failed verification",
-                    "inspect the canonical receipt manually; do not retry unchanged",
-                )
-            stored_facts = {
-                "repo": str(repo), "handoff_key": stored_key, "tickets": stored_tickets,
-                "outcome": stored_outcome, "head": stored_head, "head_sha": stored_head_sha,
+            tickets = [
+                line[4:].strip()
+                for line in re.search(r"(?m)^tickets:\n((?:  - .+\n?)+)", old)
+                .group(1)
+                .splitlines()
+            ]
+            stored = {
+                "repo": str(repo),
+                "handoff_key": stored_key,
+                "tickets": tickets,
+                "outcome": scalar(old, "outcome"),
             }
-            if stored_binding != binding_digest(stored_facts):
+            if candidate:
+                stored.update(
+                    head=scalar(old, "head"), head_sha=scalar(old, "head_sha")
+                )
+            elif outcome in RECOVERY:
+                stored.update(
+                    recovery_next_action=json.loads(
+                        scalar(old, "recovery_next_action")
+                    ),
+                    retained_resources=list_field(old, "retained_resources"),
+                )
+            if scalar(old, "binding_digest") != digest(stored):
                 return result(
                     "conflict",
                     key,
-                    relative_receipt,
+                    rel_receipt,
                     "canonical receipt binding digest failed verification",
                     "inspect the canonical receipt manually; do not retry unchanged",
                 )
-            allowed_dirty = {relative_ticket, relative_receipt}
-            head, head_sha = current_candidate(repo, ticket, allowed_dirty=allowed_dirty)
-            binding = {
-                "repo": str(repo), "handoff_key": key, "tickets": [relative_ticket],
-                "outcome": outcome, "head": head, "head_sha": head_sha,
-            }
-            if stored_binding != binding_digest(binding):
+            if stored != binding:
                 return result(
                     "conflict",
                     key,
-                    relative_receipt,
+                    rel_receipt,
                     "handoff key is bound to different immutable facts",
                     "use a new handoff key for changed immutable facts",
                 )
-            expected_receipt = render_receipt(
-                relative_ticket,
-                key,
-                stored_binding,
-                head,
-                head_sha,
-                receipt_summary(existing),
-            )
-            if existing != expected_receipt:
+            expected = render(binding, summary(old))
+            if old != expected:
                 return result(
                     "conflict",
                     key,
-                    relative_receipt,
+                    rel_receipt,
                     "canonical receipt failed complete verification",
                     "inspect the canonical receipt manually; do not retry unchanged",
                 )
         else:
+            allowed_initial_states = {contract.ready_state}
+            if outcome == "superseded":
+                allowed_initial_states.update(contract.human_states)
             if (
-                ticket.status != contract.ready_state
+                ticket.status not in allowed_initial_states
                 or contract.claim_value not in ticket.flags
-                or backlink_count(ticket.container_text, backlink) != 0
+                or backlink_count(ticket.container_text, backlink)
             ):
-                raise HandoffError("candidate handoff requires a valid active Ticket and Claim")
-            head, head_sha = current_candidate(repo, ticket)
-            binding = {
-                "repo": str(repo), "handoff_key": key, "tickets": [relative_ticket],
-                "outcome": outcome, "head": head, "head_sha": head_sha,
-            }
+                raise HandoffError(
+                    "outcome handoff requires a valid active Ticket and Claim"
+                )
             path.parent.mkdir(parents=True, exist_ok=True)
-            expected_receipt = render_receipt(
-                relative_ticket, key, binding_digest(binding), head, head_sha, summary.strip()
-            )
-            publication.atomic_write(path, expected_receipt)
+            publication.atomic_write(path, expected)
             if os.environ.get("ULTRA_HANDOFF_FAIL_AFTER_RECEIPT") == "1":
-                raise RetryableHandoff("receipt installed; retry same key to converge tracker state")
-
-        current_backlinks = backlink_count(ticket.container_text, backlink)
-        claimed = contract.claim_value in ticket.flags
-        if (
-            ticket.status == contract.completed_state
-            and not claimed
-            and current_backlinks == 1
-        ):
-            transition_needed = False
+                raise RetryableHandoff(
+                    "receipt installed; retry same key to converge tracker state"
+                )
+        status = (
+            contract.completed_state
+            if candidate
+            else "needs-info"
+            if outcome == "needs-info"
+            else "ready-for-human"
+            if outcome in {"blocked", "ready-for-human"}
+            else ticket.status
+            if outcome == "superseded"
+            else contract.ready_state
+        )
+        claimed, links = (
+            contract.claim_value in ticket.flags,
+            backlink_count(ticket.container_text, backlink),
+        )
+        if ticket.status == status and claimed == retain and links == 1:
+            transition = False
         elif (
-            ticket.status == contract.ready_state
+            ticket.status
+            in (
+                {contract.ready_state}
+                | (set(contract.human_states) if outcome == "superseded" else set())
+            )
             and claimed
-            and current_backlinks == 0
+            and links == 0
         ):
-            transition_needed = True
+            transition = True
         else:
             return result(
                 "conflict",
                 key,
-                relative_receipt,
+                rel_receipt,
                 "Ticket state, Claim, and backlink do not match an allowed handoff transition",
                 "inspect Ticket state, Claim, and backlink manually; do not retry unchanged",
             )
-
-        if transition_needed:
-            current = ticket.path.read_text(encoding="utf-8")
-            inner = current[ticket.inner_start:ticket.inner_end]
+        if transition:
+            current = ticket.path.read_text()
+            inner = current[ticket.inner_start : ticket.inner_end]
             inner = frontier.replace_or_insert_field(
-                inner, contract.state_fields, ticket.state_field or contract.state_fields[0], contract.completed_state
+                inner,
+                contract.state_fields,
+                ticket.state_field or contract.state_fields[0],
+                status,
+            )
+            flags = ", ".join(
+                ticket.flags
+                if retain
+                else [f for f in ticket.flags if f != contract.claim_value]
             )
             inner = frontier.replace_or_insert_field(
-                inner, contract.claim_aliases, contract.claim_field, remove_claim(ticket.flags, contract.claim_value)
+                inner, contract.claim_aliases, contract.claim_field, flags
             )
-            updated = current[:ticket.inner_start] + inner + current[ticket.inner_end:]
-            updated = add_backlink(updated, backlink)
+            updated = add_backlink(
+                current[: ticket.inner_start] + inner + current[ticket.inner_end :],
+                backlink,
+            )
             try:
                 if os.environ.get("ULTRA_HANDOFF_FAIL_BEFORE_TICKET_WRITE") == "1":
                     raise OSError("injected Ticket transition failure")
                 publication.atomic_write(ticket.path, updated)
-            except OSError as error:
+            except OSError as e:
                 raise RetryableHandoff(
-                    f"receipt installed but Ticket transition failed: {error}"
-                ) from error
-
-        refreshed = frontier.load_tickets(repo, contract)
-        refreshed_aliases = {alias: item for item in refreshed for alias in item.aliases}
-        final_ticket = refreshed_aliases.get(ticket_id)
-        final_text = ticket.path.read_text(encoding="utf-8")
-        final_head = ("", "")
-        if final_ticket is not None:
-            final_head = current_candidate(
-                repo,
-                final_ticket,
-                allowed_dirty={relative_ticket, relative_receipt},
-            )
+                    f"receipt installed but Ticket transition failed: {e}"
+                ) from e
+        final = {
+            a: t for t in frontier.load_tickets(repo, contract) for a in t.aliases
+        }.get(ticket_id)
         if (
-            final_ticket is None
-            or final_ticket.status != contract.completed_state
-            or contract.claim_value in final_ticket.flags
-            or backlink_count(final_text, backlink) != 1
-            or not path.is_file()
-            or path.read_text(encoding="utf-8") != expected_receipt
-            or final_head != (head, head_sha)
+            final is None
+            or final.status != status
+            or (contract.claim_value in final.flags) != retain
+            or backlink_count(ticket.path.read_text(), backlink) != 1
+            or path.read_text() != expected
         ):
-            return result("retryable", key, relative_receipt, "handoff postcondition is incomplete", "retry same key")
-        return result("success", key, relative_receipt)
+            return result(
+                "retryable", key, rel_receipt, "handoff postcondition is incomplete"
+            )
+        if candidate and candidate_identity(repo, final, allowed) != (
+            binding["head"],
+            binding["head_sha"],
+        ):
+            return result(
+                "retryable",
+                key,
+                rel_receipt,
+                "candidate identity postcondition is incomplete",
+            )
+        if retain:
+            verify_resources(repo, final, declared)
+        return result("success", key, rel_receipt)
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", default=".")
-    parser.add_argument("--ticket-id", required=True)
-    parser.add_argument("--handoff-key", required=True)
-    parser.add_argument("--outcome", required=True)
-    parser.add_argument("--summary", required=True)
-    return parser.parse_args()
-
-
-def main() -> int:
-    args = parse_args()
-    key = args.handoff_key
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    for name in ("ticket-id", "handoff-key", "outcome", "summary"):
+        p.add_argument(f"--{name}", required=True)
+    p.add_argument("--repo", default=".")
+    p.add_argument("--recovery-next-action", default="")
+    p.add_argument("--retained-resource", action="append", default=[])
+    a = p.parse_args()
     try:
-        payload = handoff(Path(args.repo).resolve(), args.ticket_id, key, args.outcome, args.summary)
-    except RetryableHandoff as error:
-        payload = result("retryable", key, reason=str(error), next_action="retry same key")
-    except (HandoffError, frontier.FrontierError, OSError) as error:
-        payload = result("conflict", key, reason=str(error))
+        payload = handoff(
+            Path(a.repo).resolve(),
+            a.ticket_id,
+            a.handoff_key,
+            a.outcome,
+            a.summary,
+            a.recovery_next_action,
+            a.retained_resource,
+        )
+    except RetryableHandoff as e:
+        payload = result("retryable", a.handoff_key, reason=str(e))
+    except (HandoffError, frontier.FrontierError, OSError) as e:
+        payload = result("conflict", a.handoff_key, reason=str(e))
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 

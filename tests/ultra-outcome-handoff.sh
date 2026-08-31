@@ -3,10 +3,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 FACADE="$ROOT/skills/engineering/ultra/scripts/ultra_tracker.py"
+BOARD="$ROOT/skills/in-progress/maintainer-board/scripts/maintainer-board.py"
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
-python3 - "$TMP_ROOT" "$FACADE" <<'PY'
+python3 - "$TMP_ROOT" "$FACADE" "$BOARD" <<'PY'
 from __future__ import annotations
 
 import hashlib
@@ -16,7 +17,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-root, facade = map(Path, sys.argv[1:])
+root, facade, board = map(Path, sys.argv[1:])
 
 
 def run(*command: str, check: bool = True, env: dict[str, str] | None = None):
@@ -51,6 +52,7 @@ Solve branch field: Solve Branch
 Solve branch field aliases: Solve Branch, Branch
 Solve worktree field: Solve Worktree
 Solve worktree field aliases: Solve Worktree, Worktree
+Resumable Claims: supported
 """, encoding="utf-8")
 ticket = repo / ".scratch/feature/issues/A.md"
 ticket.parent.mkdir(parents=True)
@@ -75,6 +77,32 @@ def handoff(key: str, summary: str = "Implemented and validated the candidate.",
         "--repo", str(repo), "--ticket-id", "A", "--handoff-key", key,
         "--outcome", "candidate", "--summary", summary,
         check=check,
+    )
+
+
+def recovery(
+    key: str,
+    outcome: str,
+    next_action: str,
+    *resources: str,
+    check: bool = True,
+):
+    command = [
+        sys.executable, str(facade), "ticket", "handoff",
+        "--repo", str(repo), "--ticket-id", "A", "--handoff-key", key,
+        "--outcome", outcome, "--summary", f"Recovery handoff for {outcome}.",
+        "--recovery-next-action", next_action,
+    ]
+    for resource in resources:
+        command.extend(["--retained-resource", resource])
+    return run(*command, check=check)
+
+
+def terminal(key: str, outcome: str):
+    return run(
+        sys.executable, str(facade), "ticket", "handoff",
+        "--repo", str(repo), "--ticket-id", "A", "--handoff-key", key,
+        "--outcome", outcome, "--summary", f"Terminal handoff for {outcome}.",
     )
 
 
@@ -231,6 +259,142 @@ head_conflict = json.loads(handoff(key, check=False).stdout)["data"]
 assert head_conflict["status"] == "conflict"
 assert head_conflict["next_action"]
 assert receipt.read_text(encoding="utf-8") == text
+
+# Recovery outcomes use the same facade while keeping Ticket state and Claim
+# disposition as separate postconditions.
+recovery_cases = [
+    ("blocked", "ready-for-human", "open"),
+    ("needs-info", "needs-info", "open"),
+    ("ready-for-human", "ready-for-human", "open"),
+    ("abandoned", "ready-for-agent", "closed"),
+    ("superseded", "ready-for-agent", "closed"),
+]
+for recovery_outcome, expected_status, expected_state in recovery_cases:
+    ticket.write_text(claimed_text, encoding="utf-8")
+    recovery_key = f"recovery-{recovery_outcome}"
+    invocation = terminal(recovery_key, recovery_outcome) if recovery_outcome in {"abandoned", "superseded"} else recovery(recovery_key, recovery_outcome, "inspect")
+    recovery_data = json.loads(invocation.stdout)["data"]
+    assert recovery_data["status"] == "success", recovery_data
+    recovery_text = (repo / recovery_data["receipt"]).read_text(encoding="utf-8")
+    assert f"outcome: {recovery_outcome}" in recovery_text
+    assert f"state: {expected_state}" in recovery_text
+    if recovery_outcome not in {"abandoned", "superseded"}:
+        assert 'recovery_next_action: "inspect"' in recovery_text
+    else:
+        assert "recovery_next_action:" not in recovery_text
+    final_ticket = ticket.read_text(encoding="utf-8")
+    assert f"Status: {expected_status}" in final_ticket
+    assert "solve-in-progress" not in final_ticket
+    projection_data = json.loads(run(sys.executable, str(board), "--repo", str(repo), "--json").stdout)
+    projection_records = [item for bucket in projection_data["solve_records"]["buckets"].values() for item in bucket]
+    projected = next(item for item in projection_records if item["path"] == recovery_data["receipt"])
+    expected_projection = "closed_terminal_history" if expected_state == "closed" else "normal_active_recovery"
+    assert projected["handoff_projection"] == expected_projection
+    if expected_state == "closed":
+        inconsistent_ticket = final_ticket.replace("Flags:", "Flags: solve-in-progress")
+        ticket.write_text(inconsistent_ticket, encoding="utf-8")
+        inconsistent_data = json.loads(run(sys.executable, str(board), "--repo", str(repo), "--json").stdout)
+        inconsistent_records = [item for bucket in inconsistent_data["solve_records"]["buckets"].values() for item in bucket]
+        inconsistent = next(item for item in inconsistent_records if item["path"] == recovery_data["receipt"])
+        assert inconsistent["handoff_projection"] == "inconsistent_handoff_attention"
+        ticket.write_text(final_ticket, encoding="utf-8")
+        terminal_receipt_path = repo / recovery_data["receipt"]
+        canonical_terminal_text = terminal_receipt_path.read_text(encoding="utf-8")
+        terminal_tampers = {
+            "recovery action": 'recovery_next_action: "resume"\n',
+            "retained resources": (
+                "retained_resources:\n"
+                '  - "solve-owned:branch:solve/A"\n'
+                f'  - "solve-owned:worktree:{repo}"\n'
+            ),
+        }
+        for tamper_name, injected_fields in terminal_tampers.items():
+            terminal_receipt_path.write_text(
+                canonical_terminal_text.replace("---\n\n# Solve Record", injected_fields + "---\n\n# Solve Record"),
+                encoding="utf-8",
+            )
+            tamper_data = json.loads(run(sys.executable, str(board), "--repo", str(repo), "--json").stdout)
+            tamper_records = [item for bucket in tamper_data["solve_records"]["buckets"].values() for item in bucket]
+            tampered_terminal = next(item for item in tamper_records if item["path"] == recovery_data["receipt"])
+            assert tampered_terminal["handoff_projection"] == "inconsistent_handoff_attention", tamper_name
+        terminal_receipt_path.write_text(canonical_terminal_text, encoding="utf-8")
+
+# Creation-time superseded preserves an already actionable Ticket state.
+ticket.write_text(claimed_text.replace("Status: ready-for-agent", "Status: needs-info"), encoding="utf-8")
+preserved = json.loads(terminal("superseded-needs-info", "superseded").stdout)["data"]
+assert preserved["status"] == "success", preserved
+assert "Status: needs-info" in ticket.read_text(encoding="utf-8")
+
+# Resume retains ownership only for the complete, aligned, solve-owned Claim
+# resource set. The actively claimed blocked Ticket remains outside frontier.
+ticket.write_text(claimed_text, encoding="utf-8")
+retained = json.loads(recovery(
+    "retained-recovery", "blocked", "resume",
+    "solve-owned:branch:solve/A", f"solve-owned:worktree:{repo}",
+).stdout)["data"]
+assert retained["status"] == "success", retained
+retained_text = (repo / retained["receipt"]).read_text(encoding="utf-8")
+assert "retained_resources:" in retained_text
+assert "solve-owned:branch:solve/A" in retained_text
+assert f"solve-owned:worktree:{repo}" in retained_text
+retained_ticket = ticket.read_text(encoding="utf-8")
+assert "Status: ready-for-human" in retained_ticket
+assert "Flags: solve-in-progress" in retained_ticket
+frontier_result = run(
+    sys.executable, str(facade), "ticket", "frontier", "--repo", str(repo),
+    "--ticket-id", "A",
+)
+assert json.loads(frontier_result.stdout)["data"]["claimable"] == []
+board_data = json.loads(run(sys.executable, str(board), "--repo", str(repo), "--json").stdout)
+board_records = [item for bucket in board_data["solve_records"]["buckets"].values() for item in bucket]
+retained_projection = next(item for item in board_records if item["path"] == retained["receipt"])
+assert retained_projection["handoff_projection"] == "retained_recovery_ownership"
+retained_receipt_path = repo / retained["receipt"]
+canonical_retained_text = retained_receipt_path.read_text(encoding="utf-8")
+retained_receipt_path.write_text(canonical_retained_text.replace("state: open", "state: closed"), encoding="utf-8")
+state_tamper_data = json.loads(run(sys.executable, str(board), "--repo", str(repo), "--json").stdout)
+state_tamper_records = [item for bucket in state_tamper_data["solve_records"]["buckets"].values() for item in bucket]
+state_tamper = next(item for item in state_tamper_records if item["path"] == retained["receipt"])
+assert state_tamper["handoff_projection"] == "inconsistent_handoff_attention"
+retained_receipt_path.write_text(canonical_retained_text, encoding="utf-8")
+ticket.write_text(retained_ticket.replace("Solve Branch: solve/A", "Solve Branch: solve/other"), encoding="utf-8")
+attention_data = json.loads(run(sys.executable, str(board), "--repo", str(repo), "--json").stdout)
+attention_records = [item for bucket in attention_data["solve_records"]["buckets"].values() for item in bucket]
+attention = next(item for item in attention_records if item["path"] == retained["receipt"])
+assert attention["handoff_projection"] == "inconsistent_handoff_attention"
+ticket.write_text(retained_ticket, encoding="utf-8")
+
+# Every unsafe retain/release combination refuses before creating a receipt.
+unsafe_cases = [
+    ("resume-without-resources", "resume", []),
+    ("resources-without-resume", "inspect", ["solve-owned:branch:solve/A", f"solve-owned:worktree:{repo}"]),
+    ("partial-declaration", "resume", ["solve-owned:branch:solve/A"]),
+    ("missing-resource", "resume", ["solve-owned:branch:missing", f"solve-owned:worktree:{repo}"]),
+    ("user-owned-resource", "resume", ["user-owned:branch:solve/A", f"solve-owned:worktree:{repo}"]),
+    ("branch-worktree-mismatch", "resume", ["solve-owned:branch:solve/A", f"solve-owned:worktree:{root}"]),
+    ("stale-identity", "resume", ["solve-owned:branch:refs/heads/solve/A", f"solve-owned:worktree:{repo}"]),
+    ("ambiguous-ownership", "resume", ["solve-owned:branch:solve/A", "user-owned:branch:solve/A", f"solve-owned:worktree:{repo}"]),
+]
+for unsafe_key, next_action, resources in unsafe_cases:
+    ticket.write_text(claimed_text, encoding="utf-8")
+    unsafe = json.loads(recovery(unsafe_key, "blocked", next_action, *resources).stdout)["data"]
+    assert unsafe["status"] == "conflict", (unsafe_key, unsafe)
+    assert unsafe["next_action"]
+    unsafe_name = hashlib.sha256(unsafe_key.encode()).hexdigest() + ".md"
+    assert not (repo / ".scratch/feature/solve-records" / unsafe_name).exists()
+
+# A tracker that does not declare resumable Claim support fails closed.
+ticket.write_text(claimed_text, encoding="utf-8")
+contract_path = repo / "docs/agents/ultra-tracker.md"
+contract_text = contract_path.read_text(encoding="utf-8")
+contract_path.write_text(contract_text.replace("Resumable Claims: supported", "Resumable Claims: unsupported"), encoding="utf-8")
+unsupported = json.loads(recovery(
+    "unsupported-resume", "blocked", "resume",
+    "solve-owned:branch:solve/A", f"solve-owned:worktree:{repo}",
+).stdout)["data"]
+assert unsupported["status"] == "conflict"
+assert "resumable Claims" in unsupported["reason"]
+contract_path.write_text(contract_text, encoding="utf-8")
 
 print("ultra outcome handoff fixture passed")
 PY

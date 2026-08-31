@@ -548,6 +548,91 @@ def build_snapshot(repo):
     issue_buckets = bucket_items(issues, ISSUE_BUCKETS)
     solve_records = load_solve_records_dashboard(repo)
     solve_buckets = solve_records.get("buckets", {})
+    issues_by_path = {issue["path"]: issue for issue in issues}
+    live_worktrees = registered_worktrees(repo)
+    for records in solve_buckets.values():
+        for record in records:
+            outcome = record.get("outcome")
+            if record.get("malformed"):
+                record["handoff_projection"] = "inconsistent_handoff_attention"
+                continue
+            recovery_outcomes = {"blocked", "needs-info", "ready-for-human"}
+            terminal_outcomes = {"abandoned", "superseded"}
+            if outcome not in recovery_outcomes | terminal_outcomes:
+                continue
+            linked = [issues_by_path.get(path) for path in record.get("issues", [])]
+            identities = record.get("retained_resource_identities") or []
+            resource_values = {identity["kind"]: identity["value"] for identity in identities}
+            resources_valid = set(resource_values) == {"branch", "worktree"}
+            if resources_valid:
+                declared_worktree = resolve_worktree(repo, resource_values["worktree"])
+                registered = live_worktrees.get(str(declared_worktree))
+                resources_valid = bool(
+                    declared_worktree.exists()
+                    and registered
+                    and registered.get("branch") == resource_values["branch"]
+                    and resource_values["branch"] in ref_map(repo)
+                    and all(
+                        issue
+                        and issue.get("solve_branch") == resource_values["branch"]
+                        and resolve_worktree(repo, issue.get("solve_worktree")) == declared_worktree
+                        for issue in linked
+                    )
+                )
+            backlinks_valid = bool(linked) and all(
+                issue and any(
+                    (repo / issue["path"]).parent.joinpath(backlink).resolve()
+                    == (repo / record["path"]).resolve()
+                    for backlink in issue.get("solve_records", [])
+                )
+                for issue in linked
+            )
+            if outcome in terminal_outcomes:
+                allowed_statuses = (
+                    {"ready-for-agent"}
+                    if outcome == "abandoned"
+                    else {"ready-for-agent", "ready-for-human", "needs-info"}
+                )
+                terminal_consistent = (
+                    record.get("state") == "closed"
+                    and backlinks_valid
+                    and all(
+                        issue
+                        and issue.get("status") in allowed_statuses
+                        and "solve-in-progress" not in issue.get("flags", [])
+                        for issue in linked
+                    )
+                )
+                record["handoff_projection"] = (
+                    "closed_terminal_history"
+                    if terminal_consistent
+                    else "inconsistent_handoff_attention"
+                )
+                continue
+
+            expected_status = "needs-info" if outcome == "needs-info" else "ready-for-human"
+            action = record.get("recovery_action")
+            retained = record.get("retained_resources") or []
+            recovery_consistent = (
+                record.get("state") == "open"
+                and backlinks_valid
+                and all(
+                    issue
+                    and issue.get("status") == expected_status
+                    and (("solve-in-progress" in issue.get("flags", [])) == (action == "resume"))
+                    for issue in linked
+                )
+                and (
+                    (action == "resume" and resources_valid)
+                    or (action != "resume" and not retained)
+                )
+            )
+            if not recovery_consistent:
+                record["handoff_projection"] = "inconsistent_handoff_attention"
+            elif action == "resume":
+                record["handoff_projection"] = "retained_recovery_ownership"
+            else:
+                record["handoff_projection"] = "normal_active_recovery"
     solve_count = solve_records.get("record_count", sum(len(solve_buckets.get(bucket, [])) for bucket in solve_buckets))
 
     return {
