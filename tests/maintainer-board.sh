@@ -572,7 +572,6 @@ EOF
 JSON_OUT="$TMPDIR_ROOT/board.json"
 HTML_OUT="$TMPDIR_ROOT/board.html"
 DEFAULT_HTML_OUT="$(git -C "$REPO" rev-parse --show-toplevel)/.scratch/maintainer-board/index.html"
-FALLBACK_JSON_OUT="$TMPDIR_ROOT/fallback-board.json"
 STANDALONE_SCRIPT="$TMPDIR_ROOT/standalone/maintainer-board.py"
 
 python3 "$BOARD_SCRIPT" --repo "$REPO" --json >"$JSON_OUT"
@@ -580,17 +579,20 @@ python3 "$BOARD_SCRIPT" --repo "$REPO" --html "$HTML_OUT" >"$TMPDIR_ROOT/html-pa
 DEFAULT_STDOUT="$(cd "$REPO" && python3 "$BOARD_SCRIPT")"
 mkdir -p "$(dirname "$STANDALONE_SCRIPT")"
 cp "$BOARD_SCRIPT" "$STANDALONE_SCRIPT"
+mkdir -p "$(dirname "$STANDALONE_SCRIPT")/solve-records/scripts"
+cp "$REPO_ROOT/skills/engineering/solve-records/scripts/solve-records.py" \
+  "$(dirname "$STANDALONE_SCRIPT")/solve-records/scripts/solve-records.py"
 mkdir -p "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts"
 cp "$LOCAL_PUBLICATION_SCRIPT" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts/local_ticket_publication.py"
 cp "$(dirname "$LOCAL_PUBLICATION_SCRIPT")/local_ticket_surface.py" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts/local_ticket_surface.py"
-python3 "$STANDALONE_SCRIPT" --repo "$REPO" --json >"$FALLBACK_JSON_OUT"
+python3 "$STANDALONE_SCRIPT" --repo "$REPO" --json >"$TMPDIR_ROOT/standalone-board.json"
 
 if [[ "$DEFAULT_STDOUT" != "$DEFAULT_HTML_OUT" ]]; then
   echo "expected default HTML path '$DEFAULT_HTML_OUT', got '$DEFAULT_STDOUT'" >&2
   exit 1
 fi
 
-python3 - "$JSON_OUT" "$HTML_OUT" "$DEFAULT_HTML_OUT" "$FALLBACK_JSON_OUT" <<'PY'
+python3 - "$JSON_OUT" "$HTML_OUT" "$DEFAULT_HTML_OUT" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -598,7 +600,6 @@ from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 html = Path(sys.argv[2]).read_text(encoding="utf-8")
 default_html = Path(sys.argv[3]).read_text(encoding="utf-8")
-fallback = json.loads(Path(sys.argv[4]).read_text(encoding="utf-8"))
 
 assert data["schema_version"] == "maintainer-board/v1"
 assert data["issues"]["count"] == 17
@@ -638,13 +639,15 @@ assert ready_issue["checklist"] == {"total": 2, "done": 1, "open": 1}
 
 records = data["solve_records"]
 assert records["count"] == 21
-assert records["counts"]["ready"] == 5
-assert records["counts"]["manual"] == 5
-assert records["counts"]["cleanup"] == 2
-assert records["counts"]["recent"] == 1
-assert records["counts"]["historical"] == 2
-assert records["counts"]["recovery"] == 3
-assert records["counts"]["stale_or_malformed"] == 3
+assert records["counts"] == {
+    "ready": 5,
+    "manual": 5,
+    "cleanup": 2,
+    "recent": 1,
+    "historical": 2,
+    "recovery": 3,
+    "stale_or_malformed": 3,
+}, records["counts"]
 assert "20260702-legacy-terminal" in {
     record["id"] for record in records["buckets"]["historical"]
 }
@@ -719,7 +722,7 @@ def flattened(snapshot):
         for record in bucket
     ]
 
-for snapshot in (data, fallback):
+for snapshot in (data,):
     items = flattened(snapshot)
     ids = [record["id"] for record in items]
     assert len(ids) == len(set(ids)) == snapshot["solve_records"]["count"]
@@ -730,8 +733,6 @@ for snapshot in (data, fallback):
         for record in snapshot["solve_records"]["buckets"][bucket]
     }
     assert recovery_ids.isdisjoint(candidate_lane_ids)
-
-assert fallback["solve_records"]["counts"]["recovery"] == records["counts"]["recovery"]
 
 assert "Maintainer Board" in html
 assert "Ready issue" in html
@@ -759,7 +760,6 @@ assert "label-needs-info" in html
 assert "label-manual-required" in html
 assert "status:" not in html.lower()
 assert default_html == html
-assert fallback["issues"]["counts"] == data["issues"]["counts"]
 PY
 
 CONFIGURED_FILE_REPO="$TMPDIR_ROOT/configured-file-per"

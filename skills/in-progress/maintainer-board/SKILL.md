@@ -69,7 +69,6 @@ python /path/to/maintainer-board/scripts/maintainer-board.py --json
 
 Treat the helper as read-only except for writing the HTML path. It does not run tests, builds, installer discovery, merges, cleanup, Agents, or models. It derives issue state from explicit metadata/frontmatter, not natural-language prose. Use `$solve-records` for advancing, merging, closing, or cleaning solve records.
 
-When installed beside `$solve-records`, the board uses its canonical read helper.
-A standalone board copy falls back to its bundled read-only classifier so candidate,
-recovery, malformed, stale, and cleanup lanes remain available. The fallback never
-implements candidate or recovery mutations.
+The board requires the canonical `$solve-records` read helper and consumes its
+normalized domain view. It does not maintain an independent receipt schema; install
+the two skills together so compact and historical records receive identical parsing.

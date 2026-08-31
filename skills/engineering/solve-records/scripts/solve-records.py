@@ -13,19 +13,25 @@ COMMON_REQUIRED = {
     "kind",
     "state",
     "issues",
-    "created_at",
-    "cleanup_done",
 }
 
-CANDIDATE_REQUIRED = {
-    "base",
-    "base_sha",
+CANDIDATE_IDENTITY_REQUIRED = {
     "head",
     "head_sha",
+}
+
+CANDIDATE_GATE_REQUIRED = {
+    "base",
+    "base_sha",
     "worktree",
 }
 
-LEGACY_CANDIDATE_REQUIRED = COMMON_REQUIRED | CANDIDATE_REQUIRED
+LEGACY_CANDIDATE_REQUIRED = (
+    COMMON_REQUIRED
+    | CANDIDATE_IDENTITY_REQUIRED
+    | CANDIDATE_GATE_REQUIRED
+    | {"created_at", "cleanup_done"}
+)
 
 OUTCOMES = {
     "candidate",
@@ -198,6 +204,20 @@ def section(text, name):
     return text[start:end]
 
 
+def sections(text, name):
+    marker = f"## {name}\n"
+    blocks = []
+    start = 0
+    while True:
+        heading = text.find(marker, start)
+        if heading == -1:
+            return blocks
+        content_start = heading + len(marker)
+        end = text.find("\n## ", content_start)
+        blocks.append(text[content_start:] if end == -1 else text[content_start:end])
+        start = content_start if end == -1 else end + 1
+
+
 def closed_candidate_terminal(text, state, outcome):
     if state != "closed" or outcome != "candidate":
         return False
@@ -260,6 +280,26 @@ def labeled_value(block, label):
 
 def linked_ticket_value(block):
     return labeled_value(block, "Linked Ticket") or labeled_value(block, "Linked Tickets")
+
+
+def normalized_membership(value):
+    if isinstance(value, list):
+        members = value
+    elif value:
+        members = str(value).split(",")
+    else:
+        members = []
+    return sorted(
+        dict.fromkeys(
+            str(member).strip().strip("`")
+            for member in members
+            if str(member).strip()
+        )
+    )
+
+
+def normalized_scalar(value):
+    return str(value or "").strip().strip("`")
 
 
 def missing_fields(data, fields):
@@ -330,6 +370,7 @@ def parse_record(repo, path):
         return data
 
     current = None
+    frontmatter_values = {}
     for line in text[4:end].splitlines():
         if line.startswith("  - ") and current:
             existing = data.get(current)
@@ -345,10 +386,35 @@ def parse_record(repo, path):
         key = key.strip()
         value = value.strip()
         current = key
-        data[key] = [] if key == "issues" and not value else value
+        parsed = [] if key in {"issues", "tickets"} and not value else value
+        frontmatter_values.setdefault(key, []).append(parsed)
+        data[key] = parsed
 
-    if "issues" in data and not isinstance(data["issues"], list):
-        data["issues"] = [data["issues"]] if data["issues"] else []
+    duplicate_conflicts = []
+    for key, values in frontmatter_values.items():
+        normalized = [
+            normalized_membership(value)
+            if key in {"issues", "tickets"}
+            else value
+            for value in values
+        ]
+        if any(value != normalized[0] for value in normalized[1:]):
+            duplicate_conflicts.append(f"duplicate {key}")
+    if duplicate_conflicts:
+        data["malformed"] = "conflicting representations: " + ", ".join(duplicate_conflicts)
+        return data
+
+    issue_membership = normalized_membership(data.get("issues"))
+    ticket_membership = normalized_membership(data.get("tickets"))
+    if issue_membership and ticket_membership and issue_membership != ticket_membership:
+        data["malformed"] = (
+            "conflicting representations: membership issues="
+            + ",".join(issue_membership)
+            + " tickets="
+            + ",".join(ticket_membership)
+        )
+        return data
+    data["issues"] = issue_membership or ticket_membership
 
     missing = missing_fields(data, COMMON_REQUIRED)
     if missing:
@@ -358,8 +424,9 @@ def parse_record(repo, path):
         data["malformed"] = f"invalid kind: {data['kind']}"
         return data
 
+    had_explicit_outcome = "outcome" in data
     outcome = data.get("outcome", "").lower()
-    if "outcome" not in data:
+    if not had_explicit_outcome:
         missing_legacy = missing_fields(data, LEGACY_CANDIDATE_REQUIRED)
         if missing_legacy:
             data["malformed"] = "missing outcome and legacy candidate fields: " + ",".join(missing_legacy)
@@ -377,31 +444,113 @@ def parse_record(repo, path):
         data["closed_candidate_terminal"] = True
     elif outcome in LEGACY_TERMINAL_OUTCOMES and data.get("state") == "merged":
         data["legacy_terminal_outcome"] = outcome
+        data["outcome"] = "candidate"
     elif outcome not in OUTCOMES:
         data["malformed"] = f"invalid outcome: {outcome}"
         return data
     else:
         data["outcome"] = outcome
-        if outcome == "candidate":
-            missing_candidate = missing_fields(data, CANDIDATE_REQUIRED)
-            if missing_candidate:
-                data["malformed"] = "missing candidate fields: " + ",".join(missing_candidate)
-                return data
+
+    ticket_block = section(text, "Ticket")
+    outcome_block = section(text, "Outcome")
+    body_memberships = [
+        normalized_membership(linked_ticket_value(block))
+        for block in sections(text, "Ticket")
+        if linked_ticket_value(block)
+    ]
+    body_membership = body_memberships[0] if body_memberships else []
+    body_outcomes = [
+        labeled_value(block, "Result").lower()
+        for block in sections(text, "Outcome")
+        if labeled_value(block, "Result")
+    ]
+    conflicts = []
+    conflicting_outcomes = sorted(set(body_outcomes) - {data.get("outcome")})
+    if conflicting_outcomes:
+        conflicts.append(
+            f"outcome frontmatter={data.get('outcome')} body={','.join(conflicting_outcomes)}"
+        )
+    conflicting_memberships = [
+        membership for membership in body_memberships if membership != data["issues"]
+    ]
+    if conflicting_memberships:
+        conflicts.append(
+            "membership frontmatter="
+            + ",".join(data["issues"])
+            + " body="
+            + ",".join(conflicting_memberships[0])
+        )
+    for field, label in (
+        ("base", "Base"),
+        ("base_sha", "Base SHA"),
+        ("head", "Head"),
+        ("head_sha", "Head SHA"),
+        ("worktree", "Worktree"),
+    ):
+        frontmatter_value = normalized_scalar(data.get(field))
+        body_values = [
+            normalized_scalar(labeled_value(block, label))
+            for block in sections(text, "Resources")
+            if labeled_value(block, label)
+        ]
+        distinct_body_values = sorted(set(body_values))
+        conflicting_values = sorted(
+            set(distinct_body_values)
+            - ({frontmatter_value} if frontmatter_value else set())
+        )
+        if conflicting_values and frontmatter_value:
+            conflicts.append(
+                f"identity {field} frontmatter={frontmatter_value} "
+                f"body={','.join(conflicting_values)}"
+            )
+        elif len(distinct_body_values) > 1:
+            conflicts.append(
+                f"identity {field} body={','.join(distinct_body_values)}"
+            )
+        elif distinct_body_values and not frontmatter_value:
+            data[field] = distinct_body_values[0]
+    summary_statuses = [
+        status_line(block)
+        for block in sections(text, "Summary")
+        if status_line(block)
+    ]
+    conflicting_states = sorted(set(summary_statuses) - {data.get("state")})
+    if conflicting_states:
+        conflicts.append(
+            f"state frontmatter={data.get('state')} "
+            f"body={','.join(conflicting_states)}"
+        )
+    if conflicts:
+        data["malformed"] = "conflicting representations: " + "; ".join(conflicts)
+        return data
+    if data.get("outcome") == "candidate":
+        missing_candidate = missing_fields(data, CANDIDATE_IDENTITY_REQUIRED)
+        if missing_candidate:
+            data["malformed"] = "missing candidate fields: " + ",".join(
+                missing_candidate
+            )
+            return data
+
+    has_legacy_fixed_body = has_section(text, "Ticket") or has_section(text, "Outcome")
+    summary_text = section(text, "Summary").strip()
+    if had_explicit_outcome and has_legacy_fixed_body and not summary_text:
         body_error = new_body_error(data)
         if body_error:
             data["malformed"] = body_error
             return data
+    if had_explicit_outcome and not has_legacy_fixed_body and not summary_text:
+        data["malformed"] = "missing Summary section"
+        return data
 
-    ticket_block = section(text, "Ticket")
-    outcome_block = section(text, "Outcome")
-    data["linked_ticket"] = linked_ticket_value(ticket_block)
+    data["linked_ticket"] = ", ".join(body_membership) if body_membership else ""
     data["source_spec"] = labeled_value(ticket_block, "Source Spec") or data.get("source_spec", "")
     data["resource_ownership"] = labeled_value(outcome_block, "Resource ownership")
     data["retained_resources"] = labeled_value(outcome_block, "Branch/worktree/commit/PR")
     data["checks"] = status_line(section(text, "Verification")) or status_line(section(text, "Checks"))
     data["review"] = post_execution_review_line(section(text, "Review"))
     data["merge"] = status_line(section(text, "Merge"))
-    data["summary_status"] = status_line(section(text, "Summary"))
+    data["summary"] = summary_text
+    data["summary_status"] = summary_statuses[0] if summary_statuses else ""
     data["notes"] = section(text, "Notes").lower()
     data["changes"] = section(text, "What Changed") or section(text, "Changes")
     data["blocker_or_requested_information"] = section(
@@ -409,6 +558,14 @@ def parse_record(repo, path):
     ).strip()
     data["recovery_action"] = labeled_value(section(text, "Resume Or Cleanup"), "Next action")
     data["title"] = first_heading(text)
+    for optional in (
+        "base",
+        "base_sha",
+        "worktree",
+        "created_at",
+        "cleanup_done",
+    ):
+        data.setdefault(optional, None)
     return data
 
 
@@ -476,6 +633,10 @@ def ref_check(repo, record):
     if record.get("outcome") != "candidate":
         return True, ""
     for ref_key, sha_key in (("base", "base_sha"), ("head", "head_sha")):
+        if not record.get(ref_key):
+            return False, f"{ref_key} is unavailable"
+        if not record.get(sha_key):
+            return False, f"{sha_key} is unavailable"
         returncode, stdout, _stderr = resolve_ref(repo, record[ref_key])
         if returncode != 0:
             return False, f"{record[ref_key]} missing"
@@ -700,9 +861,12 @@ def merge_gate(repo, record):
     elif body_frontmatter_conflict(record):
         reasons.append(body_frontmatter_conflict(record))
     else:
-        refs_ok, ref_reason = ref_check(repo, record)
-        if not refs_ok:
-            reasons.append(ref_reason)
+        unavailable = missing_fields(record, CANDIDATE_GATE_REQUIRED)
+        reasons.extend(f"{field} is unavailable for merge gate" for field in unavailable)
+        if not unavailable:
+            refs_ok, ref_reason = ref_check(repo, record)
+            if not refs_ok:
+                reasons.append(ref_reason)
         if record.get("state") != "open":
             reasons.append(f"state is {record.get('state')}")
         if record.get("merge") != "ready":
@@ -892,6 +1056,20 @@ def cleanup_plan(repo, record):
         }
     refusal = candidate_operation_refusal(record)
     if refusal:
+        if record.get("state") == "closed" and is_true(record.get("cleanup_done")):
+            return {
+                "id": record.get("id"),
+                "path": record.get("path"),
+                "status": "done",
+                "reason": "",
+            }
+        if record.get("state") == "closed":
+            return {
+                "id": record.get("id"),
+                "path": record.get("path"),
+                "status": "blocked",
+                "reason": "recovery cleanup facts are unavailable",
+            }
         return {
             "id": record.get("id"),
             "path": record.get("path"),
@@ -911,6 +1089,14 @@ def cleanup_plan(repo, record):
             "path": record.get("path"),
             "status": "done",
             "reason": "",
+        }
+    unavailable = missing_fields(record, CANDIDATE_GATE_REQUIRED)
+    if unavailable:
+        return {
+            "id": record.get("id"),
+            "path": record.get("path"),
+            "status": "blocked",
+            "reason": "unavailable for cleanup: " + ",".join(unavailable),
         }
     refusal = cleanup_refusal(repo, record)
     return {
@@ -963,7 +1149,12 @@ def record_summary(repo, record, include_merge_gate=False):
     elif closed_recovery_terminal(record.get("state"), record.get("outcome")):
         summary["terminal_view"] = "closed"
     elif record.get("outcome") == "candidate":
-        refs_ok, ref_reason = ref_check(repo, record)
+        unavailable = missing_fields(record, CANDIDATE_GATE_REQUIRED)
+        refs_ok, ref_reason = (
+            (False, "unavailable for ref verification: " + ",".join(unavailable))
+            if unavailable
+            else ref_check(repo, record)
+        )
         summary["refs_ok"] = refs_ok
         summary["ref_reason"] = ref_reason
         summary["low_risk_exception"] = has_low_risk_exception(record)
@@ -998,6 +1189,7 @@ def dashboard(repo, records):
         "manual": [],
         "cleanup": [],
         "recent": [],
+        "historical": [],
         "recovery": [],
         "stale_or_malformed": [],
     }
@@ -1020,14 +1212,14 @@ def dashboard(repo, records):
                 summary["cleanup_plan"] = cleanup_plan(repo, record)
                 buckets["cleanup"].append(summary)
             else:
-                recent.append(summary)
+                buckets["historical"].append(summary)
             continue
         if record.get("legacy_terminal_outcome"):
             if not is_true(record.get("cleanup_done")):
                 summary["cleanup_plan"] = cleanup_plan(repo, record)
                 buckets["cleanup"].append(summary)
             else:
-                recent.append(summary)
+                buckets["historical"].append(summary)
             continue
         if record.get("outcome") != "candidate":
             buckets["recovery"].append(summary)
