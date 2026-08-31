@@ -6,7 +6,7 @@ A Solve Record is an Attempt Receipt: a compact, local Markdown handoff when
 an Attempt reaches a meaningful outcome. It is not a Claim, PR, MR, run log,
 or replacement for the linked Ticket.
 
-Create a record only for one of these outcomes:
+Submit a canonical handoff only for one of these outcomes:
 
 - `candidate`: a finished, checkable delivery candidate.
 - `blocked`: substantive work or evidence is retained after a required check,
@@ -21,29 +21,32 @@ Create a record only for one of these outcomes:
 Do not create a record for a transient tool failure, an immediately released
 Claim with no useful finding, or fully cleaned work with no recovery value.
 
-## Machine-readable contract
+## Compact canonical receipt
 
-Every new record uses this common frontmatter:
+The outcome-handoff adapter is the only canonical writer for every new receipt.
+Callers provide a caller-generated opaque handoff key, exact Ticket scope,
+semantic outcome, and concise Summary; recovery calls also provide the next
+action and complete retained-resource declaration, while successor calls name
+the exact predecessor. Callers never prewrite or repair the destination file.
+
+Every new compact canonical receipt uses this common frontmatter:
 
 ```yaml
-id: 20260710-1432-caption-fix
-kind: solve_record
 state: open
 outcome: candidate
-issues:
+tickets:
   - .scratch/caption/issues/01.md
-created_at: 2026-07-10T14:32:00+08:00
-cleanup_done: false
+handoff_key: "opaque-caller-key"
+binding_digest: 82b4...f91a
+head: solve/20260710-1432-caption-fix
+head_sha: def5678
 ```
 
-`state` is the record lifecycle (`open`, `merged`, or `closed`); `outcome` is
-the Attempt result. Keep them separate. `issues` contains one or more linked
-Ticket paths or identifiers, even though the common header names the primary
-linked Ticket.
-
-Use `Linked Ticket:` in the body for one linked Ticket. A grouped receipt may
-use `Linked Tickets:`; its frontmatter `issues` list remains the authoritative
-machine-readable membership.
+`state` is the receipt lifecycle; `outcome` is the creation-time Attempt result.
+Keep them separate. `tickets` is the authoritative normalized membership.
+`handoff_key` identifies exactly one outcome handoff, and `binding_digest`
+detects changes to its immutable binding. Candidate `head` and `head_sha` are
+derived from the active claimed worktree, never supplied as receipt text.
 
 The only supported outcomes are:
 
@@ -51,27 +54,32 @@ The only supported outcomes are:
 candidate | blocked | needs-info | ready-for-human | abandoned | superseded
 ```
 
-Candidate records additionally require these fields because candidate gates
-need live Git evidence:
+Recovery receipts omit candidate Git fields and add the canonical recovery
+intent and complete resource declaration:
 
 ```yaml
-base: main
-base_sha: abc1234
-head: solve/20260710-1432-caption-fix
-head_sha: def5678
-worktree: ../.agent-worktrees/project/project-solve-caption-fix
+recovery_next_action: "resume"
+retained_resources:
+  - "solve-owned:branch:solve/20260710-1432-caption-fix"
+  - "solve-owned:worktree:/absolute/verified/worktree"
 ```
 
-Recovery records do not require candidate fields. Add only retained resource
-references that actually exist, such as `branch`, `worktree`, `commit`, `pr`,
-`external_provider`, `external_url`, or `source_spec`. An empty recovery
-record is valid when its body makes the no-resource disposition clear.
+The body contains one `## Summary` with the concise completed-work and
+validation conclusion, or the recovery finding and next useful action. It does
+not mirror Ticket membership, outcome, Git identity, Claim state, or resource
+lists. The adapter derives the canonical path, installs a complete Markdown
+file atomically, applies Ticket, backlink, Claim and resource transitions, and
+returns success only after rereading the whole postcondition.
 
-Optional lifecycle fields remain `merged_at`, `merged_sha`, `closed_at`, and
-`updated_at`. Do not introduce a JSON registry or v1-style lifecycle fields
-such as `phase`, `merge_mode`, `merge_status`, `review_status`,
-`checks_status`, `attempt_id`, `candidate_state`, `human_state`, or
-`cleanup_state`.
+Exact retries use the same handoff key and immutable binding. A partial
+cross-surface transition is retryable handoff attention, not a second receipt
+state. Retry the same key; changed membership, outcome, candidate identity,
+recovery intent, resources, or predecessor under that key is a conflict.
+
+A resumed Attempt reaching another meaningful outcome uses a new key and new
+receipt with `supersedes`. Only successful successor convergence closes the
+predecessor with `closed_at` and reciprocal `superseded_by`; the predecessor
+keeps its original outcome.
 
 ### Legacy candidate compatibility
 
@@ -117,9 +125,10 @@ disposition is complete. They remain Cleanup pending while `cleanup_done` is
 false, and are not treated as active Recovery after cleanup. The outcome still
 records why the Attempt ended; it is not rewritten to `candidate` or `merged`.
 
-## Common body header
+## Legacy full-format compatibility
 
-Every new record starts with this header before its outcome-specific sections:
+Historical full-format records may use this common body header. The parser
+continues to normalize it, but the canonical writer does not emit it:
 
 ```md
 # Solve Record: <title>
@@ -140,9 +149,9 @@ review, close/supersede decision, or safe cleanup. The ownership line must say
 who can remove each retained resource; it must never imply that user-owned
 resources are safe to delete.
 
-## Candidate record
+### Legacy full-format candidate
 
-Use this shape only for `outcome: candidate`:
+This historical shape remains readable for `outcome: candidate`:
 
 ```md
 # Solve Record: <title>
@@ -190,7 +199,9 @@ Cleanup: pending | done | blocked
 - <durable low-risk decision, caveat, or none>
 ```
 
-When the Attempt used an Execution Digest, distill each durable decision or deviation here or in `## Review` with its reason, impact, and evidence. Keep the working Digest only while it retains resume value or repo policy requires it; otherwise delete it after this transfer.
+Historical records may preserve durable Execution Digest decisions here or in
+`## Review`. New outcome handoffs put only the concise conclusion in
+`## Summary`; later acceptance or landing evidence belongs to its owning gate.
 
 The audit lines are a concise conclusion and evidence summary, not a copied
 Ticket, per-requirement checklist, parser field, or second gate. `/ultra solve`
@@ -206,9 +217,9 @@ A manual-gated or blocked Post-Execution Review is not a candidate receipt.
 Route the Attempt to the matching recovery outcome and place the finding in
 `## Confirmed Findings` or `## Blocker Or Requested Information`.
 
-## Recovery record
+### Legacy full-format recovery
 
-Use this shape for every non-candidate outcome:
+This historical shape remains readable for non-candidate outcomes:
 
 ```md
 # Solve Record: <title>
@@ -249,17 +260,18 @@ uses a new handoff key and a new receipt. The successor receipt records
 close with `closed_at` and reciprocal `superseded_by`. The predecessor keeps
 its creation-time outcome and remains open when successor handoff fails.
 
-When the Attempt used an Execution Digest, distill durable decisions and deviations into `## Attempt Summary` or `## Confirmed Findings` with their reason, impact, and evidence. Keep the working Digest only while the retained recovery context has resume value or repo policy requires it; otherwise delete it after this transfer.
+Historical records may preserve durable Execution Digest decisions in these
+sections. New outcome handoffs use the compact `## Summary` body.
 
 Recovery records never enter acceptance, merge, ship, land, or candidate
 cleanup gates. Their resource guidance is ownership-based: verify retained
 resources and their cleanup evidence directly, leave user-owned resources in
 place, and do not borrow candidate merge prerequisites.
 
-## Ticket backlink
+### Legacy Ticket backlink shape
 
-Use a path-only backlink in the Ticket. Keep checks, merge rationale, outcome,
-resource ownership, summaries, and record lifecycle in the record itself.
+Historical Ticket backlinks use this path-only shape. For new handoffs the
+adapter writes and verifies it; callers do not append or edit it themselves.
 
 ```md
 ## Comments

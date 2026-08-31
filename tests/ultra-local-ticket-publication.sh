@@ -840,8 +840,9 @@ for text in (
     assert text in reference, text
 assert "It is never claimable" in solve
 assert "never rebuild the graph or Claim with Markdown edits" in solve
-assert "at handoff, name branch, worktree, commit, and PR/MR resource identity" in solve
-assert "Ticket receives only the concise receipt lifecycle backlink" in solve
+assert "outcome-handoff adapter is the one canonical writer" in solve
+assert "Never prewrite a canonical receipt" in solve
+assert "adapter derives candidate Git identity" in solve
 assert "linked through the tracker's resource surface" not in solve
 assert "Manual transaction fallback is prohibited" in setup
 assert "## GitHub and GitLab remote adapter contract" in reference

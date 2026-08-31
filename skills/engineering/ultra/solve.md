@@ -513,7 +513,7 @@ If an interruption, context boundary, or execution limit arrives before this pas
 
 ### 8.5 Outcome Finalization
 
-Every Attempt that stops or hands off routes through this decision once. Read the [Solve Record format](../solve-records/references/record-format.md) before writing a receipt; it owns the outcome-aware frontmatter and body shape. Read the [recovery edge cases](../solve-records/references/edge-cases.md) when resuming, closing, superseding, or cleaning a recovery receipt. This runbook owns Attempt classification and the atomic Ticket, Claim, backlink, and resource transition; it does not duplicate either reference.
+Every Attempt that stops or hands off routes through this decision once. Read the [Solve Record format](../solve-records/references/record-format.md) before submitting the handoff; it owns the compact receipt contract and legacy normalization. Read the [recovery edge cases](../solve-records/references/edge-cases.md) when resuming, closing, superseding, or cleaning a recovery receipt. This runbook owns **Candidate Readiness** and Attempt classification. The Tracker Facade outcome-handoff adapter is the one canonical writer for the receipt, Ticket backlinks and state, Claim disposition, retained-resource facts, and successor relation.
 
 Classify the handoff before applying any candidate-only Git gate:
 
@@ -527,49 +527,35 @@ Classify the handoff before applying any candidate-only Git gate:
 | A resumed recovery context reaches another meaningful handoff | the new outcome on a successor receipt; retain the predecessor's original outcome | apply the successor outcome state | apply the successor outcome disposition; close the predecessor only after successor success |
 | Immediate Claim release, transient failure, or fully cleaned work with no useful finding | none | restore the prior claimable or actionable state | release |
 
-The meaningful-handoff test is positive: create or update a receipt when durable findings, failed-check evidence, retained resources, a requested decision, or resource disposition gives a future maintainer something to resume, review, close, supersede, or clean. When none of those exists, remove partial solve-owned resources, release the Claim, remove stale Attempt resource links, and leave no receipt or backlink.
+The meaningful-handoff test is positive: submit a handoff when durable findings, failed-check evidence, retained resources, a requested decision, or resource disposition gives a future maintainer something to resume, review, close, supersede, or clean. When none of those exists, use the configured Claim-release path, remove only safe solve-owned transient resources and stale Attempt links, and leave no receipt or backlink.
 
-For every recorded outcome, complete one atomic tracker handoff:
+Before any handoff side effect, generate and retain a caller-generated opaque handoff key. Submit semantic intent through the configured facade, for example:
 
-- create or update one receipt under `.scratch/<feature>/solve-records/` or `.scratch/solve-records/`
-- append its path-only backlink to the Ticket, using the plural backlink heading when historical receipts already exist
-- keep retained branch/worktree assignment in configured Claim metadata only while the Attempt remains active; at handoff, name branch, worktree, commit, and PR/MR resource identity, ownership, resume action, cleanup owner, and disposition authoritatively in the Solve Record or native PR/MR, while the Ticket receives only the concise receipt lifecycle backlink
-- set the Ticket to the outcome's actionable state
-- release or intentionally retain `solve-in-progress` according to the table, recording the active resume owner when retained
-- distill each durable Digest decision or deviation into candidate `## Review` or `## Notes`, or recovery `## Attempt Summary` or `## Confirmed Findings`; retain the Digest only while the same recovery context has resume value or repo policy requires it
+```bash
+python scripts/ultra_tracker.py ticket handoff \
+  --repo . \
+  --ticket-id <exact-ticket-id> \
+  --handoff-key <opaque-key> \
+  --outcome <candidate-or-recovery-outcome> \
+  --summary <concise-outcome-and-validation-summary>
+```
 
-When this handoff succeeds after resuming an open recovery receipt, use a new
-handoff key and bind that receipt through `supersedes`. Preserve both Ticket
-backlinks and both creation-time outcomes. The handoff writes reciprocal
-`superseded_by` and closes the predecessor only after the successor's primary
-postcondition succeeds; same-successor-key retry converges missing relation
-work.
+Repeat `--ticket-id` for a grouped complete set. Recovery handoffs also pass `--recovery-next-action` and the complete `--retained-resource` declaration. A successor uses a new key and passes `--supersedes <canonical-open-recovery-receipt>`. Never prewrite a canonical receipt, choose its path, append its backlink, mutate Ticket or Claim state, or replace a recovery receipt's outcome in place. Draft files, stdin, and long text are request inputs only.
 
-For resume or clean restart, follow the linked recovery edge cases. Outcome Finalization completes after the resulting receipt identity, Ticket backlink, Claim state, and resource disposition satisfy the atomic handoff above.
+Handle the facade result as a retry contract:
 
-Create a `candidate` receipt only after a finished, reviewable merge candidate exists with:
+- `success`: accept only the returned canonical receipt identity after the adapter rereads the complete postcondition.
+- `retryable`: retry the same handoff key and identical immutable inputs; do not switch writers or create another receipt.
+- `conflict`: stop and inspect the named identity or state mismatch; never repurpose the key.
+- `unavailable`: report the missing configured capability; there is no manual lifecycle fallback.
 
-- clean, comparable `head` candidate branch
-- known `base` landing branch and `head` candidate branch refs
-- recorded `base_sha` and `head_sha`
-- linked Ticket paths
-- checks status and validation evidence
-- a passed full-boundary requirement-to-evidence audit, summarized concisely rather than copied as a checklist
-- passed Post-Execution Review
-- merge-gate and rollout/config dispositions
-- worktree and cleanup resource notes
+The adapter derives candidate Git identity, owns the compact receipt path and binding, applies every Ticket and Claim transition, and verifies grouped uniformity. For open recovery outcomes, it retains the Claim only for `resume` with a complete, live, unambiguous solve-owned resource set. The recovery ownership matrix treats resume without resources, resources with non-resume intent, partial or invalid resource declarations, stale or ambiguous ownership, and mixed grouped disposition as conflicts requiring manual inspection; it releases the Claim only for an empty declaration with non-resume intent. For a successor, it preserves both creation-time outcomes and backlinks, writes the reciprocal `superseded_by` relation, and closes the predecessor only after successor success.
 
-Autonomous review closure can satisfy this candidate gate, but it grants no merge or landing authority. Merge or land still requires `--auto-merge`, equivalent explicit user wording, or an explicit repository policy.
+Candidate Readiness requires a finished, reviewable candidate, current `head` identity, passed required validation, a passed full-boundary requirement-to-evidence audit, and passed Post-Execution Review. It does not require Candidate Acceptance Review or Human Acceptance and grants no merge or landing authority, deployment or release authority, smoke result, or cleanup authority. Checks marked `unavailable` remain a later candidate-gate concern and do not become a false pass during readiness.
 
-Claim-time state, an in-progress Attempt, missing requirements, failed required checks, or an unresolved finding that prevents a finished candidate cannot produce a candidate receipt. A finished candidate awaiting human acceptance, merge review, rollout approval, or another manual gate remains a candidate: set `state: open`, set `## Merge` to `manual required`, and keep the Ticket `completed`.
+For resume or clean restart, follow the linked recovery edge cases. Outcome Finalization completes only when the facade reports `success`; its compact receipt is the handoff fact, while later `$solve-records` acceptance, landing, release, and cleanup operations gather and persist their own live evidence without creating a second solve lifecycle.
 
-Checks marked `unavailable` block auto-merge unless the change is explicitly trivial and low-risk, and the record says why no meaningful check exists, why no manual-review trigger applies, and what evidence still supports the change.
-
-Before creating an auto-mergeable or ready candidate receipt, explicitly consider rollout/config/operator-action signals. Use already-known project context when it is sufficient; otherwise scan the changed files and nearby docs for generic signals such as config files, environment variables, feature flags, migrations, deployment docs, and runbooks. Record one body-prose disposition under `## Merge` or `## Notes`: `none`, `pre-merge action required`, or `post-merge activation required`. `pre-merge action required` means `manual required`; `post-merge activation required` can remain ready only when the record explains why code merge is safe, what action activates the change, how to smoke-check or validate it, and how to roll back or disable it.
-
-Adoption mode still creates receipts for meaningful handoffs. For a candidate on an adopted branch, `head` is that branch and `base` is the landing branch; the record never describes a merge back into the same branch. If development-environment deployment or human acceptance is pending, keep the Ticket completed, set the candidate receipt merge gate to `manual required`, and record the pending evidence in `## Verification` or `## Merge`. A later `$solve-records` acceptance review may update `## Merge` from `manual required` to `ready` after live verification, while keeping `state: open`; landing remains reserved for explicit merge, ship, or land intent.
-
-Ordinary candidate finalization retains its branch and worktree as review context until auto-merge, merge/apply/ship/land, or an explicit cleanup request advances the receipt. Recovery resources follow their recorded ownership and recovery action. Adopted worktrees and adopted branches remain user-owned and outside automatic cleanup.
+Adoption mode uses the same handoff interface. The adapter derives `head` from the adopted candidate worktree, while adopted worktrees and branches remain user-owned and outside automatic cleanup.
 
 The Ticket `completed` state means acceptance criteria are implemented and verified. The Solve Record `merged` state means a candidate entered the base branch. Receipt lifecycle and cleanup status remain on the receipt.
 
@@ -627,7 +613,7 @@ This is a feedback loop, not a schema gate: `to-tickets -> solve notices missing
 
 Current mutation support is Local Markdown trackers. The following compatibility API identifiers retain their established spellings while operating on Tickets; the conceptual contract for future remote tracker support is:
 
-For Local Markdown, prefer `scripts/ultra_tracker.py` for configured publication, frontier, Claim, and Solve Record helper operations. It centralizes configured publication discovery and result envelopes while the owning adapter or helper retains all semantics. If that facade is unavailable, make one explicit capability-equivalent direct-helper handoff only before the operation begins; never retry or repeat a completed operation through the other route. Contract-bounded normalization applies only to declared presentation aliases; identities remain exact. No manual fallback is permitted.
+For Local Markdown, prefer `scripts/ultra_tracker.py` for configured publication, frontier, Claim, and Solve Record helper operations. It centralizes configured publication discovery and result envelopes while the owning adapter or helper retains all semantics. Outcome handoff has no direct-helper or manual fallback: an unavailable facade or configured handoff helper returns `unavailable` before lifecycle mutation. Other operations may make one explicit capability-equivalent direct-helper choice only before the operation begins; never retry or repeat a completed operation through the other route. Contract-bounded normalization applies only to declared presentation aliases; identities remain exact. No manual fallback is permitted.
 
 - `list_ready_for_agent(filter)`
 - `read_issue(issue_id)`

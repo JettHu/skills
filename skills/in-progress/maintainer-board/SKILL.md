@@ -72,3 +72,12 @@ Treat the helper as read-only except for writing the HTML path. It does not run 
 The board requires the canonical `$solve-records` read helper and consumes its
 normalized domain view. It does not maintain an independent receipt schema; install
 the two skills together so compact and historical records receive identical parsing.
+
+Normal Candidate and Recovery lanes require the compact receipt, every linked
+Ticket, Claim disposition, retained-resource declaration, and any reciprocal
+successor relation to agree. A missing backlink, partial grouped transition,
+Claim/resource mismatch, or one-sided `supersedes` / `superseded_by` relation
+enters handoff attention instead of a normal lane. Retry the same handoff key
+through the Tracker Facade when its result is retryable; the board remains
+read-only and never completes, repairs, accepts, lands, deploys, or cleans an
+outcome handoff.

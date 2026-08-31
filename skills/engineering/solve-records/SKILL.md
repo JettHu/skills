@@ -25,6 +25,13 @@ Read [record-format.md](references/record-format.md) when creating or
 repairing any receipt. It is the source of truth for the machine-readable
 contract, legacy mapping, common header, and outcome-specific sections.
 
+New Attempt outcomes enter this workflow only through the configured Tracker
+Facade outcome-handoff adapter. It is the one canonical writer for the compact
+receipt, Ticket backlink and state, Claim disposition, and recovery successor
+relation. Always create and retain the opaque handoff key before submission;
+do not prewrite a receipt, choose its path, or mutate lifecycle surfaces by
+hand. Retryable results use the same handoff key and identical immutable input.
+
 ## 1. Discover
 
 With no prompt, run the read-only dashboard:
@@ -56,13 +63,12 @@ operation are all unambiguous.
 
 ## 3. Candidate route
 
-For a new candidate receipt, read [record-format.md](references/record-format.md)
-and record it only after a finished candidate has passed verification and
-the root's full-boundary requirement-to-evidence audit and Post-Execution
-Review. A meaningful candidate needs the Ticket, optional source Spec,
-retained resources, ownership, and candidate sections. The receipt summarizes
-the audit conclusion and strongest current evidence; it does not duplicate the
-Ticket or become a requirement checklist.
+Candidate Readiness belongs to `/ultra solve`: a finished candidate must pass
+verification, the root's full-boundary requirement-to-evidence audit, and
+Post-Execution Review before the outcome handoff. The adapter derives candidate
+identity and writes the compact candidate receipt with its concise Summary.
+Candidate Readiness is not Candidate Acceptance Review, merge, landing,
+deployment, release, smoke, or cleanup authority.
 
 Before every candidate acceptance review, merge, ship, land, close, or
 cleanup request, read [candidate-gates.md](references/candidate-gates.md). It
@@ -79,8 +85,11 @@ resources, ownership, and recorded next action. Read
 [edge-cases.md](references/edge-cases.md) before a resume, close, supersede,
 recovery resource-cleanup, or remote PR/MR action.
 
-A recovery receipt is created at a meaningful handoff: substantive assessment
-or work leaves evidence, a retained resource, a blocker, or a next action.
+A recovery receipt is created by the outcome-handoff adapter at a meaningful
+handoff: substantive assessment or work leaves evidence, a retained resource,
+a blocker, or a next action. Open resume handoffs retain ownership only for the
+complete verified solve-owned resource set; all other cases follow the recovery
+ownership matrix and either release the Claim or fail closed.
 Transient tool failures, immediate no-value Claim releases, and fully cleaned
 work without recovery value leave no receipt.
 

@@ -14,6 +14,8 @@ import sys
 root = Path(sys.argv[1])
 solve = (root / "skills/engineering/ultra/solve.md").read_text(encoding="utf-8")
 record_format = (root / "skills/engineering/solve-records/references/record-format.md").read_text(encoding="utf-8")
+solve_records = (root / "skills/engineering/solve-records/SKILL.md").read_text(encoding="utf-8")
+board = (root / "skills/in-progress/maintainer-board/SKILL.md").read_text(encoding="utf-8")
 agents = (root / "AGENTS.md").read_text(encoding="utf-8")
 readme = (root / "README.md").read_text(encoding="utf-8")
 ultra_meta = (root / "skills/engineering/ultra/agents/openai.yaml").read_text(encoding="utf-8")
@@ -24,11 +26,22 @@ eval_fixture = root / "tests/evals/solve-records-outcomes/model-adherence-fixtur
 assert "### 8.5 Outcome Finalization" in solve
 assert "Every Attempt that stops or hands off routes through this decision once." in solve
 assert "Claim remains the temporary concurrency lock; it never creates a receipt." in solve
+assert "one canonical writer" in solve
+assert "caller-generated opaque handoff key" in solve
+assert "retry the same handoff key" in solve
+assert "Candidate Readiness" in solve
+assert "Never prewrite a canonical receipt" in solve
+assert "resume without resources" in solve
+assert "resources with non-resume intent" in solve
+assert "partial or invalid resource declarations" in solve
+assert "Outcome handoff has no direct-helper or manual fallback" in solve
+assert "create or update one receipt under" not in solve
+assert "Create a `candidate` receipt" not in solve
 assert "Immediate Claim release, transient failure, or fully cleaned work with no useful finding" in solve
 assert "source Specs, approved decisions" in solve
 assert "recovery edge cases" in solve
 assert "Apply this section only after the Outcome gate re-reads `outcome: candidate`." in solve
-assert "record the pending evidence in `## Verification` or `## Merge`" in solve
+assert "later `$solve-records` acceptance, landing, release, and cleanup operations" in solve
 assert "record the pending evidence in `## Checks`" not in solve
 
 format_link = "../solve-records/references/record-format.md"
@@ -45,7 +58,17 @@ assert "outcome: superseded" in edge_cases
 assert "new handoff key and a new receipt" in record_format
 assert "supersedes" in record_format
 assert "superseded_by" in record_format
+assert "compact canonical receipt" in record_format
+assert "The outcome-handoff adapter is the only canonical writer" in record_format
+assert "binding_digest" in record_format
+assert "base_sha" not in record_format.split("### Legacy candidate compatibility", 1)[0]
 assert "reuses the linked\nrecovery record" not in record_format
+assert "outcome-handoff adapter" in solve_records
+assert "do not prewrite" in solve_records.lower()
+assert "Candidate Readiness" in solve_records
+assert "handoff attention" in board
+assert "same handoff key" in board
+assert "reciprocal\nsuccessor relation" in board
 for outcome in ("blocked", "needs-info", "ready-for-human", "abandoned", "superseded"):
     assert outcome in solve
     assert outcome in record_format

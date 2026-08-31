@@ -184,9 +184,9 @@ for predicate in (
 ):
     assert predicate in frontier, f"claimable-frontier adapter missing: {predicate}"
 
-assert "distill each durable Digest decision or deviation" in solve
-assert "distill each durable decision or deviation" in record_format
-assert "distill durable decisions and deviations" in record_format
+assert "--summary <concise-outcome-and-validation-summary>" in solve
+assert "body contains one `## Summary`" in record_format
+assert "New outcome handoffs use the compact `## Summary` body" in record_format
 assert "Do not create a **candidate** solve record" in solve
 assert "a transient Attempt that is fully cleaned up stays recordless" in solve
 assert "Read the [Solve Record format]" in solve

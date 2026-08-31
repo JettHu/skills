@@ -176,7 +176,16 @@ def parse_args() -> argparse.Namespace:
     claim.add_argument("--expected-snapshot", required=True, help="frontier snapshot returned by discovery")
     claim.add_argument("--branch", required=True, help="configured Ticket coordination branch assignment")
     claim.add_argument("--worktree", required=True, help="configured Ticket coordination worktree assignment")
-    handoff = ticket_actions.add_parser("handoff", help="converge one candidate or recovery outcome handoff")
+    handoff = ticket_actions.add_parser(
+        "handoff",
+        help="canonical writer for one compact candidate or recovery outcome handoff",
+        description=(
+            "Atomically converge one compact canonical receipt, Ticket backlink/state, "
+            "Claim disposition, retained-resource ownership, and optional successor relation. "
+            "Create the opaque handoff key before any side effect; retry retryable results "
+            "with the same key and identical immutable inputs."
+        ),
+    )
     handoff.add_argument("--repo", default=".")
     handoff.add_argument(
         "--ticket-id",
@@ -184,12 +193,12 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="exact active Ticket identity; repeatable",
     )
-    handoff.add_argument("--handoff-key", required=True, help="caller-generated durable opaque key")
+    handoff.add_argument("--handoff-key", required=True, help="mandatory caller-generated durable opaque retry key")
     handoff.add_argument("--outcome", required=True, help="semantic candidate, recovery, or terminal outcome")
     handoff.add_argument("--summary", required=True, help="concise outcome Summary")
     handoff.add_argument("--recovery-next-action", help="recovery intent; use resume only when retaining ownership")
     handoff.add_argument("--retained-resource", action="append", default=[], help="complete retained resource declaration")
-    handoff.add_argument("--supersedes", help="canonical open recovery receipt replaced by this new handoff")
+    handoff.add_argument("--supersedes", help="canonical open recovery predecessor; success preserves its outcome and records the successor relation")
 
     records = groups.add_parser("solve-record", help="read-only Attempt and Solve Record inspection and gates")
     record_actions = records.add_subparsers(
