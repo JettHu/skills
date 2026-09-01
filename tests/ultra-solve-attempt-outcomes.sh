@@ -43,6 +43,18 @@ assert "recovery edge cases" in solve
 assert "Apply this section only after the Outcome gate re-reads `outcome: candidate`." in solve
 assert "later `$solve-records` acceptance, landing, release, and cleanup operations" in solve
 assert "record the pending evidence in `## Checks`" not in solve
+for stale_instruction in (
+    "distill durable decisions and deviations into `## Review` or `## Notes`",
+    "distill them into `## Attempt Summary` or `## Confirmed Findings`",
+    "for solve record creation",
+    "solve record with checks marked `unavailable`",
+    "recovery record's `## Attempt Summary` or `## Confirmed Findings`",
+    "distill into the applicable outcome section",
+):
+    assert stale_instruction not in solve, stale_instruction
+assert "concise Summary handoff request" in solve
+assert "Unavailable validation is an explicit Summary boundary, never a pass" in solve
+assert "Later Candidate Acceptance or landing owners gather `base`, `base_sha`" in solve
 
 format_link = "../solve-records/references/record-format.md"
 edge_link = "../solve-records/references/edge-cases.md"

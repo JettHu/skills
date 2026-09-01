@@ -152,8 +152,8 @@ assert ".scratch/<feature>/execution-digests/<digest-key>.md" in solve
 assert "never a broad `.scratch/**/*.md` glob" in solve
 assert "first material decision or deviation" in solve
 assert "reduced interruption-recovery guarantee" in solve
-assert "`## Review` or `## Notes`" in solve
-assert "`## Attempt Summary` or `## Confirmed Findings`" in solve
+assert "concise Summary handoff request" in solve
+assert "do not author fixed receipt sections" in solve
 assert "\n## Execution Digest\n" not in solve
 assert "agent-decision" not in solve
 assert "Agent Decision Log" not in solve
@@ -187,7 +187,7 @@ for predicate in (
 assert "--summary <concise-outcome-and-validation-summary>" in solve
 assert "body contains one `## Summary`" in record_format
 assert "New outcome handoffs use the compact `## Summary` body" in record_format
-assert "Do not create a **candidate** solve record" in solve
+assert "Do not submit a `candidate` outcome" in solve
 assert "a transient Attempt that is fully cleaned up stays recordless" in solve
 assert "Read the [Solve Record format]" in solve
 record_link = re.search(r"\[Solve Record format\]\(([^)]+)\)", solve)
