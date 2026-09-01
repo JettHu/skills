@@ -31,6 +31,10 @@ assert "caller-generated opaque handoff key" in solve
 assert "retry the same handoff key" in solve
 assert "Candidate Readiness" in solve
 assert "Never prewrite a canonical receipt" in solve
+assert "--repo ." not in solve.split("### 8.5 Outcome Finalization", 1)[1]
+assert "--repo <repository-path>" in solve
+assert "Only `success` exits zero with top-level `ok: true`" in solve
+assert "retaining its structured status, identity" in solve
 assert "resume without resources" in solve
 assert "resources with non-resume intent" in solve
 assert "partial or invalid resource declarations" in solve

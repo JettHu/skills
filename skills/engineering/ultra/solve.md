@@ -534,12 +534,15 @@ Before any handoff side effect, generate and retain a caller-generated opaque ha
 
 ```bash
 python scripts/ultra_tracker.py ticket handoff \
-  --repo . \
   --ticket-id <exact-ticket-id> \
   --handoff-key <opaque-key> \
   --outcome <candidate-or-recovery-outcome> \
   --summary <concise-outcome-and-validation-summary>
 ```
+
+The facade resolves the repository from the current directory. Use
+`--repo <repository-path>` only when intentionally invoking it from outside the
+target repository.
 
 Repeat `--ticket-id` for a grouped complete set. Recovery handoffs also pass `--recovery-next-action` and the complete `--retained-resource` declaration. A successor uses a new key and passes `--supersedes <canonical-open-recovery-receipt>`. Never prewrite a canonical receipt, choose its path, append its backlink, mutate Ticket or Claim state, or replace a recovery receipt's outcome in place. Draft files, stdin, and long text are request inputs only.
 
@@ -549,6 +552,10 @@ Handle the facade result as a retry contract:
 - `retryable`: retry the same handoff key and identical immutable inputs; do not switch writers or create another receipt.
 - `conflict`: stop and inspect the named identity or state mismatch; never repurpose the key.
 - `unavailable`: report the missing configured capability; there is no manual lifecycle fallback.
+
+Only `success` exits zero with top-level `ok: true`. Every other handoff status
+exits nonzero with `ok: false` while retaining its structured status, identity,
+reason, and next action for recovery.
 
 The adapter derives candidate Git identity, owns the compact receipt path and binding, applies every Ticket and Claim transition, and verifies grouped uniformity. For open recovery outcomes, it retains the Claim only for `resume` with a complete, live, unambiguous solve-owned resource set. The recovery ownership matrix treats resume without resources, resources with non-resume intent, partial or invalid resource declarations, stale or ambiguous ownership, and mixed grouped disposition as conflicts requiring manual inspection; it releases the Claim only for an empty declaration with non-resume intent. For a successor, it preserves both creation-time outcomes and backlinks, writes the reciprocal `superseded_by` relation, and closes the predecessor only after successor success.
 

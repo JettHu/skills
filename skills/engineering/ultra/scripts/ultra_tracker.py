@@ -18,6 +18,7 @@ SUCCESS = 0
 REFUSED = 3
 INVALID = 4
 UNAVAILABLE = 5
+RETRYABLE = 6
 
 
 class FacadeError(RuntimeError):
@@ -40,6 +41,42 @@ def envelope(operation: str, *, data: Any = None, error: dict[str, str] | None =
     else:
         result["error"] = error
     print(json.dumps(result, indent=2, sort_keys=True))
+
+
+def handoff_envelope(operation: str, payload: Any) -> int:
+    """Project a handoff result onto the facade's success and exit contract."""
+    if not isinstance(payload, dict) or payload.get("status") not in {
+        "success",
+        "retryable",
+        "conflict",
+        "unavailable",
+    }:
+        error(
+            operation,
+            "invalid-delegated-result",
+            "handoff helper returned an invalid status",
+        )
+        return INVALID
+    status = payload["status"]
+    if status == "success":
+        envelope(operation, data=payload)
+        return SUCCESS
+    result = {
+        "schema": SCHEMA,
+        "operation": operation,
+        "ok": False,
+        "data": payload,
+        "error": {
+            "code": f"handoff-{status}",
+            "detail": payload.get("reason") or f"handoff returned {status}",
+        },
+    }
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return {
+        "retryable": RETRYABLE,
+        "conflict": REFUSED,
+        "unavailable": UNAVAILABLE,
+    }[status]
 
 
 def error(operation: str, code: str, detail: str) -> None:
@@ -134,6 +171,8 @@ def delegate(operation: str, helper: str, args: list[str]) -> int:
         detail = json.dumps(payload.get("reasons") or payload.get("reason") or payload, sort_keys=True)
         error(operation, "not-allowed", detail)
         return REFUSED
+    if helper == "handoff":
+        return handoff_envelope(operation, payload)
     envelope(operation, data=payload)
     return SUCCESS
 
@@ -182,8 +221,10 @@ def parse_args() -> argparse.Namespace:
         description=(
             "Atomically converge one compact canonical receipt, Ticket backlink/state, "
             "Claim disposition, retained-resource ownership, and optional successor relation. "
-            "Create the opaque handoff key before any side effect; retry retryable results "
-            "with the same key and identical immutable inputs."
+            "Create the opaque handoff key before any side effect; retry a retryable result "
+            "with the same key and identical immutable inputs. Only success returns ok=true "
+            "and exits 0; retryable (6), conflict (3), and unavailable (5) retain their "
+            "structured result with ok=false."
         ),
     )
     handoff.add_argument("--repo", default=".")

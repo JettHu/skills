@@ -24,7 +24,17 @@ root, facade, board = map(Path, sys.argv[1:])
 def run(*command: str, check: bool = True, env: dict[str, str] | None = None):
     result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     if check and result.returncode:
-        raise AssertionError(f"{command}: {result.stderr or result.stdout}")
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            payload = {}
+        expected_handoff_result = (
+            payload.get("operation") == "ticket.handoff"
+            and payload.get("ok") is False
+            and payload.get("data", {}).get("status") in {"retryable", "conflict"}
+        )
+        if not expected_handoff_result:
+            raise AssertionError(f"{command}: {result.stderr or result.stdout}")
     return result
 
 
@@ -125,7 +135,8 @@ missing = run(
     "--summary", "Implemented.", check=False,
 )
 missing_data = json.loads(missing.stdout)["data"]
-assert missing.returncode == 0
+assert missing.returncode == 3
+assert json.loads(missing.stdout)["ok"] is False
 assert missing_data["status"] == "conflict" and missing_data["handoff_key"] == ""
 assert not list((repo / ".scratch/feature/solve-records").glob("*.md"))
 
@@ -148,6 +159,7 @@ partial = run(
     env=fault_env,
 )
 partial_data = json.loads(partial.stdout)["data"]
+assert partial.returncode == 6
 assert partial_data["status"] == "retryable" and partial_data["handoff_key"] == key
 expected_name = hashlib.sha256(key.encode()).hexdigest() + ".md"
 partial_receipt = repo / ".scratch/feature/solve-records" / expected_name

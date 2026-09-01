@@ -21,8 +21,12 @@ import sys
 root, facade, publication, frontier, solve_records = map(Path, sys.argv[1:])
 
 
-def run(*command: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def run(
+    *command: str, check: bool = True, cwd: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        command, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
     if check and result.returncode:
         raise AssertionError(f"{command}: {result.stderr or result.stdout}")
     return result
@@ -82,11 +86,15 @@ def facade_data(result: subprocess.CompletedProcess[str], operation: str) -> dic
 for command, words in (
     ([sys.executable, str(facade), "--help"], ("publication", "ticket", "solve-record", "Ticket", "Claim", "Attempt", "Solve Record")),
     ([sys.executable, str(facade), "publication", "--help"], ("register", "inspect", "promote", "cleanup")),
-    ([sys.executable, str(facade), "ticket", "--help"], ("frontier", "claim")),
+    ([sys.executable, str(facade), "ticket", "--help"], ("frontier", "claim", "handoff")),
     ([sys.executable, str(facade), "solve-record", "--help"], ("dashboard", "merge-gate", "landing-plan", "cleanup-plan")),
 ):
     output = run(*command).stdout
     assert all(word in output for word in words), output
+handoff_help = run(sys.executable, str(facade), "ticket", "handoff", "--help").stdout
+normalized_handoff_help = " ".join(handoff_help.split())
+assert "Only success returns ok=true and exits 0" in normalized_handoff_help
+assert "retryable (6), conflict (3), and unavailable (5)" in normalized_handoff_help
 
 # Publication success and refusal preserve the owning adapter result while facade config is discovered once.
 pub_direct = fixture("publication-direct", "review-pending", "run-1")
@@ -184,6 +192,55 @@ ineligible_gate = run(
 assert ineligible_gate.returncode == 3
 ineligible_payload = json.loads(ineligible_gate.stdout)
 assert ineligible_payload["error"]["code"] == "not-allowed"
+
+# Handoff is successful only when its complete postcondition is successful.
+# Expected retry and conflict results retain adapter data while the facade's
+# top-level success bit and process exit fail closed for simple callers.
+(layout / "ultra/scripts/local_outcome_handoff.py").write_text(
+    """import json, sys
+def value(name):
+    return sys.argv[sys.argv.index(name) + 1]
+status = {"candidate": "success", "blocked": "retryable", "abandoned": "conflict"}[value("--outcome")]
+print(json.dumps({
+    "schema": "ultra-local-outcome-handoff/v1",
+    "status": status,
+    "handoff_key": value("--handoff-key"),
+    "repo": value("--repo"),
+    "reason": "fixture " + status if status != "success" else "",
+    "next_action": "retry same key" if status == "retryable" else "manual inspection" if status == "conflict" else "",
+}))
+""",
+    encoding="utf-8",
+)
+handoff_command = (
+    sys.executable,
+    str(layout / "ultra/scripts/ultra_tracker.py"),
+    "ticket",
+    "handoff",
+    "--ticket-id",
+    "A",
+    "--handoff-key",
+    "facade-status-key",
+    "--summary",
+    "Facade status projection fixture.",
+)
+handoff_success = run(*handoff_command, "--outcome", "candidate", cwd=records)
+success_data = facade_data(handoff_success, "ticket.handoff")
+assert success_data["status"] == "success"
+assert success_data["repo"] == str(records.resolve())
+for outcome, status, returncode in (
+    ("blocked", "retryable", 6),
+    ("abandoned", "conflict", 3),
+):
+    handoff_result = run(
+        *handoff_command, "--outcome", outcome, cwd=records, check=False
+    )
+    assert handoff_result.returncode == returncode, handoff_result
+    handoff_payload = json.loads(handoff_result.stdout)
+    assert handoff_payload["ok"] is False
+    assert handoff_payload["data"]["status"] == status
+    assert handoff_payload["data"]["handoff_key"] == "facade-status-key"
+    assert handoff_payload["error"]["code"] == f"handoff-{status}"
 
 # Missing bundled helpers are explicit unavailability, not copied behavior.
 isolated = root / "isolated/scripts"
