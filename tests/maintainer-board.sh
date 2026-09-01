@@ -633,6 +633,9 @@ assert "publication_invalid" in {warning["code"] for warning in provisional["war
 completed = data["issues"]["buckets"]["completed_with_solve_record"][0]
 assert completed["solve_records"] == ["../solve-records/20260702-ready.md"]
 assert completed["checklist"] == {"total": 0, "done": 0, "open": 0}
+assert completed["completion_scope"] == (
+    "Candidate gate complete; completed does not prove merge, deployment, or online smoke."
+)
 
 ready_issue = next(issue for issue in ready if issue["title"] == "Ready issue")
 assert ready_issue["checklist"] == {"total": 2, "done": 1, "open": 1}
@@ -758,6 +761,7 @@ assert "grid-auto-flow: column" in html
 assert "label-ready-for-agent" in html
 assert "label-needs-info" in html
 assert "label-manual-required" in html
+assert "Candidate gate complete; completed does not prove merge, deployment, or online smoke." in html
 assert "status:" not in html.lower()
 assert default_html == html
 PY

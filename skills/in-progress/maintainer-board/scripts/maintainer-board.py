@@ -284,11 +284,17 @@ def parse_issue_text(repo, path, text, identity="", metadata_format_hint=""):
 
     flags = as_list(metadata.get("flags") or metadata.get("labels"), split_words=True)
     status = str(metadata.get("status") or metadata.get("state") or "").strip()
+    completion_scope = (
+        "Candidate gate complete; completed does not prove merge, deployment, or online smoke."
+        if status == "completed"
+        else ""
+    )
     issue = {
         "path": rel,
         "feature": feature_from_path(repo, path),
         "title": first_heading(body) or first_heading(text) or path.stem,
         "status": status,
+        "completion_scope": completion_scope,
         "ticket_id": str(metadata.get("ticket_id") or metadata.get("id") or identity).strip(),
         "publication_run": str(metadata.get("publication_run", "")).strip(),
         "publication_promoted": False,
@@ -795,6 +801,7 @@ def render_issue_card(issue, hidden=False):
             issue["status"],
             issue["category"],
             issue["feature"],
+            issue["completion_scope"],
             " ".join(issue["flags"]),
         ]
     )
@@ -803,6 +810,7 @@ def render_issue_card(issue, hidden=False):
     warning_text = f"{len(issue['warnings'])} warning" if len(issue["warnings"]) == 1 else f"{len(issue['warnings'])} warnings"
     top_pills = [
         issue["status"],
+        "candidate gate complete" if issue["completion_scope"] else "",
         issue["category"],
         issue["feature"],
         checklist_text,
@@ -812,6 +820,7 @@ def render_issue_card(issue, hidden=False):
     detail_rows = [
         ("Path", issue["path"]),
         ("Status", issue["status"]),
+        ("Completion scope", issue["completion_scope"]),
         ("Category", issue["category"]),
         ("Feature", issue["feature"]),
         ("Created", issue["created"]),
@@ -829,6 +838,7 @@ def render_issue_card(issue, hidden=False):
   <h3>{html.escape(issue['title'])}</h3>
   <div class="path">{html.escape(issue['path'])}</div>
   <div class="pills">{render_pills(top_pills)}</div>
+  {f'<div class="lifecycle-boundary">{html.escape(issue["completion_scope"])}</div>' if issue["completion_scope"] else ''}
   <details class="card-details">
     <summary>Details</summary>
     {render_detail_rows(detail_rows)}
@@ -1097,6 +1107,7 @@ def render_html(snapshot):
     .label-ready,
     .label-passed,
     .label-completed,
+    .label-candidate-gate-complete,
     .label-cleanup-done {{
       color: #116329;
       background: #dafbe1;
@@ -1133,6 +1144,12 @@ def render_html(snapshot):
       border-color: #eac4ff;
     }}
     .pills {{ display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; }}
+    .lifecycle-boundary {{
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+      margin: 2px 0 5px;
+    }}
     .card-details {{
       margin-top: 7px;
       border-top: 1px solid var(--line);

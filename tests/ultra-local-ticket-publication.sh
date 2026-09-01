@@ -131,7 +131,11 @@ text = re.sub(r"(?m)^Status:[ \t]*.*$", "Status: completed", text, count=1)
 text = re.sub(r"(?m)^(?:Flags|Solve Branch|Solve Worktree):[ \t]*.*\n?", "", text)
 metadata_end = text.index("\n\n")
 text = text[:metadata_end] + "\ncompleted: 2026-08-21" + text[metadata_end:]
-text = text.rstrip() + "\n\n## Comments\n\n### Solve Record\n\n- `../solve-records/life-1.md`\n"
+text = (
+    text.rstrip()
+    + "\n\n## Comments\n\n### Solve Record\n\n- `../solve-records/life-1-legacy.md`\n"
+    + "\n## Solve Records\n\n- `../solve-records/life-1.md`\n"
+)
 path.write_text(text, encoding="utf-8")
 PY
 adapter "$LIFECYCLE_REPO" file-per-ticket .scratch/feature/issues lifecycle-run inspect >/dev/null

@@ -223,6 +223,14 @@ def replace_metadata_field(text: str, field: str, value: str) -> str:
 
 def remove_terminal_solve_record_backlink(text: str) -> str:
     """Exclude the standard path-only outcome backlink from reviewed content."""
+    canonical = re.search(
+        r"(?s)\n## Solve Records[ \t]*\n\n"
+        r"(?:- `[^`\n]*solve-records/[^`\n]+`[ \t]*\n?)+\Z",
+        text,
+    )
+    if canonical:
+        text = text[: canonical.start()]
+
     prefix, separator, comments = text.rpartition("\n## Comments\n\n")
     if not separator:
         return text

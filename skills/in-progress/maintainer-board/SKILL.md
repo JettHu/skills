@@ -35,6 +35,11 @@ verification is valid. Completed lanes scan and count every Ticket, while the
 HTML view shows the most recently completed items first and keeps the rest
 behind Show more.
 
+Completed cards display the lifecycle boundary explicitly: `completed` means
+the Candidate gate is complete; it does not prove merge, deployment, or online
+smoke. The board preserves the canonical Ticket state and adds this as a
+derived display fact rather than creating another lifecycle state.
+
 Closed recovery receipts are terminal when their explicit disposition is
 complete: `state: closed` with `outcome: superseded` or `abandoned` goes to the
 historical recent lane after `cleanup_done: true`, and to Cleanup pending while
