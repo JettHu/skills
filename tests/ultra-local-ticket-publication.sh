@@ -90,6 +90,46 @@ if adapter "$CHECKBOX_REPO" file-per-ticket .scratch/feature/issues checkbox-run
 fi
 grep -Fq 'Ticket content changed after review registration' "$TMPDIR_ROOT/checkbox-semantic-change.out"
 
+python3 - "$ADAPTER" <<'PY'
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(sys.argv[1]).parent))
+spec = spec_from_file_location("local_ticket_publication", sys.argv[1])
+module = module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+
+kwargs = {
+    "state_fields": ("status",),
+    "claim_fields": ("flags",),
+    "branch_fields": ("solve_branch",),
+    "worktree_fields": ("solve_worktree",),
+}
+before = "Status: review-pending\n\n# Ticket\n\nBody\n"
+terminal = before.rstrip() + "\n\n## Solve Records\n\n- `../solve-records/abc.md`\n"
+assert module.normalize_operational_fields(before, **kwargs) == module.normalize_operational_fields(terminal, **kwargs)
+
+before_with_heading = (
+    "Status: review-pending\n\n# Ticket\n\nBody\n\n"
+    "## Solve Records\n\n## Acceptance\n\n- [ ] check\n"
+)
+nonterminal = before_with_heading.replace(
+    "## Solve Records\n\n## Acceptance",
+    "## Solve Records\n\n- `../solve-records/abc.md`\n\n## Acceptance",
+)
+assert module.normalize_operational_fields(before_with_heading, **kwargs) == module.normalize_operational_fields(nonterminal, **kwargs)
+
+for invalid in (
+    "- `../solve-records/abc.md semantic waiver`\n",
+    "- `notes/solve-records/abc.md`\n",
+    "- `../solve-records/abc.txt`\n",
+):
+    changed = before.rstrip() + "\n\n## Solve Records\n\n" + invalid
+    assert module.normalize_operational_fields(before, **kwargs) != module.normalize_operational_fields(changed, **kwargs)
+PY
+
 # Publication digests cover reviewed semantics, not adapter-owned lifecycle
 # evidence. A complete run must remain valid while one member is claimed and
 # finalized, while a real body edit must still invalidate the run.

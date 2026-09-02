@@ -221,16 +221,48 @@ def replace_metadata_field(text: str, field: str, value: str) -> str:
     return text[:start] + updated + text[end:]
 
 
-def remove_terminal_solve_record_backlink(text: str) -> str:
-    """Exclude the standard path-only outcome backlink from reviewed content."""
-    canonical = re.search(
-        r"(?s)\n## Solve Records[ \t]*\n\n"
-        r"(?:- `[^`\n]*solve-records/[^`\n]+`[ \t]*\n?)+\Z",
-        text,
-    )
-    if canonical:
-        text = text[: canonical.start()]
+CANONICAL_SOLVE_RECORD_LINK = re.compile(
+    r"^[ \t]*-[ \t]*`(?:\.\./)+solve-records/"
+    r"[A-Za-z0-9][A-Za-z0-9._-]*\.md`[ \t]*(?:\r?\n|\Z)"
+)
+SOLVE_RECORD_HEADING = re.compile(r"^[ \t]*## Solve Records[ \t]*(?:\r?\n|\Z)")
+ANY_H2_HEADING = re.compile(r"^[ \t]*## [^#].*(?:\r?\n|\Z)")
 
+
+def remove_solve_record_backlinks(text: str) -> str:
+    """Exclude only canonical path-only receipt backlinks from reviewed content."""
+    lines = text.splitlines(keepends=True)
+    output: list[str] = []
+    index = 0
+    while index < len(lines):
+        heading = SOLVE_RECORD_HEADING.fullmatch(lines[index])
+        if not heading:
+            output.append(lines[index])
+            index += 1
+            continue
+
+        end = index + 1
+        while end < len(lines) and not ANY_H2_HEADING.fullmatch(lines[end]):
+            end += 1
+        section = lines[index:end]
+        retained = [line for line in section[1:] if not CANONICAL_SOLVE_RECORD_LINK.fullmatch(line)]
+        if retained and any(line.strip() for line in retained):
+            output.append(section[0])
+            output.extend(retained)
+        elif not any(line.strip() for line in retained):
+            # An empty section containing only canonical lifecycle links is
+            # mechanical, including the heading added by the writer.
+            if output and not output[-1].strip():
+                output.pop()
+            pass
+        else:
+            output.extend(section)
+        index = end
+    return "".join(output)
+
+
+def remove_legacy_solve_record_comments(text: str) -> str:
+    """Exclude the historical path-only receipt comments from reviewed content."""
     prefix, separator, comments = text.rpartition("\n## Comments\n\n")
     if not separator:
         return text
@@ -238,10 +270,7 @@ def remove_terminal_solve_record_backlink(text: str) -> str:
     lines = [line for line in comments.rstrip("\n").splitlines() if line]
     if len(lines) < 2 or lines[0] not in {"### Solve Record", "### Solve Records"}:
         return text
-    if not all(
-        line.startswith("- `") and line.endswith("`") and "solve-records/" in line
-        for line in lines[1:]
-    ):
+    if not all(CANONICAL_SOLVE_RECORD_LINK.fullmatch(line + "\n") for line in lines[1:]):
         return text
     return prefix
 
@@ -253,7 +282,7 @@ def normalize_operational_fields(
     branch_fields: tuple[str, ...],
     worktree_fields: tuple[str, ...],
 ) -> str:
-    text = remove_terminal_solve_record_backlink(text)
+    text = remove_legacy_solve_record_comments(remove_solve_record_backlinks(text))
     text = re.sub(
         r"(?m)^([ \t]*[-*+] [ \t]*\[)[ xX](\][ \t]+)",
         r"\1 \2",
