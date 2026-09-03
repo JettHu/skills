@@ -129,6 +129,7 @@ def refusal(detail: str) -> bool:
             "claim-conflict",
             "requires --explicit",
             "cleanup requires",
+            "terminal repair conflict",
             "merge gate",
             "not eligible",
         )
@@ -189,7 +190,7 @@ def parse_args() -> argparse.Namespace:
     publication_actions = publication.add_subparsers(
         dest="action", required=True, title="publication operations", parser_class=FacadeArgumentParser
     )
-    for action in ("register", "inspect", "promote", "cleanup"):
+    for action in ("register", "inspect", "promote", "cleanup", "terminal-repair"):
         child = publication_actions.add_parser(action, help=f"delegate Ticket publication {action}")
         child.add_argument("--repo", default=".", help="repository containing the configured Tracker contract")
         child.add_argument("--run-id", required=True, help="publication run identity")
@@ -201,6 +202,13 @@ def parse_args() -> argparse.Namespace:
             child.add_argument("--allow-membership-change", action="store_true")
         if action == "cleanup":
             child.add_argument("--explicit", action="store_true")
+        if action == "terminal-repair":
+            child.add_argument("--ticket-id", required=True, help="exact current Ticket identity")
+            child.add_argument("--expected-digest", required=True, help="current Ticket SHA-256 digest")
+            child.add_argument("--repair-type", required=True, choices=("ticket-identity", "blocker-target", "publication-metadata", "digest-backlink-structure"))
+            child.add_argument("--old-value", default="", help="typed current value; unused for backlink structure")
+            child.add_argument("--new-value", default="", help="typed repaired value; unused for backlink structure")
+            child.add_argument("--reason", required=True, help="human authorization reason")
 
     ticket = groups.add_parser("ticket", help="Ticket frontier discovery and conflict-detecting Claim")
     ticket_actions = ticket.add_subparsers(
@@ -274,6 +282,15 @@ def main() -> int:
                 delegated.append("--allow-membership-change")
             if getattr(args, "explicit", False):
                 delegated.append("--explicit")
+            if args.action == "terminal-repair":
+                delegated.extend([
+                    "--ticket-id", args.ticket_id,
+                    "--expected-digest", args.expected_digest,
+                    "--repair-type", args.repair_type,
+                    "--old-value", args.old_value,
+                    "--new-value", args.new_value,
+                    "--reason", args.reason,
+                ])
             return delegate(operation, "publication", delegated)
         if args.group == "ticket":
             if args.action == "handoff":

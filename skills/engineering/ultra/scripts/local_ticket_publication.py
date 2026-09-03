@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 from local_ticket_surface import (
     REPRESENTATIONS,
@@ -497,10 +498,7 @@ def load_file_per(location: Path, contract: LocalContract) -> list[Ticket]:
     return tickets
 
 
-def load_tickets_file(location: Path, contract: LocalContract) -> list[Ticket]:
-    if not location.is_file():
-        raise AdapterError(f"tickets-file does not exist: {location}")
-    text = location.read_text(encoding="utf-8")
+def load_tickets_file_text(location: Path, text: str, contract: LocalContract) -> list[Ticket]:
     tickets: list[Ticket] = []
     cursor = 0
     while True:
@@ -538,6 +536,12 @@ def load_tickets_file(location: Path, contract: LocalContract) -> list[Ticket]:
     ):
         raise AdapterError("tickets-file contains formal Ticket content outside safe section markers")
     return tickets
+
+
+def load_tickets_file(location: Path, contract: LocalContract) -> list[Ticket]:
+    if not location.is_file():
+        raise AdapterError(f"tickets-file does not exist: {location}")
+    return load_tickets_file_text(location, location.read_text(encoding="utf-8"), contract)
 
 
 def load_tickets_at(
@@ -653,6 +657,63 @@ def snapshot(selected: list[Ticket]) -> dict[str, str]:
     return {ticket.ticket_id: ticket.body_digest for ticket in selected}
 
 
+def repair_audits(data: dict) -> list[dict]:
+    audits = data.get("terminal_repairs", [])
+    if not isinstance(audits, list) or any(not isinstance(item, dict) for item in audits):
+        raise AdapterError("publication journal has malformed terminal repair audit history")
+    return audits
+
+
+def current_publication_snapshot(data: dict) -> dict[str, str]:
+    """Project immutable registration digests through append-only terminal audits."""
+    original = data.get("body_digests")
+    if not isinstance(original, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for key, value in original.items()
+    ):
+        raise AdapterError("publication journal has malformed body_digests")
+    current = dict(original)
+    for audit in repair_audits(data):
+        required = {"operation", "ticket_id", "old_digest", "new_digest", "reason", "timestamp"}
+        if not required.issubset(audit) or audit.get("operation") != "terminal-repair":
+            raise AdapterError("publication journal has malformed terminal repair audit entry")
+        ticket_id = audit["ticket_id"]
+        related = audit.get("related_digests", [])
+        if not isinstance(related, list):
+            raise AdapterError("publication journal has malformed related repair digests")
+        for change in related:
+            if not isinstance(change, dict) or set(change) != {"ticket_id", "old_digest", "new_digest"}:
+                raise AdapterError("publication journal has malformed related repair digest")
+            related_id = change["ticket_id"]
+            if related_id not in current or current[related_id] != change["old_digest"]:
+                raise AdapterError("publication journal has inconsistent related repair digest chain")
+            current[related_id] = change["new_digest"]
+        if ticket_id not in current or current[ticket_id] != audit["old_digest"]:
+            raise AdapterError("publication journal has inconsistent terminal repair audit chain")
+        new_ticket_id = audit.get("new_ticket_id", ticket_id)
+        if new_ticket_id != ticket_id:
+            if not isinstance(new_ticket_id, str) or new_ticket_id in current:
+                raise AdapterError("publication journal has inconsistent repaired Ticket identity")
+            del current[ticket_id]
+        current[new_ticket_id] = audit["new_digest"]
+    return current
+
+
+def current_publication_members(data: dict) -> list[str]:
+    members = data.get("members")
+    if not isinstance(members, list) or any(not isinstance(item, str) for item in members):
+        raise AdapterError("publication journal has malformed members")
+    current = list(members)
+    for audit in repair_audits(data):
+        old = audit["ticket_id"]
+        new = audit.get("new_ticket_id", old)
+        if new != old:
+            if current.count(old) != 1 or new in current:
+                raise AdapterError("publication journal has inconsistent repaired membership")
+            current[current.index(old)] = new
+    return sorted(current)
+
+
 def register(repo: Path, representation: str, raw_location: str, run_id: str, allow_membership_change: bool) -> dict:
     with stable_mutation_surface(
         repo, representation, raw_location
@@ -696,9 +757,9 @@ def validate_against_journal_at(
     data = read_journal(journal_path(location, representation, run_id))
     if data.get("representation") != representation or data.get("location") != str(location.relative_to(repo)):
         raise AdapterError("publication journal does not match the configured adapter")
-    if sorted(data.get("members", [])) != sorted(ticket.ticket_id for ticket in selected):
+    if current_publication_members(data) != sorted(ticket.ticket_id for ticket in selected):
         raise AdapterError("publication membership drifted")
-    if data.get("body_digests") != snapshot(selected):
+    if current_publication_snapshot(data) != snapshot(selected):
         raise AdapterError("Ticket content changed after review registration")
     return location, tickets, data
 
@@ -715,6 +776,257 @@ def validate_against_journal(repo: Path, representation: str, raw_location: str,
 def replace_status(ticket: Ticket, status: str) -> str:
     inner = replace_metadata_field(ticket.inner, ticket.state_field, status)
     return ticket.text[: ticket.inner_start] + inner + ticket.text[ticket.inner_end :]
+
+
+def replace_metadata_name(text: str, old: str, new: str) -> str:
+    start, end, _kind = metadata_region(text)
+    region = text[start:end]
+    matches = list(re.finditer(r"(?m)^([^\n:]+)([ \t]*:)", region))
+    selected = [match for match in matches if match.group(1).strip() == old]
+    if len(selected) != 1:
+        raise AdapterError(f"repair expected exactly one metadata field named {old}")
+    match = selected[0]
+    return text[:start] + region[:match.start(1)] + new + region[match.end(1):] + text[end:]
+
+
+def typed_repair_text(ticket: Ticket, contract: LocalContract, repair_type: str, old: str, new: str) -> str:
+    """Build one integrity-only edit; no arbitrary Ticket body is accepted."""
+    inner = ticket.inner
+    if repair_type == "ticket-identity":
+        if ticket.ticket_id == new and SAFE_ID.fullmatch(old):
+            return ticket.text
+        if old != ticket.ticket_id or not SAFE_ID.fullmatch(new):
+            raise AdapterError("ticket-identity repair requires the exact current ID and one safe new ID")
+        field = metadata_spelling(inner, next(normalize_key(f) for f in contract.identity_fields if normalize_key(f) in parse_metadata(inner)))
+        inner = replace_metadata_field(inner, field, new)
+    elif repair_type == "blocker-target":
+        if not SAFE_ID.fullmatch(old) or not SAFE_ID.fullmatch(new):
+            raise AdapterError("blocker-target repair requires safe exact IDs")
+        if ticket.blockers.count(old) == 0 and ticket.blockers.count(new) == 1:
+            return ticket.text
+        if ticket.blockers.count(old) != 1:
+            raise AdapterError("blocker-target repair requires exactly one matching current blocker")
+        blockers = [new if item == old else item for item in ticket.blockers]
+        metadata = parse_metadata(inner)
+        key = next((normalize_key(f) for f in contract.blocker_fields if normalize_key(f) in metadata), "")
+        if not key:
+            raise AdapterError("blocker-target repair requires configured blocker metadata")
+        inner = replace_metadata_field(inner, metadata_spelling(inner, key), ", ".join(blockers))
+    elif repair_type == "publication-metadata":
+        groups = (contract.identity_fields, contract.run_fields, contract.source_fields)
+        group = next((items for items in groups if old in items and new in items), None)
+        if group is None or normalize_key(old) == normalize_key(new):
+            raise AdapterError("publication-metadata repair only renames one configured metadata alias")
+        spellings = {line.split(":", 1)[0].strip() for line in inner[metadata_region(inner)[0]:metadata_region(inner)[1]].splitlines() if ":" in line}
+        if old not in spellings and new in spellings:
+            return ticket.text
+        inner = replace_metadata_name(inner, old, new)
+    elif repair_type == "digest-backlink-structure":
+        if old or new:
+            raise AdapterError("digest-backlink-structure repair does not accept replacement values")
+        normalized = remove_legacy_solve_record_comments(inner)
+        if normalized == inner:
+            raise AdapterError("no legacy Solve Record backlink structure requires repair")
+        legacy = inner[len(normalized):]
+        links = re.findall(r"(?m)^-[ \t]*(`(?:\.\./)+solve-records/[A-Za-z0-9][A-Za-z0-9._-]*\.md`)[ \t]*$", legacy)
+        inner = normalized.rstrip() + "\n\n## Solve Records\n\n" + "".join(f"- {link}\n" for link in links)
+    else:
+        raise AdapterError(f"unsupported terminal repair type: {repair_type}")
+    text = ticket.text[:ticket.inner_start] + inner + ticket.text[ticket.inner_end:]
+    if ticket.section_start or ticket.section_end:
+        if repair_type == "ticket-identity":
+            begin = BEGIN.search(text, ticket.section_start)
+            if not begin or begin.group(1) != old:
+                raise AdapterError("Ticket section identity changed concurrently")
+            text = text[:begin.start(1)] + new + text[begin.end(1):]
+    return text
+
+
+def verify_solve_record_backlinks(repo: Path, ticket: Ticket) -> None:
+    links = re.findall(r"(?m)^-[ \t]*`((?:\.\./)+solve-records/[A-Za-z0-9][A-Za-z0-9._-]*\.md)`[ \t]*$", ticket.inner)
+    for raw in links:
+        path = (ticket.path.parent / raw).resolve()
+        try:
+            path.relative_to(repo)
+        except ValueError as error:
+            raise AdapterError("Solve Record backlink escapes the repository") from error
+        if not path.is_file():
+            raise AdapterError(f"Solve Record backlink target is missing: {raw}")
+        record = path.read_text(encoding="utf-8")
+        record_ids = re.findall(r"(?m)^id:[ \t]*(\S+)[ \t]*$", record)
+        outcomes = re.findall(r"(?m)^outcome:[ \t]*(\S+)[ \t]*$", record)
+        if len(record_ids) != 1 or len(outcomes) != 1:
+            raise AdapterError(f"Solve Record backlink target has malformed identity or outcome: {raw}")
+        ticket_ref = str(ticket.path.relative_to(repo))
+        issue_blocks = re.findall(r"(?ms)^issues:[ \t]*\n((?:[ \t]+-[^\n]*\n?)+)", record)
+        linked = {
+            line.split("-", 1)[1].strip().strip("'\"")
+            for block in issue_blocks
+            for line in block.splitlines()
+            if line.strip().startswith("-")
+        }
+        if ticket_ref not in linked:
+            raise AdapterError(f"Solve Record backlink does not point back to repaired Ticket: {raw}")
+
+
+def terminal_repair(repo: Path, representation: str, raw_location: str, run_id: str,
+                    ticket_id: str, expected_digest: str, repair_type: str,
+                    old: str, new: str, reason: str) -> dict:
+    if not ticket_id or not SAFE_ID.fullmatch(ticket_id):
+        raise AdapterError("terminal repair requires one exact safe Ticket identity")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+        raise AdapterError("terminal repair requires a lowercase SHA-256 expected digest")
+    if not reason.strip():
+        raise AdapterError("terminal repair requires a human reason")
+    with stable_mutation_surface(repo, representation, raw_location) as (location, contract):
+        path = journal_path(location, representation, run_id)
+        data = read_journal(path)
+        if data.get("phase") not in {"promoted", "completed"}:
+            raise AdapterError("terminal repair requires a promoted or completed publication")
+        tickets = load_tickets_at(location, representation, contract)
+        selected = run_tickets(tickets, run_id)
+        current = current_publication_snapshot(data)
+        expected_members = current_publication_members(data)
+        actual_members = sorted(item.ticket_id for item in selected)
+        partial_identity = repair_type == "ticket-identity" and old == ticket_id and new in actual_members and ticket_id in expected_members
+        if actual_members != expected_members and not partial_identity:
+            raise AdapterError("publication membership drifted")
+        target = next((item for item in selected if item.ticket_id == ticket_id), None)
+        if target is None and partial_identity:
+            target = next((item for item in selected if item.ticket_id == new), None)
+        if target is None and repair_type == "ticket-identity":
+            audited = [
+                item for item in repair_audits(data)
+                if item.get("ticket_id") == ticket_id
+                and item.get("old_digest") == expected_digest
+                and item.get("new_ticket_id") == new
+            ]
+            if len(audited) == 1:
+                target = next((item for item in selected if item.ticket_id == new), None)
+        if target is None:
+            raise AdapterError("terminal repair Ticket identity is ambiguous or absent")
+        desired_text = typed_repair_text(target, contract, repair_type, old, new)
+        # Parse the desired bytes independently without exposing a general editor.
+        if representation == "file-per-ticket":
+            desired = ticket_from_inner(target.path, desired_text, 0, len(desired_text), contract)
+        else:
+            desired_all = load_tickets_file_text(location, desired_text, contract)
+            desired = next((item for item in desired_all if item.ticket_id in {ticket_id, new}), None)
+        if desired is None:
+            raise AdapterError("terminal repair did not produce one formal Ticket")
+        desired_digest = desired.body_digest
+        related_repairs: list[tuple[Ticket, Ticket, str]] = []
+        if repair_type == "ticket-identity":
+            if representation == "tickets-file":
+                combined = desired_text
+                for original in tickets:
+                    if original is target:
+                        continue
+                    if old in original.blockers:
+                        parsed = load_tickets_file_text(location, combined, contract)
+                        dependent = next(item for item in parsed if item.ticket_id == original.ticket_id)
+                        combined = typed_repair_text(dependent, contract, "blocker-target", old, new)
+                        updated = next(
+                            item for item in load_tickets_file_text(location, combined, contract)
+                            if item.ticket_id == original.ticket_id
+                        )
+                        related_repairs.append((original, updated, combined))
+                    elif new in original.blockers and original.body_digest != current.get(original.ticket_id):
+                        prior_text = typed_repair_text(original, contract, "blocker-target", new, old)
+                        prior = next(
+                            item for item in load_tickets_file_text(location, prior_text, contract)
+                            if item.ticket_id == original.ticket_id
+                        )
+                        if prior.body_digest != current.get(original.ticket_id):
+                            raise AdapterError("terminal repair requires attention: dependent Ticket is inconsistent")
+                        related_repairs.append((prior, original, combined))
+                desired_text = combined
+                desired = next(
+                    item for item in load_tickets_file_text(location, desired_text, contract)
+                    if item.ticket_id == new
+                )
+                desired_digest = desired.body_digest
+            for item in tickets:
+                if representation == "tickets-file" or item is target:
+                    continue
+                if old in item.blockers:
+                    before, updated_text = item, typed_repair_text(item, contract, "blocker-target", old, new)
+                    updated = ticket_from_inner(item.path, updated_text, 0, len(updated_text), contract)
+                elif new in item.blockers and item.body_digest != current.get(item.ticket_id):
+                    prior_text = typed_repair_text(item, contract, "blocker-target", new, old)
+                    before = ticket_from_inner(item.path, prior_text, 0, len(prior_text), contract)
+                    updated, updated_text = item, item.text
+                    if before is None or before.body_digest != current.get(item.ticket_id):
+                        raise AdapterError("terminal repair requires attention: dependent Ticket is inconsistent")
+                else:
+                    continue
+                if updated is None:
+                    raise AdapterError("identity repair did not preserve a dependent Ticket")
+                related_repairs.append((before, updated, updated_text))
+        replacements = {before.ticket_id: after for before, after, _text in related_repairs}
+        hypothetical = [desired if item is target else replacements.get(item.ticket_id, item) for item in tickets]
+        if len({item.ticket_id for item in hypothetical}) != len(hypothetical):
+            raise AdapterError("terminal repair would create duplicate Ticket identity")
+        validate_blocker_targets(hypothetical)
+        verify_solve_record_backlinks(repo, desired)
+        actual_snapshot = snapshot(selected)
+        related_ids = {before.ticket_id for before, _after, _text in related_repairs}
+        for member, digest in current.items():
+            actual_key = new if partial_identity and member == ticket_id else member
+            if actual_key != target.ticket_id and actual_key not in related_ids and actual_snapshot.get(actual_key) != digest:
+                raise AdapterError("terminal repair requires attention: another run member is inconsistent")
+        matching = [a for a in repair_audits(data) if a.get("ticket_id") == ticket_id and a.get("old_digest") == expected_digest and a.get("new_digest") == desired_digest]
+        if target.body_digest == desired_digest and len(matching) == 1:
+            _location, refreshed, _final = validate_against_journal_at(repo, representation, location, run_id, contract)
+            repaired = next((item for item in refreshed if item.ticket_id == desired.ticket_id), None)
+            if repaired is None:
+                raise AdapterError("terminal repair retry postcondition verification failed")
+            verify_solve_record_backlinks(repo, repaired)
+            return {"status": "success", "ticket_id": desired.ticket_id, "old_digest": expected_digest, "new_digest": desired_digest, "repaired": True, "retry": True}
+        partial_ticket_write = target.body_digest == desired_digest and not matching
+        if current.get(ticket_id) != expected_digest or (target.body_digest != expected_digest and not partial_ticket_write):
+            raise AdapterError("terminal repair conflict: unexpected current digest")
+        if matching:
+            raise AdapterError("terminal repair requires attention: audit exists before Ticket update")
+        for before, _after, _updated_text in related_repairs:
+            if before.body_digest != current.get(before.ticket_id):
+                raise AdapterError("terminal repair requires attention: dependent Ticket is inconsistent")
+        if not partial_ticket_write:
+            if representation == "file-per-ticket":
+                atomic_write(target.path, desired_text)
+            else:
+                atomic_write(location, desired_text)
+            if os.environ.get("ULTRA_TERMINAL_REPAIR_FAIL_AFTER") == "ticket":
+                raise AdapterError("injected terminal repair interruption after Ticket write")
+        related_digest_audit = []
+        for before, after, updated_text in related_repairs:
+            if before.body_digest == after.body_digest:
+                continue
+            if representation == "file-per-ticket":
+                atomic_write(before.path, updated_text)
+            related_digest_audit.append({
+                "ticket_id": before.ticket_id,
+                "old_digest": before.body_digest,
+                "new_digest": after.body_digest,
+            })
+        audit = {"operation": "terminal-repair", "ticket_id": ticket_id, "old_digest": expected_digest,
+                 "new_digest": desired_digest, "reason": reason.strip(),
+                 "timestamp": datetime.now(timezone.utc).isoformat()}
+        if desired.ticket_id != ticket_id:
+            audit["new_ticket_id"] = desired.ticket_id
+        if related_digest_audit:
+            audit["related_digests"] = related_digest_audit
+        data.setdefault("terminal_repairs", []).append(audit)
+        write_journal(path, data)
+        if os.environ.get("ULTRA_TERMINAL_REPAIR_FAIL_AFTER") == "journal":
+            raise AdapterError("injected terminal repair interruption after journal write")
+        _location, refreshed, final = validate_against_journal_at(repo, representation, location, run_id, contract)
+        repaired = next((item for item in refreshed if item.ticket_id == desired.ticket_id), None)
+        if repaired is None or repaired.blockers != desired.blockers or repaired.body_digest != desired_digest:
+            raise AdapterError("terminal repair postcondition verification failed")
+        verify_solve_record_backlinks(repo, repaired)
+        return {"status": "success", "ticket_id": repaired.ticket_id, "old_digest": expected_digest,
+                "new_digest": desired_digest, "repaired": True, "retry": False}
 
 
 def promote(repo: Path, representation: str, raw_location: str, run_id: str) -> dict:
@@ -804,6 +1116,9 @@ def inspect(repo: Path, representation: str, raw_location: str, run_id: str) -> 
         "phase": data.get("phase") if data else "unregistered",
         "members": sorted(ticket.ticket_id for ticket in selected),
         "statuses": {ticket.ticket_id: ticket.status for ticket in selected},
+        "body_digests": snapshot(selected),
+        "original_body_digests": data.get("body_digests", {}) if data else {},
+        "terminal_repairs": repair_audits(data) if data else [],
     }
 
 
@@ -857,6 +1172,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--location", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--ticket-id")
+    parser.add_argument("--expected-digest")
+    parser.add_argument("--repair-type", choices=("ticket-identity", "blocker-target", "publication-metadata", "digest-backlink-structure"))
+    parser.add_argument("--old-value", default="")
+    parser.add_argument("--new-value", default="")
+    parser.add_argument("--reason")
     parser.add_argument("--allow-membership-change", action="store_true")
     parser.add_argument("--explicit", action="store_true")
     return parser.parse_args()
@@ -866,7 +1186,7 @@ def main() -> int:
     args = parse_args()
     repo = Path(args.repo).resolve()
     try:
-        if args.action not in {"register", "inspect", "promote", "cleanup"}:
+        if args.action not in {"register", "inspect", "promote", "cleanup", "terminal-repair"}:
             raise AdapterError(f"unsupported operation: {args.action}")
         if args.action == "register":
             payload = register(repo, args.representation, args.location, args.run_id, args.allow_membership_change)
@@ -874,6 +1194,12 @@ def main() -> int:
             payload = promote(repo, args.representation, args.location, args.run_id)
         elif args.action == "cleanup":
             payload = cleanup(repo, args.representation, args.location, args.run_id, args.explicit)
+        elif args.action == "terminal-repair":
+            payload = terminal_repair(
+                repo, args.representation, args.location, args.run_id,
+                args.ticket_id or "", args.expected_digest or "", args.repair_type or "",
+                args.old_value, args.new_value, args.reason or "",
+            )
         else:
             payload = inspect(repo, args.representation, args.location, args.run_id)
         print(json.dumps(payload, indent=2, sort_keys=True))

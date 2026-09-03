@@ -85,7 +85,7 @@ def facade_data(result: subprocess.CompletedProcess[str], operation: str) -> dic
 # Canonical help reaches every delegated domain surface without relying on PATH.
 for command, words in (
     ([sys.executable, str(facade), "--help"], ("publication", "ticket", "solve-record", "Ticket", "Claim", "Attempt", "Solve Record")),
-    ([sys.executable, str(facade), "publication", "--help"], ("register", "inspect", "promote", "cleanup")),
+    ([sys.executable, str(facade), "publication", "--help"], ("register", "inspect", "promote", "cleanup", "terminal-repair")),
     ([sys.executable, str(facade), "ticket", "--help"], ("frontier", "claim", "handoff")),
     ([sys.executable, str(facade), "solve-record", "--help"], ("dashboard", "merge-gate", "landing-plan", "cleanup-plan")),
 ):

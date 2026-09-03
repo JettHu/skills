@@ -858,6 +858,95 @@ if adapter "$FILE_REPO" file-per-ticket ../outside review-fix-run inspect >"$TMP
   exit 1
 fi
 
+# Terminal repair is a typed CAS over a promoted publication. It preserves the
+# registration snapshot, appends exactly one audit, resumes after the Ticket
+# write boundary, and keeps malformed or semantic changes fail-closed.
+REPAIR_REPO="$TMPDIR_ROOT/terminal-repair"
+mkdir -p "$REPAIR_REPO/.scratch/feature/issues"
+write_contract "$REPAIR_REPO" retain-until-explicit-cleanup
+write_file_ticket "$REPAIR_REPO/.scratch/feature/issues/A.md" A repair-run review-pending B "Repair source"
+write_file_ticket "$REPAIR_REPO/.scratch/feature/issues/B.md" B repair-run review-pending "" "Old blocker"
+write_file_ticket "$REPAIR_REPO/.scratch/feature/issues/C.md" C repair-run review-pending "" "Correct blocker"
+adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run register >/dev/null
+adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run promote >/dev/null
+repair_digest="$(python3 - "$ADAPTER" "$REPAIR_REPO/.scratch/feature/issues/A.md" "$REPAIR_REPO" <<'PY'
+import importlib.util, sys
+from pathlib import Path
+adapter, ticket, repo = map(Path, sys.argv[1:])
+sys.path.insert(0, str(adapter.parent))
+spec = importlib.util.spec_from_file_location("publication", adapter)
+module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
+contract = module.configured_local_contract(repo)
+print(module.load_file_per(ticket.parent, contract)[0].body_digest)
+PY
+)"
+if ULTRA_TERMINAL_REPAIR_FAIL_AFTER=ticket adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
+  --ticket-id A --expected-digest "$repair_digest" --repair-type blocker-target \
+  --old-value B --new-value C --reason 'human confirmed blocker identity' >"$TMPDIR_ROOT/repair-interrupt.out" 2>&1; then
+  echo "terminal repair interruption unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -Fq 'Blocked By: C' "$REPAIR_REPO/.scratch/feature/issues/A.md"
+adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
+  --ticket-id A --expected-digest "$repair_digest" --repair-type blocker-target \
+  --old-value B --new-value C --reason 'human confirmed blocker identity' >"$TMPDIR_ROOT/repair-success.json"
+adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
+  --ticket-id A --expected-digest "$repair_digest" --repair-type blocker-target \
+  --old-value B --new-value C --reason 'human confirmed blocker identity' >"$TMPDIR_ROOT/repair-retry.json"
+python3 - "$REPAIR_REPO/.scratch/feature/issues/.ultra-publications/repair-run.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert len(data["terminal_repairs"]) == 1, data
+assert data["body_digests"]["A"] == data["terminal_repairs"][0]["old_digest"]
+assert data["terminal_repairs"][0]["reason"] == "human confirmed blocker identity"
+PY
+adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run inspect >"$TMPDIR_ROOT/repair-inspect.json"
+identity_digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["body_digests"]["B"])' "$TMPDIR_ROOT/repair-inspect.json")"
+adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
+  --ticket-id B --expected-digest "$identity_digest" --repair-type ticket-identity \
+  --old-value B --new-value D --reason 'human confirmed stable Ticket identity' >/dev/null
+adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
+  --ticket-id B --expected-digest "$identity_digest" --repair-type ticket-identity \
+  --old-value B --new-value D --reason 'human confirmed stable Ticket identity' >/dev/null
+adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run inspect >"$TMPDIR_ROOT/repair-identity-inspect.json"
+python3 - "$TMPDIR_ROOT/repair-identity-inspect.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+assert data["members"] == ["A", "C", "D"], data
+assert set(data["original_body_digests"]) == {"A", "B", "C"}, data
+assert set(data["body_digests"]) == {"A", "C", "D"}, data
+PY
+referenced_digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["body_digests"]["C"])' "$TMPDIR_ROOT/repair-identity-inspect.json")"
+adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
+  --ticket-id C --expected-digest "$referenced_digest" --repair-type ticket-identity \
+  --old-value C --new-value E --reason 'human confirmed referenced Ticket identity' >/dev/null
+grep -Fq 'Blocked By: E' "$REPAIR_REPO/.scratch/feature/issues/A.md"
+adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run inspect >"$TMPDIR_ROOT/repair-before-journal-boundary.json"
+metadata_digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["body_digests"]["A"])' "$TMPDIR_ROOT/repair-before-journal-boundary.json")"
+if ULTRA_TERMINAL_REPAIR_FAIL_AFTER=journal adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
+  --ticket-id A --expected-digest "$metadata_digest" --repair-type publication-metadata \
+  --old-value 'Source Spec' --new-value Parent --reason 'human confirmed metadata alias' >"$TMPDIR_ROOT/repair-journal-interrupt.out" 2>&1; then
+  echo "terminal repair journal interruption unexpectedly succeeded" >&2
+  exit 1
+fi
+adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
+  --ticket-id A --expected-digest "$metadata_digest" --repair-type publication-metadata \
+  --old-value 'Source Spec' --new-value Parent --reason 'human confirmed metadata alias' >/dev/null
+if adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
+  --ticket-id A --expected-digest "$(printf x%.0s {1..64})" --repair-type blocker-target \
+  --old-value C --new-value B --reason stale >"$TMPDIR_ROOT/repair-stale.out" 2>&1; then
+  echo "terminal repair accepted a stale expected digest" >&2
+  exit 1
+fi
+before_semantic="$(sha256sum "$REPAIR_REPO/.scratch/feature/issues/A.md" | cut -d' ' -f1)"
+if adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
+  --ticket-id A --expected-digest "$repair_digest" --repair-type arbitrary-body \
+  --old-value x --new-value y --reason semantic >"$TMPDIR_ROOT/repair-semantic.out" 2>&1; then
+  echo "terminal repair accepted arbitrary semantic body replacement" >&2
+  exit 1
+fi
+test "$before_semantic" = "$(sha256sum "$REPAIR_REPO/.scratch/feature/issues/A.md" | cut -d' ' -f1)"
+
 python3 - "$REPO_ROOT" <<'PY'
 from pathlib import Path
 import sys

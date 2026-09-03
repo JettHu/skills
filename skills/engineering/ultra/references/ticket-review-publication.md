@@ -102,9 +102,18 @@ bundled helper; never retry a completed operation through the other route.
 | `inspect` | Review or recovery diagnosis; repository, configured representation/location, run ID | Current phase, exact members, canonical statuses, and current bodies matching registered digests | Read-only structured refusal, including digest drift; repair the reported mismatch and re-run |
 | `promote` | Only after semantic review passes; repository, configured representation/location, registered run ID | `promoted` phase after complete-set verification | Retain resumable state; fix the reported failure and re-run the same `promote` |
 | `cleanup` | Cancelled review-pending run only; repository, configured representation/location, run ID, and explicit authorization when policy requires | Exact cleaned member IDs | Retain artifacts; repair policy/artifact mismatch, or resume promotion when instructed |
+| `terminal-repair` | Human-authorized integrity repair on a promoted/completed run; exact Ticket ID, expected current digest, typed repair, and reason | Current repaired digest and one additive audit while the original snapshot stays immutable | Stale digest/membership is a conflict; malformed partial state requires attention; retry the identical operation after an adapter interruption |
 
 Manual fallback is prohibited for every operation. Publication has no public
 `claim-check` or `claim`; both are unsupported and must not mutate Tickets.
+
+`terminal-repair` is not a general editor. It accepts only stable Ticket-ID,
+blocker-target, configured publication-metadata spelling, or canonical Solve
+Record backlink-structure repairs. Scope, acceptance criteria, technical
+decisions, ADR/PRD conclusions, and business meaning require a separately
+published erratum or superseding Ticket. Never edit the journal to recover a
+repair; `inspect`, frontier, and Maintainer Board consume the audited current
+digest and fail closed on an incomplete or malformed repair.
 
 ## Review and fix
 
