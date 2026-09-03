@@ -35,21 +35,12 @@ Use the base contract as evidence for one preset:
   policy: `retain-until-explicit-cleanup` or `delete-on-cancel`. Publication
   exposes only `register`, `inspect`, `promote`, and `cleanup`; frontier alone
   owns whole-tracker discovery, blockers, snapshots, Claim, and execution
-  branch/worktree assignment. Both read their exact contract. Path grammar is shared with the runtime:
-  only a complete single-segment `<feature>` placeholder is optional, while
-  `file-per-ticket` requires exactly one final `<ticket-file>.md` component;
-  unknown, embedded, repeated, or missing placeholders fail closed. Contract-bounded
-  normalization accepts only declared key aliases and state presentation
-  variants; singular/plural aliases are allowlisted field by field, while all
-  identity values and section markers remain exact. Duplicate, unknown,
-  undeclared, ambiguous, or conflicting variants fail closed. A `promoting` or
-  `promoted` run is resumed, not cleaned. Manual transaction fallback is prohibited.
-  The generated Solve Coordination section also declares
-  `Frontier adapter: bundled-local-markdown-v1` and the exact state, completed,
-  human-blocked, blocker, Claim, branch, and worktree fields consumed by the
-  bundled frontier helper. These labeled values are executable configuration,
-  not descriptive hints. Missing, duplicated, or unknown values fail before
-  discovery or Claim mutation.
+  branch/worktree assignment. Both read their exact contract. Read the
+  [Local Markdown reference](references/local-markdown.md) for path grammar,
+  normalization, blocker representation, and publication recovery. The
+  generated Solve Coordination section declares the executable fields consumed
+  by the bundled frontier helper. A `promoting` or `promoted` run is resumed,
+  not cleaned, and publication transaction fallback is prohibited.
 - `github` or `gitlab` choose `remote-review-pending` when provisional remote
   Tickets are acceptable, or `local-staging` when the remote must contain only
   reviewed Tickets.

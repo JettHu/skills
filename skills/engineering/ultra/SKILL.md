@@ -98,7 +98,7 @@ For `diagnosing-bugs`, invoke the target first so it can build and run its red-c
 
 ### 4. Invoke the target skill
 
-For `to-tickets`, first read and follow [Ticket Review Publication](references/ticket-review-publication.md) and the configured tracker extension. Pass the target the configured durable draft surface, representation, `review-pending` state, stable identities, and no-direct-ready rule. Route Local Markdown publication only through its declared operations, preferably through the bundled `scripts/ultra_tracker.py` facade; it delegates only to the declared owning helpers. If the facade is unavailable, use one explicit capability-equivalent direct-helper handoff before the operation begins and never repeat a completed operation. For GitHub or GitLab, use only the configured strategy. If the durable surface is unwritable, report the degradation; never substitute a strategy or manual transaction.
+For `to-tickets`, read [Ticket Review Publication](references/ticket-review-publication.md) and the configured tracker extension before handling its durable artifact. Pass the target the configured draft surface, representation, review-pending state, stable identities, and no-direct-ready rule. Use the configured publication operations and stop on their structured failure; do not create a second publication workflow here.
 
 Invoke the target skill unmodified, passing through any remaining arguments (e.g., via Skill tool, or by reading its SKILL.md and following it directly). The conversation now has richer context from step 3 (or from existing conversation context if step 3 was skipped).
 
@@ -111,7 +111,7 @@ When delegation is available, assign every Ultra-additive post-review to an inde
 - **Completeness reviewer**: Cross-reference the skill's output against pre-exploration findings (or conversation context). Flag only concrete omissions, especially *scope blindness* — issues or edge cases raised during exploration that the skill output silently dropped.
 - **Consistency reviewer**: Check that the output uses correct domain vocabulary (CONTEXT.md), respects ADRs, and follows project conventions. Flag only real *convention drift* — patterns, naming, or structures that deviate without justification.
 
-For canonical shaping targets `to-spec` and `to-tickets`, review the exact generated artifact on its configured durable surface. For `to-tickets`, route complete-set registration through the publication adapter and keep the set non-claimable during review. The fresh-context reviewer checks Spec coverage, canonical terminology, independent acceptance, context-window sizing, validation, source pointers, and true blocker edges. The main Agent fixes every derivable finding in those same artifacts, re-registers the repaired set, and re-runs affected review. Ask only for unresolved human-owned scope, product/API/data/security/architecture/significant-UX, ownership, release-policy, or missing-core-requirement choices.
+For canonical shaping targets `to-spec` and `to-tickets`, review the exact generated artifact on its configured durable surface. For `to-tickets`, the publication reference owns complete-set registration and promotion. The fresh-context reviewer checks Spec coverage, canonical terminology, independent acceptance, context-window sizing, validation, source pointers, and true blocker edges when those are the profile-declared evidence goal. The main Agent fixes every derivable finding in those same artifacts, re-registers the repaired set, and re-runs affected review, then consumes the result according to that target's repair rules. Ask only for unresolved human-owned scope, product/API/data/security/architecture/significant-UX, ownership, release-policy, or missing-core-requirement choices.
 
 For `to-tickets`, the main Agent then selects the configured promotion operation from [Ticket Review Publication](references/ticket-review-publication.md), accepts only its declared complete-set evidence, and stops on structured failure. Interrupted or cancelled runs remain durably resumable and non-claimable; only verified promotion yields `ready-for-agent`.
 
@@ -131,19 +131,6 @@ git diff --cached --quiet
 
 This catches committed changes (`git diff <base_sha> HEAD`), unstaged changes (`git diff`), and staged changes (`git diff --cached`). If all three commands succeed (no changes at all), skip the review.
 
-If changes exist, pin and report the review range before starting review. Prefer an explicit fixed point when the user supplied one; otherwise use `base_sha`. Pass reviewers the diff command, commit list, and any staged/uncommitted diff status so all review passes inspect the same change set.
+If changes exist, pin and report the review range before starting review. Prefer an explicit fixed point when the user supplied one; otherwise use `base_sha`. Pass the fixed range to the selected reviewer so it inspects the same change set.
 
-Conduct a proportional, findings-first code review (e.g., via TeamCreate or parallel review passes). Treat these as internal review lenses, not mandatory output sections or a checklist to enumerate. Report real findings only. If there are no findings, give a short pass summary that names only the relevant axes. Include a no-op section such as "Dependencies: no impact" only when that fact is unusually important for the diff.
-
-Primary axes to consider:
-
-1. Spec: functional correctness, requirement coverage, missing/partial requirements, and scope creep against the originating issue, PRD, acceptance criteria, or user request
-2. Standards: documented coding standards, project conventions, ADRs, nearby patterns, code quality, and naming
-
-Supporting checks to apply only when relevant to the changed files or risk:
-
-3. Side effects and regression risk
-4. Test and validation coverage
-5. Dependencies and compatibility
-
-Each reviewer outputs findings independently. Consolidate with cross-review, tag each finding P0/P1/P2/P3. Apply P0 fixes. Present P1 for user decision. Defer P2+. Release review resources when done.
+Conduct a proportional, findings-first review through the selected target-native or Ultra reviewer. Keep the review read-only and report concrete findings only. The selected review owner defines its detailed axes and output format; Ultra only consumes the result, applies its repairability and decision-ownership rules, and releases review resources when done.
