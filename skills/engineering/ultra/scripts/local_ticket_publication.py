@@ -87,6 +87,7 @@ class LocalContract:
     source_fields: tuple[str, ...]
     state_fields: tuple[str, ...]
     blocker_fields: tuple[str, ...]
+    blocker_heading: str
     claim_fields: tuple[str, ...]
     branch_fields: tuple[str, ...]
     worktree_fields: tuple[str, ...]
@@ -197,6 +198,73 @@ def many(metadata: dict[str, str | list[str]], *keys: str) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     return [item for item in re.split(r"[,\s]+", str(value).strip()) if item]
+
+
+def heading_blockers(text: str, heading: str) -> list[str]:
+    lines = text.splitlines()
+    target = heading.strip().lower()
+    collecting = False
+    level = 0
+    result: list[str] = []
+    for line in lines:
+        match = re.match(r"^(#+)\s+(.*)$", line)
+        if match:
+            current_level = len(match.group(1))
+            title = match.group(2).strip().lower()
+            if collecting and current_level <= level:
+                break
+            if not collecting and title == target:
+                collecting = True
+                level = current_level
+                continue
+        if collecting:
+            stripped = line.strip()
+            if stripped.startswith("- "):
+                value = stripped[2:].strip()
+                if value and not re.fullmatch(r"none(?:\.|\s+[-—–].+)?", value, re.IGNORECASE):
+                    quoted = re.findall(r"`([^`]+)`", value)
+                    result.extend(item.strip() for item in (quoted or [value]) if item.strip())
+    return result
+
+
+def has_heading(text: str, heading: str) -> bool:
+    target = heading.strip().lower()
+    return any(
+        match.group(2).strip().lower() == target
+        for match in re.finditer(r"(?m)^(#+)\s+(.*)$", text)
+    )
+
+
+def replace_heading_blocker(text: str, heading: str, old: str, new: str) -> str:
+    lines = text.splitlines(keepends=True)
+    target = heading.strip().lower()
+    collecting = False
+    level = 0
+    replaced = 0
+    for index, line in enumerate(lines):
+        match = re.match(r"^(#+)\s+(.*)$", line)
+        if match:
+            current_level = len(match.group(1))
+            title = match.group(2).strip().lower()
+            if collecting and current_level <= level:
+                break
+            if not collecting and title == target:
+                collecting = True
+                level = current_level
+                continue
+        if not collecting or not re.match(r"^\s*-\s+", line):
+            continue
+        prefix, value = re.match(r"^(\s*-\s+)(.*?)(\r?\n)?$", line).groups()
+        newline = line[len(prefix) + len(value) :]
+        quoted = value.startswith("`") and value.endswith("`")
+        comparable = value[1:-1].strip() if quoted else value.strip()
+        if comparable == old:
+            lines[index] = prefix + (f"`{new}`" if quoted else new) + newline
+            replaced += 1
+            break
+    if replaced != 1:
+        raise AdapterError("blocker-target repair requires exactly one matching body blocker")
+    return "".join(lines)
 
 
 def replace_metadata_field(text: str, field: str, value: str) -> str:
@@ -378,7 +446,11 @@ def ticket_from_inner(
         run_id=run_id,
         status=status,
         source=source,
-        blockers=many(metadata, *blocker_keys),
+        blockers=(
+            heading_blockers(inner, contract.blocker_heading)
+            if has_heading(inner, contract.blocker_heading)
+            else many(metadata, *blocker_keys)
+        ),
         flags=many(metadata, *claim_keys),
         state_field=state_field,
         flags_field=flags_field,
@@ -455,8 +527,18 @@ def configured_local_contract(repo: Path) -> LocalContract:
     }
     if not all(normalize_key(state) in states for state in required_states):
         raise AdapterError("Local tracker contract state registry is incomplete")
+    try:
+        blocker_heading = contract_value(text, "Blocker body heading")
+    except AdapterError:
+        # Older Local contracts had no body-heading declaration.
+        blocker_heading = "Blocked by"
     return LocalContract(
-        representation, location_pattern, policy, states=states, **fields
+        representation,
+        location_pattern,
+        policy,
+        blocker_heading=blocker_heading,
+        states=states,
+        **fields,
     )
 
 
@@ -645,8 +727,9 @@ def run_tickets(tickets: list[Ticket], run_id: str) -> list[Ticket]:
     return selected
 
 
-def validate_blocker_targets(tickets: list[Ticket]) -> None:
+def validate_blocker_targets(repo: Path, tickets: list[Ticket]) -> None:
     known = {ticket.ticket_id for ticket in tickets}
+    known.update(ticket.path.relative_to(repo).as_posix() for ticket in tickets)
     for ticket in tickets:
         missing = sorted(set(ticket.blockers) - known)
         if missing:
@@ -721,7 +804,7 @@ def register(repo: Path, representation: str, raw_location: str, run_id: str, al
         path = journal_path(location, representation, run_id)
         tickets = load_tickets_at(location, representation, _contract)
         selected = run_tickets(tickets, run_id)
-        validate_blocker_targets(tickets)
+        validate_blocker_targets(repo, tickets)
         if any(ticket.status != "review-pending" for ticket in selected):
             raise AdapterError("registration requires every run member to be review-pending")
         old = read_journal(path) if path.exists() else None
@@ -753,7 +836,7 @@ def validate_against_journal_at(
     contract = contract or configured_local_contract(repo)
     tickets = load_tickets_at(location, representation, contract)
     selected = run_tickets(tickets, run_id)
-    validate_blocker_targets(tickets)
+    validate_blocker_targets(repo, tickets)
     data = read_journal(journal_path(location, representation, run_id))
     if data.get("representation") != representation or data.get("location") != str(location.relative_to(repo)):
         raise AdapterError("publication journal does not match the configured adapter")
@@ -806,12 +889,15 @@ def typed_repair_text(ticket: Ticket, contract: LocalContract, repair_type: str,
             return ticket.text
         if ticket.blockers.count(old) != 1:
             raise AdapterError("blocker-target repair requires exactly one matching current blocker")
-        blockers = [new if item == old else item for item in ticket.blockers]
-        metadata = parse_metadata(inner)
-        key = next((normalize_key(f) for f in contract.blocker_fields if normalize_key(f) in metadata), "")
-        if not key:
-            raise AdapterError("blocker-target repair requires configured blocker metadata")
-        inner = replace_metadata_field(inner, metadata_spelling(inner, key), ", ".join(blockers))
+        if has_heading(inner, contract.blocker_heading):
+            inner = replace_heading_blocker(inner, contract.blocker_heading, old, new)
+        else:
+            blockers = [new if item == old else item for item in ticket.blockers]
+            metadata = parse_metadata(inner)
+            key = next((normalize_key(f) for f in contract.blocker_fields if normalize_key(f) in metadata), "")
+            if not key:
+                raise AdapterError("blocker-target repair requires configured blocker metadata")
+            inner = replace_metadata_field(inner, metadata_spelling(inner, key), ", ".join(blockers))
     elif repair_type == "publication-metadata":
         groups = (contract.identity_fields, contract.run_fields, contract.source_fields)
         group = next((items for items in groups if old in items and new in items), None)
@@ -986,7 +1072,7 @@ def terminal_repair(repo: Path, representation: str, raw_location: str, run_id: 
         hypothetical = [desired if item is target else replacements.get(item.ticket_id, item) for item in tickets]
         if len({item.ticket_id for item in hypothetical}) != len(hypothetical):
             raise AdapterError("terminal repair would create duplicate Ticket identity")
-        validate_blocker_targets(hypothetical)
+        validate_blocker_targets(repo, hypothetical)
         verify_solve_record_backlinks(repo, desired)
         actual_snapshot = snapshot(selected)
         related_ids = {before.ticket_id for before, _after, _text in related_repairs}

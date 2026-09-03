@@ -298,6 +298,14 @@ def heading_blockers(text: str, heading: str) -> list[str]:
     return result
 
 
+def has_heading(text: str, heading: str) -> bool:
+    target = heading.strip().lower()
+    return any(
+        match.group(2).strip().lower() == target
+        for match in re.finditer(r"(?m)^(#+)\s+(.*)$", text)
+    )
+
+
 def parse_ticket(
     repo: Path,
     path: Path,
@@ -335,10 +343,12 @@ def parse_ticket(
     if not status:
         raise FrontierError(f"Ticket has unknown configured state: {raw_status}")
     flags_field, flags = many(values, contract.claim_aliases)
-    blocker_field, blockers = many(values, contract.blocker_fields)
+    blocker_field, metadata_blockers = many(values, contract.blocker_fields)
     del blocker_field
-    blockers.extend(heading_blockers(inner, contract.blocker_heading))
-    blockers = list(dict.fromkeys(blockers))
+    if has_heading(inner, contract.blocker_heading):
+        blockers = heading_blockers(inner, contract.blocker_heading)
+    else:
+        blockers = metadata_blockers
     identity_field, ticket_id = one(values, contract.identity_fields)
     del identity_field
     relative = path.relative_to(repo).as_posix()
