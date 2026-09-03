@@ -77,6 +77,9 @@ class Ticket:
     representation: str
     publication_ready: bool = True
     publication_reason: str = ""
+    publication_digest: str = ""
+    publication_original_digest: str = ""
+    publication_repair_count: int = 0
 
     @property
     def inner(self) -> str:
@@ -483,6 +486,17 @@ def apply_publication_gates(repo: Path, tickets: list[Ticket], contract: Frontie
                 repo, contract.representation, raw_location, run_id
             )
             selected = publication.run_tickets(published, run_id)
+            current_digests = publication.current_publication_snapshot(journal)
+            original_digests = dict(journal.get("body_digests", {}))
+            repair_counts: dict[str, int] = {}
+            for audit in publication.repair_audits(journal):
+                repaired_id = audit.get("new_ticket_id", audit.get("ticket_id"))
+                if repaired_id != audit.get("ticket_id"):
+                    original_digests[repaired_id] = original_digests.pop(audit["ticket_id"])
+                repair_counts[repaired_id] = repair_counts.get(repaired_id, 0) + 1
+                for related in audit.get("related_digests", []):
+                    related_id = related.get("ticket_id")
+                    repair_counts[related_id] = repair_counts.get(related_id, 0) + 1
             ready = journal.get("phase") == "promoted" and all(
                 item.status
                 in {
@@ -499,6 +513,10 @@ def apply_publication_gates(repo: Path, tickets: list[Ticket], contract: Frontie
         for ticket in members:
             ticket.publication_ready = ready
             ticket.publication_reason = reason
+            if ready:
+                ticket.publication_digest = current_digests.get(ticket.identity, "")
+                ticket.publication_original_digest = original_digests.get(ticket.identity, "")
+                ticket.publication_repair_count = repair_counts.get(ticket.identity, 0)
 
 
 def resolve_graph(tickets: list[Ticket]) -> tuple[dict[str, Ticket], dict[str, list[str]], dict[str, list[str]]]:
@@ -566,6 +584,7 @@ def graph_snapshot(contract_text: str, tickets: list[Ticket]) -> str:
                 "text": hashlib.sha256(ticket.container_text.encode()).hexdigest(),
                 "publication_ready": ticket.publication_ready,
                 "publication_reason": ticket.publication_reason,
+                "publication_digest": ticket.publication_digest,
             }
             for ticket in sorted(tickets, key=lambda item: item.identity)
         ],
@@ -627,6 +646,17 @@ def frontier(repo: Path, selected: list[str]) -> tuple[dict, dict[str, Ticket], 
         "selected": selected or "all-configured-tickets",
         "claimable": sorted(claimable),
         "non_frontier": dict(sorted(reasons.items())),
+        "publication": {
+            identity: {
+                "current_digest": by_id[identity].publication_digest,
+                "original_digest": by_id[identity].publication_original_digest,
+                "repair_count": by_id[identity].publication_repair_count,
+                "ready": by_id[identity].publication_ready,
+                "reason": by_id[identity].publication_reason,
+            }
+            for identity in requested
+            if by_id[identity].publication_run
+        },
     }
     return payload, by_id, contract, contract_text
 

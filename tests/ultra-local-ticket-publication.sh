@@ -917,6 +917,12 @@ assert set(data["original_body_digests"]) == {"A", "B", "C"}, data
 assert set(data["body_digests"]) == {"A", "C", "D"}, data
 PY
 referenced_digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["body_digests"]["C"])' "$TMPDIR_ROOT/repair-identity-inspect.json")"
+if ULTRA_TERMINAL_REPAIR_FAIL_AFTER=ticket:2 adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
+  --ticket-id C --expected-digest "$referenced_digest" --repair-type ticket-identity \
+  --old-value C --new-value E --reason 'human confirmed referenced Ticket identity' >"$TMPDIR_ROOT/repair-dependent-interrupt.out" 2>&1; then
+  echo "terminal repair dependent interruption unexpectedly succeeded" >&2
+  exit 1
+fi
 adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
   --ticket-id C --expected-digest "$referenced_digest" --repair-type ticket-identity \
   --old-value C --new-value E --reason 'human confirmed referenced Ticket identity' >/dev/null
@@ -932,6 +938,15 @@ fi
 adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
   --ticket-id A --expected-digest "$metadata_digest" --repair-type publication-metadata \
   --old-value 'Source Spec' --new-value Parent --reason 'human confirmed metadata alias' >/dev/null
+python3 "$FRONTIER" frontier --repo "$REPAIR_REPO" --ticket-id A >"$TMPDIR_ROOT/repair-frontier.json"
+python3 - "$TMPDIR_ROOT/repair-frontier.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+projection = data["publication"]["A"]
+assert projection["ready"] is True, data
+assert projection["current_digest"] == projection["original_digest"] or projection["repair_count"] > 0
+assert projection["repair_count"] > 0, data
+PY
 if adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
   --ticket-id A --expected-digest "$(printf x%.0s {1..64})" --repair-type blocker-target \
   --old-value C --new-value B --reason stale >"$TMPDIR_ROOT/repair-stale.out" 2>&1; then
@@ -946,6 +961,27 @@ if adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run ter
   exit 1
 fi
 test "$before_semantic" = "$(sha256sum "$REPAIR_REPO/.scratch/feature/issues/A.md" | cut -d' ' -f1)"
+
+EXTERNAL_REPO="$TMPDIR_ROOT/terminal-repair-external-reference"
+mkdir -p "$EXTERNAL_REPO/.scratch/feature/issues"
+write_contract "$EXTERNAL_REPO" retain-until-explicit-cleanup
+write_file_ticket "$EXTERNAL_REPO/.scratch/feature/issues/A.md" A run-a review-pending "" "Run A identity"
+write_file_ticket "$EXTERNAL_REPO/.scratch/feature/issues/X.md" X run-x review-pending A "Run X dependent"
+adapter "$EXTERNAL_REPO" file-per-ticket .scratch/feature/issues run-a register >/dev/null
+adapter "$EXTERNAL_REPO" file-per-ticket .scratch/feature/issues run-a promote >/dev/null
+adapter "$EXTERNAL_REPO" file-per-ticket .scratch/feature/issues run-x register >/dev/null
+adapter "$EXTERNAL_REPO" file-per-ticket .scratch/feature/issues run-x promote >/dev/null
+adapter "$EXTERNAL_REPO" file-per-ticket .scratch/feature/issues run-a inspect >"$TMPDIR_ROOT/external-inspect.json"
+external_digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["body_digests"]["A"])' "$TMPDIR_ROOT/external-inspect.json")"
+external_before="$(sha256sum "$EXTERNAL_REPO/.scratch/feature/issues/A.md" | cut -d' ' -f1)"
+if adapter "$EXTERNAL_REPO" file-per-ticket .scratch/feature/issues run-a terminal-repair \
+  --ticket-id A --expected-digest "$external_digest" --repair-type ticket-identity \
+  --old-value A --new-value A2 --reason 'cross-run reference must refuse' >"$TMPDIR_ROOT/external-refusal.out" 2>&1; then
+  echo "terminal repair crossed publication-run ownership" >&2
+  exit 1
+fi
+grep -Fq 'references outside publication run: X' "$TMPDIR_ROOT/external-refusal.out"
+test "$external_before" = "$(sha256sum "$EXTERNAL_REPO/.scratch/feature/issues/A.md" | cut -d' ' -f1)"
 
 python3 - "$REPO_ROOT" <<'PY'
 from pathlib import Path

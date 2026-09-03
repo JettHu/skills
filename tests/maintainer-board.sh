@@ -569,6 +569,15 @@ cleanup_done: false
 # Solve Record: malformed receipt
 EOF
 
+TF_INSPECT="$TMPDIR_ROOT/tf-inspect.json"
+python3 "$LOCAL_PUBLICATION_SCRIPT" inspect --repo "$REPO" --representation tickets-file \
+  --location .scratch/feature-a/tickets.md --run-id tickets-file-run >"$TF_INSPECT"
+TF_DIGEST="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["body_digests"]["TF-1"])' "$TF_INSPECT")"
+python3 "$LOCAL_PUBLICATION_SCRIPT" terminal-repair --repo "$REPO" --representation tickets-file \
+  --location .scratch/feature-a/tickets.md --run-id tickets-file-run --ticket-id TF-1 \
+  --expected-digest "$TF_DIGEST" --repair-type publication-metadata \
+  --old-value 'Source Spec' --new-value Parent --reason 'board projection fixture' >/dev/null
+
 JSON_OUT="$TMPDIR_ROOT/board.json"
 HTML_OUT="$TMPDIR_ROOT/board.html"
 DEFAULT_HTML_OUT="$(git -C "$REPO" rev-parse --show-toplevel)/.scratch/maintainer-board/index.html"
@@ -620,6 +629,12 @@ assert "Execution Digest: Must not be discovered" not in {
 
 ready = data["issues"]["buckets"]["ready_for_agent"]
 assert {issue["metadata_format"] for issue in ready} == {"header", "frontmatter", "tickets-file-section"}
+repaired = next(issue for issue in ready if issue["ticket_id"] == "TF-1")
+assert repaired["publication_digest"]
+assert repaired["publication_original_digest"]
+assert repaired["publication_digest"] != repaired["publication_original_digest"]
+assert repaired["publication_repair_count"] == 1
+assert repaired["publication_digest"] in html
 
 claimed = data["issues"]["buckets"]["claimed_or_in_progress"]
 warnings = [warning["code"] for issue in claimed for warning in issue["warnings"]]
@@ -835,6 +850,29 @@ assert ready[0]["path"] == ".tracker/tickets/CONFIG-1.md"
 terminal = completed["issues"]["buckets"]["completed_without_solve_record"]
 assert len(terminal) == 1
 assert terminal[0]["status"] == "completed"
+PY
+
+# A malformed terminal-repair audit is projected through the existing
+# publication-attention lane instead of leaving the Ticket ready.
+python3 - "$REPO/.scratch/feature-a/.ultra-publications/tickets-file-run.json" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+data["terminal_repairs"][0]["old_digest"] = "0" * 64
+path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+python3 "$BOARD_SCRIPT" --repo "$REPO" --json >"$TMPDIR_ROOT/malformed-repair-board.json"
+python3 - "$TMPDIR_ROOT/malformed-repair-board.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+attention = data["issues"]["buckets"]["publication_attention"]
+assert any(issue["ticket_id"] == "TF-1" for issue in attention), data
+assert any(
+    warning["code"] == "publication_invalid"
+    for issue in attention if issue["ticket_id"] == "TF-1"
+    for warning in issue["warnings"]
+), data
 PY
 
 python3 -m py_compile "$BOARD_SCRIPT"

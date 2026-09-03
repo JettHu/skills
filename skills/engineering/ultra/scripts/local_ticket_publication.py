@@ -917,9 +917,20 @@ def terminal_repair(repo: Path, representation: str, raw_location: str, run_id: 
         desired_digest = desired.body_digest
         related_repairs: list[tuple[Ticket, Ticket, str]] = []
         if repair_type == "ticket-identity":
+            selected_ids = {item.ticket_id for item in selected}
+            external_references = sorted(
+                item.ticket_id
+                for item in tickets
+                if item.ticket_id not in selected_ids and old in item.blockers
+            )
+            if external_references:
+                raise AdapterError(
+                    "terminal repair conflict: Ticket identity has references outside publication run: "
+                    + ", ".join(external_references)
+                )
             if representation == "tickets-file":
                 combined = desired_text
-                for original in tickets:
+                for original in selected:
                     if original is target:
                         continue
                     if old in original.blockers:
@@ -946,7 +957,7 @@ def terminal_repair(repo: Path, representation: str, raw_location: str, run_id: 
                     if item.ticket_id == new
                 )
                 desired_digest = desired.body_digest
-            for item in tickets:
+            for item in selected:
                 if representation == "tickets-file" or item is target:
                     continue
                 if old in item.blockers:
@@ -991,19 +1002,33 @@ def terminal_repair(repo: Path, representation: str, raw_location: str, run_id: 
         for before, _after, _updated_text in related_repairs:
             if before.body_digest != current.get(before.ticket_id):
                 raise AdapterError("terminal repair requires attention: dependent Ticket is inconsistent")
+        fail_after = os.environ.get("ULTRA_TERMINAL_REPAIR_FAIL_AFTER", "")
+        ticket_writes = 0
+
+        def interrupt_after_ticket_write() -> None:
+            nonlocal ticket_writes
+            ticket_writes += 1
+            expected = 1 if fail_after == "ticket" else (
+                int(fail_after.split(":", 1)[1])
+                if fail_after.startswith("ticket:") and fail_after.split(":", 1)[1].isdigit()
+                else 0
+            )
+            if expected and ticket_writes >= expected:
+                raise AdapterError("injected terminal repair interruption after Ticket write")
+
         if not partial_ticket_write:
             if representation == "file-per-ticket":
                 atomic_write(target.path, desired_text)
             else:
                 atomic_write(location, desired_text)
-            if os.environ.get("ULTRA_TERMINAL_REPAIR_FAIL_AFTER") == "ticket":
-                raise AdapterError("injected terminal repair interruption after Ticket write")
+            interrupt_after_ticket_write()
         related_digest_audit = []
         for before, after, updated_text in related_repairs:
             if before.body_digest == after.body_digest:
                 continue
             if representation == "file-per-ticket":
                 atomic_write(before.path, updated_text)
+                interrupt_after_ticket_write()
             related_digest_audit.append({
                 "ticket_id": before.ticket_id,
                 "old_digest": before.body_digest,

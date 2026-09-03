@@ -298,6 +298,9 @@ def parse_issue_text(repo, path, text, identity="", metadata_format_hint=""):
         "ticket_id": str(metadata.get("ticket_id") or metadata.get("id") or identity).strip(),
         "publication_run": str(metadata.get("publication_run", "")).strip(),
         "publication_promoted": False,
+        "publication_digest": "",
+        "publication_original_digest": "",
+        "publication_repair_count": 0,
         "category": str(metadata.get("category", "")).strip(),
         "flags": flags,
         "created": str(metadata.get("created", "")).strip(),
@@ -373,12 +376,27 @@ def apply_publication_gates(repo, issues, contract):
                 repo, representation, str(location.relative_to(repo)), run_id
             )
             selected = helper.run_tickets(tickets, run_id)
+            current_digests = helper.current_publication_snapshot(journal)
+            original_digests = dict(journal.get("body_digests", {}))
+            repair_counts = {}
+            for audit in helper.repair_audits(journal):
+                old_id = audit.get("ticket_id")
+                repaired_id = audit.get("new_ticket_id", old_id)
+                if repaired_id != old_id:
+                    original_digests[repaired_id] = original_digests.pop(old_id)
+                repair_counts[repaired_id] = repair_counts.get(repaired_id, 0) + 1
+                for related in audit.get("related_digests", []):
+                    related_id = related.get("ticket_id")
+                    repair_counts[related_id] = repair_counts.get(related_id, 0) + 1
             promoted = journal.get("phase") == "promoted" and all(
                 ticket.status
                 in {"ready-for-agent", "completed", "ready-for-human", "needs-info"}
                 for ticket in selected
             )
             issue["publication_promoted"] = promoted
+            issue["publication_digest"] = current_digests.get(issue["ticket_id"], "")
+            issue["publication_original_digest"] = original_digests.get(issue["ticket_id"], "")
+            issue["publication_repair_count"] = repair_counts.get(issue["ticket_id"], 0)
             if not promoted:
                 issue["warnings"].append(
                     {"code": "publication_not_promoted", "message": "publication run is provisional or incomplete"}
@@ -802,6 +820,7 @@ def render_issue_card(issue, hidden=False):
             issue["category"],
             issue["feature"],
             issue["completion_scope"],
+            issue["publication_digest"],
             " ".join(issue["flags"]),
         ]
     )
@@ -826,6 +845,10 @@ def render_issue_card(issue, hidden=False):
         ("Created", issue["created"]),
         ("Metadata format", issue["metadata_format"]),
         ("Parent", issue["parent"]),
+        ("Publication run", issue["publication_run"]),
+        ("Publication current digest", issue["publication_digest"]),
+        ("Publication original digest", issue["publication_original_digest"]),
+        ("Publication repair count", issue["publication_repair_count"]),
         ("Blocked by", issue["blocked_by"]),
         ("Solve branch", issue["solve_branch"]),
         ("Solve worktree", issue["solve_worktree"]),
