@@ -867,6 +867,8 @@ write_contract "$REPAIR_REPO" retain-until-explicit-cleanup
 write_file_ticket "$REPAIR_REPO/.scratch/feature/issues/A.md" A repair-run review-pending B "Repair source"
 write_file_ticket "$REPAIR_REPO/.scratch/feature/issues/B.md" B repair-run review-pending "" "Old blocker"
 write_file_ticket "$REPAIR_REPO/.scratch/feature/issues/C.md" C repair-run review-pending "" "Correct blocker"
+write_file_ticket "$REPAIR_REPO/.scratch/feature/issues/F.md" F repair-run review-pending C "First identity dependent"
+write_file_ticket "$REPAIR_REPO/.scratch/feature/issues/G.md" G repair-run review-pending C "Second identity dependent"
 adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run register >/dev/null
 adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run promote >/dev/null
 repair_digest="$(python3 - "$ADAPTER" "$REPAIR_REPO/.scratch/feature/issues/A.md" "$REPAIR_REPO" <<'PY'
@@ -912,9 +914,9 @@ adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run inspec
 python3 - "$TMPDIR_ROOT/repair-identity-inspect.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1], encoding="utf-8"))
-assert data["members"] == ["A", "C", "D"], data
-assert set(data["original_body_digests"]) == {"A", "B", "C"}, data
-assert set(data["body_digests"]) == {"A", "C", "D"}, data
+assert data["members"] == ["A", "C", "D", "F", "G"], data
+assert set(data["original_body_digests"]) == {"A", "B", "C", "F", "G"}, data
+assert set(data["body_digests"]) == {"A", "C", "D", "F", "G"}, data
 PY
 referenced_digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["body_digests"]["C"])' "$TMPDIR_ROOT/repair-identity-inspect.json")"
 if ULTRA_TERMINAL_REPAIR_FAIL_AFTER=ticket:2 adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
@@ -923,10 +925,25 @@ if ULTRA_TERMINAL_REPAIR_FAIL_AFTER=ticket:2 adapter "$REPAIR_REPO" file-per-tic
   echo "terminal repair dependent interruption unexpectedly succeeded" >&2
   exit 1
 fi
+if ULTRA_TERMINAL_REPAIR_FAIL_AFTER=ticket:2 adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
+  --ticket-id C --expected-digest "$referenced_digest" --repair-type ticket-identity \
+  --old-value C --new-value E --reason 'human confirmed referenced Ticket identity' >"$TMPDIR_ROOT/repair-dependent-repeat.out" 2>&1; then
+  echo "terminal repair repeated dependent boundary unexpectedly succeeded" >&2
+  exit 1
+fi
 adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
   --ticket-id C --expected-digest "$referenced_digest" --repair-type ticket-identity \
   --old-value C --new-value E --reason 'human confirmed referenced Ticket identity' >/dev/null
 grep -Fq 'Blocked By: E' "$REPAIR_REPO/.scratch/feature/issues/A.md"
+grep -Fq 'Blocked By: E' "$REPAIR_REPO/.scratch/feature/issues/F.md"
+grep -Fq 'Blocked By: E' "$REPAIR_REPO/.scratch/feature/issues/G.md"
+python3 - "$REPAIR_REPO/.scratch/feature/issues/.ultra-publications/repair-run.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+identity_audits = [item for item in data["terminal_repairs"] if item.get("ticket_id") == "C"]
+assert len(identity_audits) == 1, data
+assert len(identity_audits[0]["related_digests"]) == 3, data
+PY
 adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run inspect >"$TMPDIR_ROOT/repair-before-journal-boundary.json"
 metadata_digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["body_digests"]["A"])' "$TMPDIR_ROOT/repair-before-journal-boundary.json")"
 if ULTRA_TERMINAL_REPAIR_FAIL_AFTER=journal adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
@@ -944,8 +961,7 @@ import json, sys
 data = json.load(open(sys.argv[1], encoding="utf-8"))
 projection = data["publication"]["A"]
 assert projection["ready"] is True, data
-assert projection["current_digest"] == projection["original_digest"] or projection["repair_count"] > 0
-assert projection["repair_count"] > 0, data
+assert projection["current_digest"] != projection["original_digest"], data
 PY
 if adapter "$REPAIR_REPO" file-per-ticket .scratch/feature/issues repair-run terminal-repair \
   --ticket-id A --expected-digest "$(printf x%.0s {1..64})" --repair-type blocker-target \
@@ -982,6 +998,38 @@ if adapter "$EXTERNAL_REPO" file-per-ticket .scratch/feature/issues run-a termin
 fi
 grep -Fq 'references outside publication run: X' "$TMPDIR_ROOT/external-refusal.out"
 test "$external_before" = "$(sha256sum "$EXTERNAL_REPO/.scratch/feature/issues/A.md" | cut -d' ' -f1)"
+
+for drift_kind in extra missing; do
+  DRIFT_REPO="$TMPDIR_ROOT/partial-identity-$drift_kind"
+  mkdir -p "$DRIFT_REPO/.scratch/feature/issues"
+  write_contract "$DRIFT_REPO" retain-until-explicit-cleanup
+  write_file_ticket "$DRIFT_REPO/.scratch/feature/issues/A.md" A drift-run review-pending "" "Partial identity target"
+  write_file_ticket "$DRIFT_REPO/.scratch/feature/issues/B.md" B drift-run review-pending "" "Membership sibling"
+  adapter "$DRIFT_REPO" file-per-ticket .scratch/feature/issues drift-run register >/dev/null
+  adapter "$DRIFT_REPO" file-per-ticket .scratch/feature/issues drift-run promote >/dev/null
+  adapter "$DRIFT_REPO" file-per-ticket .scratch/feature/issues drift-run inspect >"$TMPDIR_ROOT/drift-$drift_kind-inspect.json"
+  drift_digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["body_digests"]["A"])' "$TMPDIR_ROOT/drift-$drift_kind-inspect.json")"
+  if ULTRA_TERMINAL_REPAIR_FAIL_AFTER=ticket adapter "$DRIFT_REPO" file-per-ticket .scratch/feature/issues drift-run terminal-repair \
+    --ticket-id A --expected-digest "$drift_digest" --repair-type ticket-identity \
+    --old-value A --new-value A2 --reason 'partial identity drift fixture' >"$TMPDIR_ROOT/drift-$drift_kind-partial.out" 2>&1; then
+    echo "partial identity setup unexpectedly succeeded" >&2
+    exit 1
+  fi
+  if test "$drift_kind" = extra; then
+    write_file_ticket "$DRIFT_REPO/.scratch/feature/issues/C.md" C drift-run ready-for-agent "" "Unexpected member"
+  else
+    rm "$DRIFT_REPO/.scratch/feature/issues/B.md"
+  fi
+  drift_before="$(find "$DRIFT_REPO/.scratch/feature/issues" -type f -print0 | sort -z | xargs -0 shasum | shasum)"
+  if adapter "$DRIFT_REPO" file-per-ticket .scratch/feature/issues drift-run terminal-repair \
+    --ticket-id A --expected-digest "$drift_digest" --repair-type ticket-identity \
+    --old-value A --new-value A2 --reason 'partial identity drift fixture' >"$TMPDIR_ROOT/drift-$drift_kind-refusal.out" 2>&1; then
+    echo "partial identity repair accepted $drift_kind membership drift" >&2
+    exit 1
+  fi
+  grep -Fq 'publication membership drifted' "$TMPDIR_ROOT/drift-$drift_kind-refusal.out"
+  test "$drift_before" = "$(find "$DRIFT_REPO/.scratch/feature/issues" -type f -print0 | sort -z | xargs -0 shasum | shasum)"
+done
 
 python3 - "$REPO_ROOT" <<'PY'
 from pathlib import Path

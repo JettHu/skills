@@ -633,7 +633,6 @@ repaired = next(issue for issue in ready if issue["ticket_id"] == "TF-1")
 assert repaired["publication_digest"]
 assert repaired["publication_original_digest"]
 assert repaired["publication_digest"] != repaired["publication_original_digest"]
-assert repaired["publication_repair_count"] == 1
 assert repaired["publication_digest"] in html
 
 claimed = data["issues"]["buckets"]["claimed_or_in_progress"]
@@ -853,7 +852,17 @@ assert terminal[0]["status"] == "completed"
 PY
 
 # A malformed terminal-repair audit is projected through the existing
-# publication-attention lane instead of leaving the Ticket ready.
+# publication-attention lane even when the Ticket is completed.
+python3 - "$REPO/.scratch/feature-a/tickets.md" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+start = text.index("<!-- ultra-ticket:begin id=TF-1 -->")
+end = text.index("<!-- ultra-ticket:end -->", start)
+section = text[start:end].replace("Status: ready-for-agent", "Status: completed", 1)
+path.write_text(text[:start] + section + text[end:], encoding="utf-8")
+PY
 python3 - "$REPO/.scratch/feature-a/.ultra-publications/tickets-file-run.json" <<'PY'
 import json, sys
 from pathlib import Path

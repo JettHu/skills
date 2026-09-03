@@ -888,7 +888,15 @@ def terminal_repair(repo: Path, representation: str, raw_location: str, run_id: 
         current = current_publication_snapshot(data)
         expected_members = current_publication_members(data)
         actual_members = sorted(item.ticket_id for item in selected)
-        partial_identity = repair_type == "ticket-identity" and old == ticket_id and new in actual_members and ticket_id in expected_members
+        projected_identity_members = sorted(
+            new if member == ticket_id else member for member in expected_members
+        )
+        partial_identity = (
+            repair_type == "ticket-identity"
+            and old == ticket_id
+            and ticket_id in expected_members
+            and actual_members == projected_identity_members
+        )
         if actual_members != expected_members and not partial_identity:
             raise AdapterError("publication membership drifted")
         target = next((item for item in selected if item.ticket_id == ticket_id), None)
@@ -1027,8 +1035,12 @@ def terminal_repair(repo: Path, representation: str, raw_location: str, run_id: 
             if before.body_digest == after.body_digest:
                 continue
             if representation == "file-per-ticket":
-                atomic_write(before.path, updated_text)
-                interrupt_after_ticket_write()
+                current_member = next(
+                    item for item in selected if item.ticket_id == after.ticket_id
+                )
+                if current_member.body_digest != after.body_digest:
+                    atomic_write(before.path, updated_text)
+                    interrupt_after_ticket_write()
             related_digest_audit.append({
                 "ticket_id": before.ticket_id,
                 "old_digest": before.body_digest,

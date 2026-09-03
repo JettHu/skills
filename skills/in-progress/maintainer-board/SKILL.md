@@ -27,11 +27,11 @@ Tickets out of ready and claimed buckets. Run-tagged readiness requires the
 same complete-set promoted gate used by `/ultra solve`.
 
 Issue classification follows explicit Ticket state after those safety gates:
-`completed` remains in a completed lane even when an old publication warning is
-retained on the card; `needs-triage` has its own lane; active Tickets whose
-publication journal cannot be verified go to Publication attention and remain
-out of ready/claimed; `solve-in-progress` enters Claimed only when publication
-verification is valid. Completed lanes scan and count every Ticket, while the
+Tickets whose publication journal cannot be verified go to Publication
+attention even when their explicit state is `completed`, so integrity failures
+cannot be hidden by a terminal state; `needs-triage` has its own lane;
+`solve-in-progress` enters Claimed only when publication verification is valid.
+Completed lanes scan and count every other completed Ticket, while the
 HTML view shows the most recently completed items first and keeps the rest
 behind Show more.
 
