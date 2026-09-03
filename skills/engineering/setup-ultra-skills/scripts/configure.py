@@ -275,6 +275,7 @@ def coordination(preset: str) -> list[str]:
         f"Claim and release: {claim}",
         "State mapping: `review-pending` is an Ultra adapter state, not a sixth global triage role. `ready-for-agent` is the sole claimable state; active Claim and terminal states follow the base tracker contract.",
         "Blocker and frontier lookup: use the base contract's blocker representation. The frontier contains only ready, unblocked, unclaimed Tickets; provisional or staged Tickets remain outside it.",
+        "Local Markdown blocker format: the `## Blocked by` body section is canonical; `Blocked By` and `Blockers` metadata are legacy fallback only. Omit the section when there are no blockers; if both forms exist, use the body without merging.",
         f"Branch/worktree/PR links: {resource_links}",
         "Solve Record backlinks: add the durable receipt path or URL to the Ticket's configured backlink surface; the receipt remains the outcome record and the Ticket remains the work order.",
         "Unsupported operations: record any backend capability absent from this extension as unsupported. Batch mutation requires conflict-detecting Claim and safe blocker lookup; otherwise use an explicit single-Ticket path.",

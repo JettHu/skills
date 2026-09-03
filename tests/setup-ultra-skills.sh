@@ -222,6 +222,7 @@ for field in (
     "Ready state: ready-for-agent",
     "Completed state: completed",
     "Blocker metadata fields: Blocked By, Blockers",
+    "Local Markdown blocker format: the `## Blocked by` body section is canonical; `Blocked By` and `Blockers` metadata are legacy fallback only.",
     "Claim value: solve-in-progress",
     "Resumable Claims: supported",
     "Solve branch field: Solve Branch",
