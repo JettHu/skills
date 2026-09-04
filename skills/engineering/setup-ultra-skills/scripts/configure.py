@@ -288,7 +288,7 @@ def coordination(preset: str) -> list[str]:
             "Publication Run field aliases: Publication Run",
             "Source field aliases: Source Spec, Parent",
             "Ticket state fields: Status, State",
-            "Ticket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info",
+            "Ticket state values: review-pending, needs-triage, ready-for-agent, completed, ready-for-human, needs-info, wontfix",
             "Ready state: ready-for-agent",
             "Completed state: completed",
             "Human-blocked states: ready-for-human, needs-info",

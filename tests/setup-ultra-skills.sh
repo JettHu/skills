@@ -206,7 +206,7 @@ assert "Publication strategy: local-review-pending" in local_contract
 assert "Local Ticket representation: file-per-ticket" in local_contract
 assert "Local Ticket path: .scratch/<feature>/issues/<ticket-file>.md" in local_contract
 assert "Status: review-pending" in local_contract
-assert "Ticket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info" in local_contract
+assert "Ticket state values: review-pending, needs-triage, ready-for-agent, completed, ready-for-human, needs-info, wontfix" in local_contract
 assert "not a sixth global triage role" in local_contract
 assert "Cancellation policy: retain-until-explicit-cleanup" in local_contract
 assert "Cancellation behavior: retain the named review-pending run until explicit cleanup." in local_contract
