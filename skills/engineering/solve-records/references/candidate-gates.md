@@ -48,7 +48,8 @@ and record the smallest actionable reason.
 
 Completion: exactly one readiness result is visible in Merge, and it follows
 from current refs, checks, worktree, review, dependencies, and rollout/config
-evidence.
+evidence. A post-merge activation requirement needs one explicit activation
+action; release smoke and rollback are later-boundary evidence.
 
 ## 3. Merge, ship, or land
 

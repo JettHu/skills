@@ -90,12 +90,35 @@ enriched = run(
     "candidate-gate-record", "--record", record_selector,
     "--checks", "passed", "--review", "passed", "--merge", "ready",
     "--rollout-config", "none",
+    "--activation", "none",
 )
 assert enriched.returncode == 0, enriched.stderr + enriched.stdout
 after = run("merge-gate", "--record", record_selector)
 after_data = json.loads(after.stdout)
 assert after_data["eligible"], after_data
 assert "Gate Evidence" in record.read_text(encoding="utf-8")
+
+post_activation_before = record.read_text(encoding="utf-8")
+missing_activation = run(
+    "candidate-gate-record", "--record", record_selector,
+    "--checks", "passed", "--review", "passed", "--merge", "ready",
+    "--rollout-config", "post-merge activation required",
+)
+assert missing_activation.returncode != 0
+assert "activation action" in missing_activation.stderr
+assert record.read_text(encoding="utf-8") == post_activation_before
+
+post_activation = run(
+    "candidate-gate-record", "--record", record_selector,
+    "--checks", "passed", "--review", "passed", "--merge", "ready",
+    "--rollout-config", "post-merge activation required",
+    "--activation", "enable the approved Switch Center configuration",
+)
+assert post_activation.returncode == 0, post_activation.stderr + post_activation.stdout
+post_gate = run("merge-gate", "--record", record_selector)
+post_gate_data = json.loads(post_gate.stdout)
+assert post_gate_data["eligible"], post_gate_data
+assert "code merge is safe" not in record.read_text(encoding="utf-8")
 
 (root / "app.txt").write_text("user WIP\n", encoding="utf-8")
 landing = run("landing-plan", "--record", record_selector)

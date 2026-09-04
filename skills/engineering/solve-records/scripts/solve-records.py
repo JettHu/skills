@@ -283,6 +283,16 @@ def labeled_value(block, label):
     return ""
 
 
+def inline_labeled_value(block, label):
+    marker = f"{label.lower()}:"
+    for line in block.splitlines():
+        normalized = line.strip().lstrip("-* ").strip()
+        offset = normalized.lower().find(marker)
+        if offset >= 0:
+            return normalized[offset + len(marker) :].strip()
+    return ""
+
+
 def linked_ticket_value(block):
     return labeled_value(block, "Linked Ticket") or labeled_value(block, "Linked Tickets")
 
@@ -777,17 +787,20 @@ def rollout_config_gate_reason(record):
     if disposition == "pre-merge action required":
         return "rollout/config pre-merge action required"
     if disposition == "post-merge activation required":
-        block = rollout_config_block(record)
-        required = [
-            (("code merge is safe", "code merge safe"), "code-merge-safety rationale"),
-            (("activation:",), "activation action"),
-            (("rollback:", "disable:"), "rollback or disable note"),
-        ]
-        for fragments, label in required:
-            if not any(fragment in block for fragment in fragments):
-                return f"post-merge activation missing {label}"
-        if "smoke:" not in block and "validation:" not in block:
-            return "post-merge activation missing smoke or validation check"
+        activation = ""
+        text = record.get("text", "")
+        for block in (
+            sections(text, "Merge")
+            + sections(text, "Gate Evidence")
+            + sections(text, "Notes")
+        ):
+            activation = labeled_value(block, "Activation") or inline_labeled_value(
+                block, "Activation"
+            )
+            if activation:
+                break
+        if not activation or activation.lower() == "none":
+            return "post-merge activation missing activation action"
     return ""
 
 
@@ -976,7 +989,7 @@ def candidate_worktree(repo, record):
     return matches[0]
 
 
-def candidate_gate_record(repo, record, base, checks, review, merge, rollout):
+def candidate_gate_record(repo, record, base, checks, review, merge, rollout, activation):
     if record.get("malformed"):
         raise RuntimeError(record["malformed"])
     if record.get("outcome") != "candidate":
@@ -991,6 +1004,9 @@ def candidate_gate_record(repo, record, base, checks, review, merge, rollout):
         raise RuntimeError(f"unsupported merge status: {merge}")
     if rollout not in ROLLOUT_CONFIG_DISPOSITIONS:
         raise RuntimeError(f"unsupported rollout/config disposition: {rollout}")
+    activation = (activation or "none").strip()
+    if rollout == "post-merge activation required" and activation.lower() == "none":
+        raise RuntimeError("post-merge activation requires an activation action")
 
     head = record.get("head")
     head_sha = record.get("head_sha")
@@ -1020,6 +1036,7 @@ def candidate_gate_record(repo, record, base, checks, review, merge, rollout):
             f"Review: {review}",
             f"Merge: {merge}",
             f"Rollout/config disposition: {rollout}",
+            f"Activation: {activation}",
         ]
     )
     updated = replace_or_append_section(record["text"], "Gate Evidence", evidence)
@@ -1586,6 +1603,10 @@ def main(argv):
         required=True,
         choices=sorted(ROLLOUT_CONFIG_DISPOSITIONS),
     )
+    gate_record_parser.add_argument(
+        "--activation",
+        help="post-merge activation action; defaults to none",
+    )
     add_common(gate_record_parser)
 
     args = parser.parse_args(argv)
@@ -1619,6 +1640,7 @@ def main(argv):
                     args.review,
                     args.merge,
                     args.rollout_config,
+                    args.activation,
                 ),
                 args.json,
             )

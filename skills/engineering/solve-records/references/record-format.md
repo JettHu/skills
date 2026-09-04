@@ -54,7 +54,10 @@ head identity; the acceptance/landing owner records the current base, base
 worktree, checks, review, merge, and rollout/config disposition in a
 `## Gate Evidence` section. The candidate-gate operation is the only writer
 for this enrichment and writes it atomically after live verification. The
-section does not authorize merge, landing, deployment, release, or smoke.
+For `post-merge activation required`, it records one explicit `Activation`
+action. Merge readiness does not require a duplicate merge-safety rationale,
+smoke plan, or rollback plan; those belong to the activation/release owner.
+The section does not itself authorize merge, landing, deployment, or release.
 
 The only supported outcomes are:
 
@@ -218,8 +221,8 @@ preserves a truthful maintainer-facing handoff of that passed conclusion.
 
 Candidate acceptance review, merge, ship, land, and candidate cleanup require
 this candidate-only Git evidence. `post-merge activation required` can be
-ready only when the record explains why code merge is safe, the activation,
-smoke check, and rollback or disable path.
+ready when the record names the post-merge activation action; activation,
+smoke, and rollback evidence are owned by the later release boundary.
 
 A manual-gated or blocked Post-Execution Review is not a candidate receipt.
 Route the Attempt to the matching recovery outcome and place the finding in
