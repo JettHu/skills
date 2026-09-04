@@ -48,6 +48,14 @@ Keep them separate. `tickets` is the authoritative normalized membership.
 detects changes to its immutable binding. Candidate `head` and `head_sha` are
 derived from the active claimed worktree, never supplied as receipt text.
 
+Candidate gate evidence is late-stage enrichment, not part of the minimum
+creation contract. A compact candidate may initially contain only its derived
+head identity; the acceptance/landing owner records the current base, base
+worktree, checks, review, merge, and rollout/config disposition in a
+`## Gate Evidence` section. The candidate-gate operation is the only writer
+for this enrichment and writes it atomically after live verification. The
+section does not authorize merge, landing, deployment, release, or smoke.
+
 The only supported outcomes are:
 
 ```text

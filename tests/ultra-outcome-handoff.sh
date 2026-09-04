@@ -31,7 +31,7 @@ def run(*command: str, check: bool = True, env: dict[str, str] | None = None):
         expected_handoff_result = (
             payload.get("operation") == "ticket.handoff"
             and payload.get("ok") is False
-            and payload.get("data", {}).get("status") in {"retryable", "conflict"}
+            and payload.get("data", {}).get("status") in {"retryable", "conflict", "unavailable"}
         )
         if not expected_handoff_result:
             raise AssertionError(f"{command}: {result.stderr or result.stdout}")

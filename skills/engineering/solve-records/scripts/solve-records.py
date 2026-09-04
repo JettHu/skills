@@ -3,8 +3,10 @@
 
 import argparse
 import json
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -23,6 +25,10 @@ CANDIDATE_GATE_REQUIRED = {
     "base_sha",
     "worktree",
 }
+
+GATE_CHECK_STATUSES = {"passed", "unavailable", "stale"}
+GATE_REVIEW_STATUSES = {"passed", "manual gate", "blocked"}
+GATE_MERGE_STATUSES = {"ready", "auto-merged", "manual required"}
 
 LEGACY_CANDIDATE_REQUIRED = (
     COMMON_REQUIRED
@@ -531,7 +537,7 @@ def parse_record(repo, path):
         frontmatter_value = normalized_scalar(data.get(field))
         body_values = [
             normalized_scalar(labeled_value(block, label))
-            for block in sections(text, "Resources")
+            for block in sections(text, "Resources") + sections(text, "Gate Evidence")
             if labeled_value(block, label)
         ]
         distinct_body_values = sorted(set(body_values))
@@ -599,9 +605,15 @@ def parse_record(repo, path):
         data["retained_resource_identities"] = identities
         data["resource_ownership"] = "solve-owned" if frontmatter_resources else "no retained resources"
         data["retained_resources"] = frontmatter_resources
-    data["checks"] = status_line(section(text, "Verification")) or status_line(section(text, "Checks"))
+    gate_evidence = section(text, "Gate Evidence")
+    data["checks"] = (
+        status_line(section(text, "Verification"))
+        or status_line(section(text, "Checks"))
+        or labeled_value(gate_evidence, "Checks")
+    )
     data["review"] = post_execution_review_line(section(text, "Review"))
-    data["merge"] = status_line(section(text, "Merge"))
+    data["review"] = data["review"] or labeled_value(gate_evidence, "Review").lower()
+    data["merge"] = status_line(section(text, "Merge")) or labeled_value(gate_evidence, "Merge")
     data["summary"] = summary_text
     data["summary_status"] = summary_statuses[0] if summary_statuses else ""
     data["notes"] = section(text, "Notes").lower()
@@ -727,7 +739,13 @@ def post_execution_review_gate_reason(record):
 
 def rollout_config_block(record):
     text = record.get("text", "")
-    return (section(text, "Merge") + "\n" + section(text, "Notes")).lower()
+    return (
+        section(text, "Merge")
+        + "\n"
+        + section(text, "Gate Evidence")
+        + "\n"
+        + section(text, "Notes")
+    ).lower()
 
 
 def rollout_config_disposition(record):
@@ -842,6 +860,11 @@ def status_paths(repo):
 
 
 def paths_overlap(left, right):
+    return bool(overlap_paths(left, right))
+
+
+def overlap_paths(left, right):
+    overlaps = set()
     for left_path in left:
         left_norm = left_path.strip("/")
         for right_path in right:
@@ -853,8 +876,9 @@ def paths_overlap(left, right):
                 or left_norm.startswith(right_norm + "/")
                 or right_norm.startswith(left_norm + "/")
             ):
-                return True
-    return False
+                overlaps.add(left_path)
+                overlaps.add(right_path)
+    return sorted(overlaps)
 
 
 def hard_stop_paths(paths):
@@ -907,6 +931,112 @@ def live_ref_sha(repo, ref):
     if returncode != 0:
         raise RuntimeError(stderr or f"{ref} missing")
     return stdout
+
+
+def atomic_write(path, text):
+    path = Path(path)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def replace_or_append_section(text, name, content):
+    marker = f"## {name}\n"
+    start = text.find(marker)
+    rendered = f"{marker}{content.rstrip()}\n"
+    if start == -1:
+        return text.rstrip() + "\n\n" + rendered
+    content_start = start + len(marker)
+    end = text.find("\n## ", content_start)
+    if end == -1:
+        return text[:start] + rendered
+    return text[:start] + rendered.rstrip("\n") + text[end:]
+
+
+def candidate_worktree(repo, record):
+    matches = [
+        path
+        for path, info in registered_worktree_info(repo).items()
+        if info.get("branch") in {record.get("head"), f"refs/heads/{record.get('head')}"}
+    ]
+    if len(matches) != 1:
+        if not matches:
+            raise RuntimeError("candidate worktree is unavailable")
+        raise RuntimeError("candidate worktree is ambiguous")
+    return matches[0]
+
+
+def candidate_gate_record(repo, record, base, checks, review, merge, rollout):
+    if record.get("malformed"):
+        raise RuntimeError(record["malformed"])
+    if record.get("outcome") != "candidate":
+        raise RuntimeError("candidate gate evidence requires outcome: candidate")
+    if record.get("state") != "open":
+        raise RuntimeError("candidate gate evidence requires state: open")
+    if checks not in GATE_CHECK_STATUSES:
+        raise RuntimeError(f"unsupported checks status: {checks}")
+    if review not in GATE_REVIEW_STATUSES:
+        raise RuntimeError(f"unsupported review status: {review}")
+    if merge not in GATE_MERGE_STATUSES:
+        raise RuntimeError(f"unsupported merge status: {merge}")
+    if rollout not in ROLLOUT_CONFIG_DISPOSITIONS:
+        raise RuntimeError(f"unsupported rollout/config disposition: {rollout}")
+
+    head = record.get("head")
+    head_sha = record.get("head_sha")
+    if not head or not head_sha:
+        raise RuntimeError("candidate head identity is unavailable")
+    live_head_sha = live_ref_sha(repo, head)
+    if not sha_matches(live_head_sha, head_sha):
+        raise RuntimeError("candidate head sha mismatch")
+    base = base or current_branch(repo)
+    if not base:
+        raise RuntimeError("base branch is unavailable")
+    base_sha = live_ref_sha(repo, base)
+    worktree = candidate_worktree(repo, record)
+    clean, clean_reason = worktree_clean_check(
+        repo,
+        {**record, "worktree": str(worktree)},
+    )
+    if not clean:
+        raise RuntimeError(clean_reason)
+
+    evidence = "\n".join(
+        [
+            f"Base: `{base}`",
+            f"Base SHA: `{base_sha}`",
+            f"Worktree: `{worktree}`",
+            f"Checks: {checks}",
+            f"Review: {review}",
+            f"Merge: {merge}",
+            f"Rollout/config disposition: {rollout}",
+        ]
+    )
+    updated = replace_or_append_section(record["text"], "Gate Evidence", evidence)
+    atomic_write(repo / record["path"], updated)
+    return {
+        "status": "recorded",
+        "path": record["path"],
+        "base": base,
+        "base_sha": base_sha,
+        "head": head,
+        "head_sha": head_sha,
+        "worktree": str(worktree),
+        "checks": checks,
+        "review": review,
+        "merge": merge,
+        "rollout_config": rollout,
+    }
 
 
 def merge_gate(repo, record):
@@ -1014,15 +1144,23 @@ def landing_plan(repo, record, landing_sha=None):
 
     write_surface = diff_paths(repo, live_base_sha, landing_sha)
     dirty_paths, untracked_paths = status_paths(repo)
-    dirty_overlap = paths_overlap(dirty_paths, write_surface)
-    untracked_overlap = paths_overlap(untracked_paths, write_surface)
+    dirty_overlap_paths = overlap_paths(dirty_paths, write_surface)
+    untracked_overlap_paths = overlap_paths(untracked_paths, write_surface)
+    dirty_overlap = bool(dirty_overlap_paths)
+    untracked_overlap = bool(untracked_overlap_paths)
     hard_stops = hard_stop_paths(write_surface)
 
     reasons = []
     if dirty_overlap:
-        reasons.append("dirty base path overlaps landing write surface")
+        reasons.append(
+            "dirty base path overlaps landing write surface: "
+            + ", ".join(dirty_overlap_paths)
+        )
     if untracked_overlap:
-        reasons.append("untracked base path would be overwritten")
+        reasons.append(
+            "untracked base path would be overwritten: "
+            + ", ".join(untracked_overlap_paths)
+        )
     if hard_stops:
         reasons.append("mandatory hard-stop pattern requires manual review")
 
@@ -1039,6 +1177,8 @@ def landing_plan(repo, record, landing_sha=None):
             "untracked_paths": untracked_paths,
             "dirty_overlap": dirty_overlap,
             "untracked_overlap": untracked_overlap,
+            "dirty_overlap_paths": dirty_overlap_paths,
+            "untracked_overlap_paths": untracked_overlap_paths,
             "hard_stop_paths": hard_stops,
         }
     )
@@ -1404,7 +1544,7 @@ def load_records(args):
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(description="Read-only solve-record helpers")
+    parser = argparse.ArgumentParser(description="Solve Record and candidate-gate helpers")
     subparsers = parser.add_subparsers(dest="command")
     subparsers.required = True
 
@@ -1435,6 +1575,19 @@ def main(argv):
     landing_parser.add_argument("--landing-sha")
     add_common(landing_parser)
 
+    gate_record_parser = subparsers.add_parser("candidate-gate-record")
+    gate_record_parser.add_argument("--record", required=True)
+    gate_record_parser.add_argument("--base")
+    gate_record_parser.add_argument("--checks", required=True, choices=sorted(GATE_CHECK_STATUSES))
+    gate_record_parser.add_argument("--review", required=True, choices=sorted(GATE_REVIEW_STATUSES))
+    gate_record_parser.add_argument("--merge", required=True, choices=sorted(GATE_MERGE_STATUSES))
+    gate_record_parser.add_argument(
+        "--rollout-config",
+        required=True,
+        choices=sorted(ROLLOUT_CONFIG_DISPOSITIONS),
+    )
+    add_common(gate_record_parser)
+
     args = parser.parse_args(argv)
 
     try:
@@ -1455,6 +1608,20 @@ def main(argv):
         elif args.command == "landing-plan":
             record = find_record(records, args.record)
             emit(landing_plan(repo, record, args.landing_sha), args.json)
+        elif args.command == "candidate-gate-record":
+            record = find_record(records, args.record)
+            emit(
+                candidate_gate_record(
+                    repo,
+                    record,
+                    args.base,
+                    args.checks,
+                    args.review,
+                    args.merge,
+                    args.rollout_config,
+                ),
+                args.json,
+            )
     except RuntimeError as exc:
         print(f"solve-records: {exc}", file=sys.stderr)
         return 2

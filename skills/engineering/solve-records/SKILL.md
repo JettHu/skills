@@ -70,6 +70,13 @@ identity and writes the compact candidate receipt with its concise Summary.
 Candidate Readiness is not Candidate Acceptance Review, merge, landing,
 deployment, release, smoke, or cleanup authority.
 
+A compact candidate receipt is valid even when later gate facts are absent.
+When acceptance or landing needs those facts, use the read-only `merge-gate`
+and `landing-plan` indexes, then record bounded late evidence through the
+candidate-gate operation. That operation may enrich the receipt but does not
+merge, land, deploy, or alter the user's worktree. Same-head evidence may be
+reused; a changed head requires the smallest affected-scope revalidation.
+
 Before every candidate acceptance review, merge, ship, land, close, or
 cleanup request, read [candidate-gates.md](references/candidate-gates.md). It
 owns the live verification, landing, closure, and cleanup steps.

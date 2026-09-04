@@ -11,6 +11,8 @@ Re-read the exact receipt and linked Ticket. Verify the live facts required by
 the requested operation:
 
 - Candidate record parses and remains outcome: candidate.
+- A compact candidate receipt with `head` and `head_sha` is valid at handoff;
+  missing later gate facts are pending evidence, not a malformed receipt.
 - Base and head refs exist and match base_sha and head_sha, or the narrow
   base-only revalidation rule applies.
 - Candidate worktree is registered and clean whenever merge or cleanup uses it.
@@ -30,6 +32,12 @@ low-risk exception is restated.
 Completion: the requested operation has a current, comparable candidate and
 every relevant live fact above is recorded as pass or its smallest actionable
 manual reason.
+
+The candidate-gate operation is the narrow writer for these late facts. It
+must re-read the live head, derive the registered candidate worktree and base
+identity, verify the worktree boundary, and atomically enrich the receipt.
+`merge-gate` and `landing-plan` remain read-only indexes; they do not repair a
+receipt or mutate Git state.
 
 ## 2. Acceptance review
 
@@ -66,6 +74,11 @@ Completion: the recorded landing SHA is validated, the base fast-forward
 succeeds, and the receipt records merged state, merged timestamp, merged SHA,
 and landing rationale. A blocked candidate remains open with its actionable
 reason and resources intact.
+
+If the base checkout contains dirty or untracked paths overlapping the
+candidate's final write surface, report the exact paths and stop. Do not
+stash, reapply, overwrite, reset, or otherwise decide how to preserve user
+worktree changes automatically.
 
 ## 4. Candidate close and cleanup
 
