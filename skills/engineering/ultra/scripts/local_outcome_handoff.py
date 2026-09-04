@@ -21,6 +21,10 @@ class RetryableHandoff(HandoffError):
     pass
 
 
+class UnavailableHandoff(HandoffError):
+    pass
+
+
 def git(cwd, *args):
     p = subprocess.run(
         ["git", "-C", str(cwd), *args],
@@ -362,7 +366,7 @@ def handoff(repo, ticket_ids, key, outcome, body, next_action, declared, superse
                     "resume requires a non-empty complete retained-resource declaration"
                 )
             if not resumable_supported(contract_text):
-                raise HandoffError("tracker does not support resumable Claims")
+                raise UnavailableHandoff("tracker does not support resumable Claims")
             for ticket in tickets:
                 verify_resources(repo, ticket, declared)
         elif declared:
@@ -759,6 +763,13 @@ def main():
         installed = find_receipt(repo, a.handoff_key)
         receipt = installed.relative_to(repo).as_posix() if installed else ""
         payload = result("retryable", a.handoff_key, receipt=receipt, reason=str(e))
+    except UnavailableHandoff as e:
+        payload = result(
+            "unavailable",
+            a.handoff_key,
+            reason=str(e),
+            next_action="restore the required tracker capability, then retry the same key",
+        )
     except (HandoffError, frontier.FrontierError, OSError) as e:
         payload = result("conflict", a.handoff_key, reason=str(e))
     print(json.dumps(payload, indent=2, sort_keys=True))

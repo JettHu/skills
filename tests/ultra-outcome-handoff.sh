@@ -552,8 +552,9 @@ unsupported = json.loads(recovery(
     "unsupported-resume", "blocked", "resume",
     "solve-owned:branch:solve/A", f"solve-owned:worktree:{repo}",
 ).stdout)["data"]
-assert unsupported["status"] == "conflict"
+assert unsupported["status"] == "unavailable"
 assert "resumable Claims" in unsupported["reason"]
+assert "same key" in unsupported["next_action"]
 contract_path.write_text(contract_text, encoding="utf-8")
 
 # A resumed Attempt creates a distinct successor receipt. The predecessor stays
