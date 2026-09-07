@@ -15,6 +15,7 @@ import subprocess
 import sys
 
 import local_ticket_publication as publication
+import tracker_contract
 from local_ticket_surface import (
     SurfacePatternError,
     configured_location_regex,
@@ -113,11 +114,16 @@ def contract_value(text: str, field: str) -> str:
 
 
 def read_contract(repo: Path) -> tuple[FrontierContract, str]:
-    path = repo / CONTRACT
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as error:
-        raise FrontierError(f"missing Local tracker contract: {path}") from error
+        documents = tracker_contract.read(repo)
+    except tracker_contract.TrackerContractError as error:
+        detail = str(error).replace("missing Tracker contract:", "missing Local tracker contract:", 1)
+        raise FrontierError(detail) from error
+    if documents.configured_adapter and documents.configured_adapter != "bundled-local-markdown-v1":
+        raise FrontierError(
+            f"unsupported configured Local frontier adapter: {documents.configured_adapter}"
+        )
+    text = documents.capability_text
     if contract_value(text, "Frontier adapter") != "bundled-local-markdown-v1":
         raise FrontierError("unsupported Local frontier adapter")
     representation = contract_value(text, "Local Ticket representation")
@@ -182,7 +188,7 @@ def read_contract(repo: Path) -> tuple[FrontierContract, str]:
     }
     if not all(normalize_key(state) in contract.states for state in required_states):
         raise FrontierError("Local frontier contract state registry is incomplete")
-    return contract, text
+    return contract, documents.effective_text
 
 
 def metadata_region(text: str) -> tuple[int, int]:

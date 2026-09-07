@@ -91,6 +91,8 @@ for command, words in (
 ):
     output = run(*command).stdout
     assert all(word in output for word in words), output
+facade_help = " ".join(run(sys.executable, str(facade), "--help").stdout.split())
+assert "selected adapter capability document" in facade_help
 handoff_help = run(sys.executable, str(facade), "ticket", "handoff", "--help").stdout
 normalized_handoff_help = " ".join(handoff_help.split())
 assert "Only success returns ok=true and exits 0" in normalized_handoff_help

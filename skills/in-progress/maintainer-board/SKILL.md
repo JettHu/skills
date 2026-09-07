@@ -19,8 +19,9 @@ No arguments means:
 - target repo: the current working directory's Git root
 - HTML output: `<repo>/.scratch/maintainer-board/index.html`
 
-When `docs/agents/ultra-tracker.md` configures Local Markdown publication, the
-board reads that contract. It discovers safely delimited `tickets-file`
+When `docs/agents/ultra-tracker.md` selects the Local Markdown capability
+document, the board reads the shared index and that concrete capability. It
+discovers safely delimited `tickets-file`
 sections through the canonical local publication adapter, and it keeps
 `review-pending`, partially promoted, invalid-journal, or malformed provisional
 Tickets out of ready and claimed buckets. Run-tagged readiness requires the

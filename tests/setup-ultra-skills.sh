@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 CONFIGURE="$REPO_ROOT/skills/engineering/setup-ultra-skills/scripts/configure.py"
 ADAPTER="$REPO_ROOT/skills/engineering/ultra/scripts/local_ticket_publication.py"
+FRONTIER="$REPO_ROOT/skills/engineering/ultra/scripts/local_ticket_frontier.py"
 TMPDIR_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/setup-ultra-skills.XXXXXX")"
 trap 'rm -rf "$TMPDIR_ROOT"' EXIT
 
@@ -61,7 +62,7 @@ python3 "$isolated_skill/scripts/configure.py" \
   --instructions AGENTS.md \
   --apply >/dev/null
 grep -Fq 'Local Ticket path: .scratch/<feature>/issues/<ticket-file>.md' \
-  "$isolated_repo/docs/agents/ultra-tracker.md"
+  "$isolated_repo/docs/agents/ultra-tracker/local-markdown.md"
 cmp -s \
   "$REPO_ROOT/skills/engineering/setup-ultra-skills/scripts/local_ticket_surface.py" \
   "$REPO_ROOT/skills/engineering/ultra/scripts/local_ticket_surface.py"
@@ -74,6 +75,7 @@ python3 "$CONFIGURE" \
   --instructions AGENTS.md >"$preview_output"
 test ! -e "$local_repo/docs/agents/ultra-tracker.md"
 grep -Fq -- '--- docs/agents/ultra-tracker.md ---' "$preview_output"
+grep -Fq -- '--- docs/agents/ultra-tracker/local-markdown.md ---' "$preview_output"
 grep -Fq -- '--- AGENTS.md ---' "$preview_output"
 if grep -Fq '<!-- setup-ultra-skills:begin -->' "$local_repo/AGENTS.md"; then
   echo "preview fixture unexpectedly changed project instructions" >&2
@@ -81,6 +83,16 @@ if grep -Fq '<!-- setup-ultra-skills:begin -->' "$local_repo/AGENTS.md"; then
 fi
 
 configure "$local_repo" local-markdown local-review-pending
+mkdir -p "$local_repo/.scratch/feature/issues"
+printf 'Status: ready-for-agent\nTicket ID: SETUP-FRONTIER-1\nBlocked By:\nFlags:\n\n# Split capability frontier\n' >"$local_repo/.scratch/feature/issues/SETUP-FRONTIER-1.md"
+python3 "$FRONTIER" frontier --repo "$local_repo" >"$TMPDIR_ROOT/split-frontier.json"
+python3 - "$TMPDIR_ROOT/split-frontier.json" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+assert payload["claimable"] == ["SETUP-FRONTIER-1"], payload
+PY
 configure "$local_sections_repo" local-markdown local-review-pending \
   --local-ticket-representation tickets-file \
   --local-ticket-path .scratch/product/tickets.md
@@ -162,7 +174,8 @@ python3 "$CONFIGURE" \
   --publication-strategy local-staging \
   --instructions AGENTS.md >"$TMPDIR_ROOT/reconfigure-preview.txt"
 grep -Fq 'Publication strategy: local-staging' "$TMPDIR_ROOT/reconfigure-preview.txt"
-grep -Fq 'Publication strategy: remote-review-pending' "$reconfigured_repo/docs/agents/ultra-tracker.md"
+grep -Fq -- '--- docs/agents/ultra-tracker/github.md ---' "$TMPDIR_ROOT/reconfigure-preview.txt"
+grep -Fq 'Publication strategy: remote-review-pending' "$reconfigured_repo/docs/agents/ultra-tracker/github.md"
 configure "$reconfigured_repo" github local-staging
 
 python3 - "$REPO_ROOT" "$local_repo" "$local_sections_repo" "$local_delete_repo" "$github_remote_repo" "$github_staging_repo" "$gitlab_remote_repo" "$gitlab_staging_repo" "$other_repo" "$reconfigured_repo" "$unmanaged_repo" <<'PY'
@@ -180,6 +193,10 @@ assert "Linear" not in skill
 required_sections = (
     "# Ultra Tracker Extension",
     "Base tracker: docs/agents/issue-tracker.md",
+    "## Adapter Selection",
+    "Configured adapter:",
+    "Adapter capability document:",
+    "## Shared Tracker Vocabulary",
     "## Ticket Review Publication",
     "## Solve Coordination",
     "Claim and release:",
@@ -190,18 +207,61 @@ required_sections = (
     "Unsupported operations:",
 )
 
-for repo in (local, local_sections, github_remote, github_staging, gitlab_remote, gitlab_staging, other, reconfigured, unmanaged):
-    contract = (repo / "docs/agents/ultra-tracker.md").read_text(encoding="utf-8")
+def documents(repo):
+    index = (repo / "docs/agents/ultra-tracker.md").read_text(encoding="utf-8")
+    pointer = next(
+        line.split(":", 1)[1].strip()
+        for line in index.splitlines()
+        if line.startswith("Adapter capability document:")
+    )
+    capability = (repo / pointer).read_text(encoding="utf-8")
+    return index, capability
+
+
+configured = (
+    (local, "bundled-local-markdown-v1", "docs/agents/ultra-tracker/local-markdown.md"),
+    (local_sections, "bundled-local-markdown-v1", "docs/agents/ultra-tracker/local-markdown.md"),
+    (local_delete, "bundled-local-markdown-v1", "docs/agents/ultra-tracker/local-markdown.md"),
+    (github_remote, "github-v1", "docs/agents/ultra-tracker/github.md"),
+    (github_staging, "github-v1", "docs/agents/ultra-tracker/github.md"),
+    (gitlab_remote, "gitlab-v1", "docs/agents/ultra-tracker/gitlab.md"),
+    (gitlab_staging, "gitlab-v1", "docs/agents/ultra-tracker/gitlab.md"),
+    (other, "custom-v1", "docs/agents/ultra-tracker/custom.md"),
+    (reconfigured, "github-v1", "docs/agents/ultra-tracker/github.md"),
+    (unmanaged, "bundled-local-markdown-v1", "docs/agents/ultra-tracker/local-markdown.md"),
+)
+
+for repo, adapter, capability_path in configured:
+    contract, capability = documents(repo)
     instructions = (repo / "AGENTS.md").read_text(encoding="utf-8")
     for section in required_sections:
         assert section in contract, (repo, section)
+    assert f"Configured adapter: {adapter}" in contract
+    assert f"Adapter capability document: {capability_path}" in contract
+    for concrete_field in (
+        "Publication strategy:",
+        "Local Ticket representation:",
+        "Local Ticket path:",
+        "Frontier adapter:",
+        "Ticket state fields:",
+        "Claim value:",
+    ):
+        assert concrete_field not in contract, (repo, concrete_field)
+    for section in (
+        "## Supported operations",
+        "## Unsupported or separate concerns",
+        "## Recovery behavior",
+    ):
+        assert section in capability, (repo, section)
+    assert "## Ticket Review Publication" in capability
+    assert "## Solve Coordination" in capability
     assert contract.count("# Ultra Tracker Extension") == 1
     assert instructions.count("<!-- setup-ultra-skills:begin -->") == 1
     assert instructions.count("<!-- setup-ultra-skills:end -->") == 1
     assert "Keep this paragraph." in instructions
     assert "Keep this section." in instructions
 
-local_contract = (local / "docs/agents/ultra-tracker.md").read_text(encoding="utf-8")
+local_contract = documents(local)[1]
 assert "Publication strategy: local-review-pending" in local_contract
 assert "Local Ticket representation: file-per-ticket" in local_contract
 assert "Local Ticket path: .scratch/<feature>/issues/<ticket-file>.md" in local_contract
@@ -235,31 +295,31 @@ for field in (
 ):
     assert field in local_contract
 
-sections_contract = (local_sections / "docs/agents/ultra-tracker.md").read_text(encoding="utf-8")
+sections_contract = documents(local_sections)[1]
 assert "Local Ticket representation: tickets-file" in sections_contract
 assert "Local Ticket path: .scratch/product/tickets.md" in sections_contract
 assert "<!-- ultra-ticket:begin id=<Ticket-ID> -->" in sections_contract
 assert "heading- or title-based identity is unsafe" in sections_contract
 
-delete_contract = (local_delete / "docs/agents/ultra-tracker.md").read_text(encoding="utf-8")
+delete_contract = documents(local_delete)[1]
 assert "Cancellation policy: delete-on-cancel" in delete_contract
 assert "Cancellation behavior: delete only the named review-pending run after exact membership and preimage validation." in delete_contract
 
 for repo in (github_remote, gitlab_remote):
-    contract = (repo / "docs/agents/ultra-tracker.md").read_text(encoding="utf-8")
+    contract = documents(repo)[1]
     assert "Publication strategy: remote-review-pending" in contract
     assert "<!-- ultra-publication-set:<run-id> -->" in contract
     assert "creates only missing members" in contract
 
 for repo in (github_staging, gitlab_staging, reconfigured):
-    contract = (repo / "docs/agents/ultra-tracker.md").read_text(encoding="utf-8")
+    contract = documents(repo)[1]
     assert "Publication strategy: local-staging" in contract
     assert ".scratch/.ultra-staging/<run-id>/tickets.md" in contract
     assert "manifest.json" in contract
     assert "Ticket discovery exclusion: skip `.scratch/.ultra-staging/`" in contract
     assert ".scratch/.ultra-staging/" in (repo / ".gitignore").read_text(encoding="utf-8")
 
-other_contract = (other / "docs/agents/ultra-tracker.md").read_text(encoding="utf-8")
+other_contract = documents(other)[1]
 assert "Publication strategy: custom" in other_contract
 for field in (
     "Draft or review-pending representation:",

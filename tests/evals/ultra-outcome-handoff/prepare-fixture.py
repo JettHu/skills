@@ -14,6 +14,7 @@ RUNTIME_FILES = (
     "skills/engineering/ultra/scripts/ultra_tracker.py",
     "skills/engineering/ultra/scripts/local_outcome_handoff.py",
     "skills/engineering/ultra/scripts/local_ticket_frontier.py",
+    "skills/engineering/ultra/scripts/tracker_contract.py",
     "skills/engineering/ultra/scripts/local_ticket_publication.py",
     "skills/engineering/ultra/scripts/local_ticket_surface.py",
 )

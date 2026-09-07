@@ -16,6 +16,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 
+import tracker_contract
 from local_ticket_surface import (
     REPRESENTATIONS,
     SurfacePatternError,
@@ -484,11 +485,16 @@ def contract_value(text: str, field: str) -> str:
 
 
 def configured_local_contract(repo: Path) -> LocalContract:
-    path = repo / CONTRACT
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as error:
-        raise AdapterError(f"missing Local tracker contract: {path}") from error
+        documents = tracker_contract.read(repo)
+    except tracker_contract.TrackerContractError as error:
+        detail = str(error).replace("missing Tracker contract:", "missing Local tracker contract:", 1)
+        raise AdapterError(detail) from error
+    if documents.configured_adapter and documents.configured_adapter != "bundled-local-markdown-v1":
+        raise AdapterError(
+            f"unsupported configured Local Markdown adapter: {documents.configured_adapter}"
+        )
+    text = documents.capability_text
     strategy = contract_value(text, "Publication strategy")
     if strategy != "local-review-pending":
         raise AdapterError(

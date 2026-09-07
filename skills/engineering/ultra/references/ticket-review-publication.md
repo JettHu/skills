@@ -1,15 +1,16 @@
 # Ticket Review Publication
 
-Read this reference when `to-tickets` will create or update formal Tickets. The
-configured `docs/agents/ultra-tracker.md` contract chooses the backend,
+Read this reference when `to-tickets` will create or update formal Tickets.
+The shared `docs/agents/ultra-tracker.md` index chooses the backend and points to
+one selected adapter capability document. The selected capability owns the
 representation, draft surface, promotion operation, recovery policy, and Claim
-gate. This reference does not replace that project contract.
+gate. This reference does not replace either project document.
 
 ## Before target invocation
 
-1. Read the base tracker contract and `docs/agents/ultra-tracker.md`. If either
-   is missing, incomplete, or names an unsupported mutation, stop before
-   publication. Do not invent an adapter.
+1. Read the base tracker contract, the shared index, and its selected adapter
+   capability document. If any is missing, incomplete, or names an unsupported
+   mutation, stop before publication. Do not invent an adapter.
 2. Select or resume one stable publication-run identity. Resume an existing
    run only when its configured surface and approved source still match.
 3. Resolve the exact durable draft surface and verify it is writable. For Local
@@ -63,8 +64,9 @@ any scope or semantic change to its human owner.
 ## GitHub and GitLab remote adapter contract
 
 For a configured GitHub or GitLab backend, select exactly the publication
-strategy named by `docs/agents/ultra-tracker.md`; do not silently substitute the
-other remote strategy. The provider-native API or CLI is the mutation surface.
+strategy named by the shared index and selected capability document; do not
+silently substitute the other remote strategy. The provider-native API or CLI
+is the mutation surface.
 Before any mutation, read the configured provisional marker, ready-state
 operation, stable publication-set marker, relationship operation, supersession
 policy, and Claim/frontier lookup. An adapter is safe only when it can re-read
@@ -104,7 +106,8 @@ read-only and must fail closed before mutation.
 
 ## Local Markdown adapter contract
 
-Use only the configured representation and authorized path. `file-per-ticket`
+Use only the representation and authorized path declared by the selected Local
+Markdown capability document. `file-per-ticket`
 stores one formal Ticket per configured file; `tickets-file` uses the exact,
 case-sensitive `<!-- ultra-ticket:begin id=<Ticket-ID> -->` and
 `<!-- ultra-ticket:end -->` boundaries. Titles and headings are never identity.

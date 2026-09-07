@@ -50,6 +50,12 @@ mkdir -p "$REPO/docs/agents"
 cat >"$REPO/docs/agents/ultra-tracker.md" <<'EOF'
 # Ultra Tracker Extension
 
+Configured adapter: bundled-local-markdown-v1
+Adapter capability document: docs/agents/ultra-tracker/local-markdown.md
+EOF
+mkdir -p "$REPO/docs/agents/ultra-tracker"
+cat >"$REPO/docs/agents/ultra-tracker/local-markdown.md" <<'EOF'
+
 Publication strategy: local-review-pending
 Local Ticket representation: tickets-file
 Local Ticket path: .scratch/feature-a/tickets.md
@@ -593,6 +599,7 @@ cp "$REPO_ROOT/skills/engineering/solve-records/scripts/solve-records.py" \
   "$(dirname "$STANDALONE_SCRIPT")/solve-records/scripts/solve-records.py"
 mkdir -p "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts"
 cp "$LOCAL_PUBLICATION_SCRIPT" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts/local_ticket_publication.py"
+cp "$(dirname "$LOCAL_PUBLICATION_SCRIPT")/tracker_contract.py" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts/tracker_contract.py"
 cp "$(dirname "$LOCAL_PUBLICATION_SCRIPT")/local_ticket_surface.py" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts/local_ticket_surface.py"
 python3 "$STANDALONE_SCRIPT" --repo "$REPO" --json >"$TMPDIR_ROOT/standalone-board.json"
 

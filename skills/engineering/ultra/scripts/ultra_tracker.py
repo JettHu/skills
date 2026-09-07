@@ -92,11 +92,21 @@ def exactly_one_contract_value(text: str, field: str) -> str:
 
 def publication_config(repo: Path) -> tuple[str, str]:
     """Read the configured publication coordinates without interpreting Ticket state."""
-    path = repo / CONTRACT
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise FacadeError(f"missing Tracker contract: {path}") from exc
+        import tracker_contract
+    except ModuleNotFoundError as exc:
+        raise FacadeError(
+            "selected tracker capability resolver is unavailable"
+        ) from exc
+    try:
+        documents = tracker_contract.read(repo)
+    except tracker_contract.TrackerContractError as exc:
+        raise FacadeError(str(exc)) from exc
+    if documents.configured_adapter and documents.configured_adapter != "bundled-local-markdown-v1":
+        raise FacadeError(
+            f"unsupported configured Local Markdown adapter: {documents.configured_adapter}"
+        )
+    text = documents.capability_text
     if exactly_one_contract_value(text, "Publication strategy") != "local-review-pending":
         raise FacadeError("configured publication strategy is not supported by bundled Local Markdown helper")
     representation = exactly_one_contract_value(text, "Local Ticket representation")
@@ -180,19 +190,19 @@ def delegate(operation: str, helper: str, args: list[str]) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = FacadeArgumentParser(
-        description="Bundled Ultra Tracker facade for Ticket publication, Claim, Attempt, and Solve Record helpers."
+        description="Bundled Ultra Tracker facade for Ticket publication, Claim, Attempt, and Solve Record helpers using the selected adapter capability document."
     )
     groups = parser.add_subparsers(
         dest="group", required=True, title="command groups", parser_class=FacadeArgumentParser
     )
 
-    publication = groups.add_parser("publication", help="Local Markdown Ticket publication lifecycle")
+    publication = groups.add_parser("publication", help="configured adapter Ticket publication lifecycle")
     publication_actions = publication.add_subparsers(
         dest="action", required=True, title="publication operations", parser_class=FacadeArgumentParser
     )
     for action in ("register", "inspect", "promote", "cleanup", "terminal-repair"):
         child = publication_actions.add_parser(action, help=f"delegate Ticket publication {action}")
-        child.add_argument("--repo", default=".", help="repository containing the configured Tracker contract")
+        child.add_argument("--repo", default=".", help="repository containing the shared tracker index and selected adapter capability document")
         child.add_argument("--run-id", required=True, help="publication run identity")
         child.add_argument(
             "--location",

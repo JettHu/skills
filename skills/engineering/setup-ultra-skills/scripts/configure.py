@@ -13,6 +13,7 @@ from local_ticket_surface import SurfacePatternError, configured_location_regex
 
 BASE_CONTRACT = Path("docs/agents/issue-tracker.md")
 EXTENSION_CONTRACT = Path("docs/agents/ultra-tracker.md")
+CAPABILITY_ROOT = Path("docs/agents/ultra-tracker")
 STAGING_ROOT = ".scratch/.ultra-staging/"
 CANCELLATION_POLICIES = {
     "retain-until-explicit-cleanup": "retain the named review-pending run until explicit cleanup.",
@@ -35,6 +36,12 @@ COORDINATION_FIELDS = (
     "Unsupported operations:",
 )
 CUSTOM_FIELDS = PUBLICATION_FIELDS + COORDINATION_FIELDS
+ADAPTERS = {
+    "local-markdown": ("bundled-local-markdown-v1", "local-markdown.md", "Local Markdown"),
+    "github": ("github-v1", "github.md", "GitHub"),
+    "gitlab": ("gitlab-v1", "gitlab.md", "GitLab"),
+    "other": ("custom-v1", "custom.md", "Custom"),
+}
 
 
 class ConfigurationError(ValueError):
@@ -275,66 +282,199 @@ def coordination(preset: str) -> list[str]:
         f"Claim and release: {claim}",
         "State mapping: `review-pending` is an Ultra adapter state, not a sixth global triage role. `ready-for-agent` is the sole claimable state; active Claim and terminal states follow the base tracker contract.",
         "Blocker and frontier lookup: use the base contract's blocker representation. The frontier contains only ready, unblocked, unclaimed Tickets; provisional or staged Tickets remain outside it.",
-        "Local Markdown blocker format: the `## Blocked by` body section is canonical; `Blocked By` and `Blockers` metadata are legacy fallback only. Omit the section when there are no blockers; if both forms exist, use the body without merging.",
         f"Branch/worktree/PR links: {resource_links}",
         "Solve Record backlinks: add the durable receipt path or URL to the Ticket's configured backlink surface; the receipt remains the outcome record and the Ticket remains the work order.",
         "Unsupported operations: record any backend capability absent from this extension as unsupported. Batch mutation requires conflict-detecting Claim and safe blocker lookup; otherwise use an explicit single-Ticket path.",
         "",
     ]
     if preset == "local-markdown":
-        lines[2:2] = [
-            "Frontier adapter: bundled-local-markdown-v1",
-            "Ticket ID field aliases: Ticket ID, ID",
-            "Publication Run field aliases: Publication Run",
-            "Source field aliases: Source Spec, Parent",
-            "Ticket state fields: Status, State",
-            "Ticket state values: review-pending, needs-triage, ready-for-agent, completed, ready-for-human, needs-info, wontfix",
-            "Ready state: ready-for-agent",
-            "Completed state: completed",
-            "Human-blocked states: ready-for-human, needs-info",
-            "Blocker metadata fields: Blocked By, Blockers",
-            "Blocker body heading: Blocked by",
-            "Claim field: Flags",
-            "Claim field aliases: Flags, Labels",
-            "Claim value: solve-in-progress",
-            "Solve branch field: Solve Branch",
-            "Solve branch field aliases: Solve Branch, Branch",
-            "Solve worktree field: Solve Worktree",
-            "Solve worktree field aliases: Solve Worktree, Worktree",
-            "Resumable Claims: supported",
-            "",
-        ]
+        lines.insert(
+            6,
+            "Local Markdown blocker format: the `## Blocked by` body section is canonical; `Blocked By` and `Blockers` metadata are legacy fallback only. Omit the section when there are no blockers; if both forms exist, use the body without merging.",
+        )
     return lines
 
 
-def render_contract(args: argparse.Namespace) -> str:
-    common = [
+def adapter_metadata(preset: str) -> tuple[str, str, str]:
+    return ADAPTERS[preset]
+
+
+def capability_path(preset: str) -> Path:
+    _adapter, filename, _label = adapter_metadata(preset)
+    return CAPABILITY_ROOT / filename
+
+
+def local_configuration() -> list[str]:
+    return [
+        "## Adapter configuration",
+        "",
+        "Frontier adapter: bundled-local-markdown-v1",
+        "Ticket ID field aliases: Ticket ID, ID",
+        "Publication Run field aliases: Publication Run",
+        "Source field aliases: Source Spec, Parent",
+        "Ticket state fields: Status, State",
+        "Ticket state values: review-pending, needs-triage, ready-for-agent, completed, ready-for-human, needs-info, wontfix",
+        "Ready state: ready-for-agent",
+        "Completed state: completed",
+        "Human-blocked states: ready-for-human, needs-info",
+        "Blocker metadata fields: Blocked By, Blockers",
+        "Blocker body heading: Blocked by",
+        "Claim field: Flags",
+        "Claim field aliases: Flags, Labels",
+        "Claim value: solve-in-progress",
+        "Solve branch field: Solve Branch",
+        "Solve branch field aliases: Solve Branch, Branch",
+        "Solve worktree field: Solve Worktree",
+        "Solve worktree field aliases: Solve Worktree, Worktree",
+        "Resumable Claims: supported",
+        "",
+    ]
+
+
+def capability_scope(preset: str, strategy: str) -> list[str]:
+    if preset == "local-markdown":
+        supported = [
+            "- `frontier` reads the configured Ticket surface, validates blockers and publication state, and returns ready, unclaimed Tickets.",
+            "- `claim` re-reads the selected Ticket and snapshot, then atomically records the configured branch/worktree assignment.",
+            "- `publication register`, `inspect`, `promote`, and `cleanup` manage the local review-pending publication set; `terminal-repair` handles only its declared integrity repairs.",
+            "- Outcome handoff and Solve Record operations remain delegated to their owning bundled helpers or facade.",
+        ]
+        unsupported = [
+            "- Caller-ordered Ticket-state, backlink, Claim, or receipt mutations are unsupported.",
+            "- The adapter does not run tests or code review and does not grant Candidate Readiness, Candidate Acceptance, merge, landing, deployment, release, or smoke authority.",
+            "- A general operation for changing an already published Ticket to `completed` is separate from Terminal Repair and is not provided here.",
+        ]
+        recovery = [
+            "- Frontier and Claim fail closed on stale snapshots, blocker ambiguity, publication drift, or Claim conflicts.",
+            "- Handoff retries reuse the same opaque `handoff_key`; identity or binding changes are conflicts.",
+            "- Publication recovery resumes from its durable journal and never recreates transaction mechanics manually.",
+        ]
+    elif preset in {"github", "gitlab"}:
+        provider = "GitHub" if preset == "github" else "GitLab"
+        supported = [
+            f"- `{strategy}` publication uses the configured {provider} provider-native surface and its durable provisional marker or staging manifest.",
+            f"- Provider-native {provider} relationship, ready-state, and conflict-detecting Claim/frontier operations are supported only when named by this capability policy.",
+            "- Review, complete-set verification, promotion, and recovery use the operations declared in the publication section below.",
+        ]
+        unsupported = [
+            "- Unnamed provider mutations and any manual substitute for a missing conflict-detecting operation are unsupported.",
+            "- A provider without exact ready-state and partial-run verification is read-only until its capability policy is completed.",
+            "- This document does not add a second Ticket lifecycle or grant acceptance, merge, landing, deployment, release, or smoke authority.",
+        ]
+        recovery = [
+            "- Retain the stable publication-set marker or staging manifest and provider IDs across interruption.",
+            "- Re-read complete-set membership, bodies, relationships, and provisional/ready state before resuming or promoting.",
+            "- Create only missing members and never promote a partial or membership-unverified set.",
+        ]
+    else:
+        supported = [
+            "- Only the custom publication, Claim, state, frontier, link, and recovery operations explicitly named in this document are supported.",
+            "- The project may use its named provider-native surface through the policy below without changing the shared tracker vocabulary.",
+        ]
+        unsupported = [
+            "- Every unnamed backend capability and every manual substitute for a missing conflict-detecting operation is unsupported.",
+            "- This document does not add a second Ticket lifecycle or grant acceptance, merge, landing, deployment, release, or smoke authority.",
+        ]
+        recovery = [
+            "- Preserve the custom policy's durable identity, exact member set, and recorded partial-run evidence before resuming.",
+            "- Fail closed when the named recovery evidence or conflict check cannot be re-read; do not guess a replacement adapter operation.",
+        ]
+    return [
+        "## Supported operations",
+        "",
+        *supported,
+        "",
+        "## Unsupported or separate concerns",
+        "",
+        *unsupported,
+        "",
+        "## Recovery behavior",
+        "",
+        *recovery,
+        "",
+    ]
+
+
+def render_capability(args: argparse.Namespace) -> str:
+    adapter, _filename, label = adapter_metadata(args.preset)
+    lines = [
+        f"# {label} Adapter Capability",
+        "",
+        f"This document describes the selected `{adapter}` adapter. The shared tracker index owns common vocabulary and selection; this document owns concrete configured capabilities and recovery behavior.",
+        "",
+    ]
+    lines.extend(capability_scope(args.preset, args.publication_strategy))
+    if args.publication_strategy == "remote-review-pending":
+        lines.extend(
+            remote_publication(args.review_pending_marker, args.publication_marker_prefix)
+        )
+    elif args.publication_strategy == "local-staging":
+        lines.extend(staging_publication())
+    elif args.publication_strategy == "local-review-pending":
+        lines.extend(
+            local_publication(
+                args.cancellation_policy,
+                args.local_ticket_representation,
+                args.local_ticket_path,
+            )
+        )
+    else:
+        lines.extend(custom_publication(args.custom_policy))
+
+    if args.preset == "local-markdown":
+        lines.extend(local_configuration())
+    if args.preset == "other":
+        lines.extend(custom_coordination(args.custom_policy))
+    else:
+        lines.extend(coordination(args.preset))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def shared_contract(args: argparse.Namespace) -> str:
+    adapter, filename, label = adapter_metadata(args.preset)
+    selected_path = (CAPABILITY_ROOT / filename).as_posix()
+    lines = [
         "# Ultra Tracker Extension",
         "",
         "Base tracker: docs/agents/issue-tracker.md",
         "",
         "This managed extension adds Ultra-specific operations. The base tracker contract and triage documents remain authoritative for their own concerns.",
         "",
+        "## Adapter Selection",
+        "",
+        f"Configured adapter: {adapter}",
+        f"Adapter capability document: {selected_path}",
+        f"The selected {label} capability document is the sole source for concrete representation, configured fields, supported operations, unsupported operations, and recovery behavior.",
+        "",
+        "## Shared Tracker Vocabulary",
+        "",
+        "- Ticket is the work-order domain object and remains distinct from provider-native issue or work-item terminology.",
+        "- Claim is temporary ownership of a ready, unblocked Ticket; Attempt is execution evidence; Solve Record is the durable outcome receipt.",
+        "- Candidate Readiness and Candidate Acceptance are later gates and are not adapter states or publication operations.",
+        "- The shared index selects one capability document; it does not introduce a second tracker state machine or duplicate adapter lifecycle mechanics.",
+        "",
+        "## Ticket Review Publication",
+        "",
+        "Publication policy: use the selected adapter capability document for the configured draft representation, review update, promotion, complete-set verification, cancellation, and recovery operations.",
+        "Review boundary: review-pending or staged artifacts remain non-claimable until the selected adapter proves complete-set membership and the base-contract ready state.",
+        "Recovery boundary: resume from the selected adapter's durable run identity and evidence; never replace an unavailable or interrupted operation with manual lifecycle edits.",
+        "",
+        "## Solve Coordination",
+        "",
+        "Claim and release: use the selected adapter's conflict-detecting Claim and release operation; do not reproduce it with direct Ticket edits.",
+        "State mapping: the selected adapter maps provider or storage presentation onto the base tracker vocabulary; provisional and staged artifacts remain outside the claimable frontier.",
+        "Blocker and frontier lookup: use the selected adapter's safe blocker lookup and discovery snapshot; return only ready, unblocked, unclaimed Tickets and fail closed on ambiguity.",
+        "Branch/worktree/PR links: keep execution resource identity on the selected coordination surface while Solve Record or native review remains authoritative for handoff ownership and cleanup.",
+        "Solve Record backlinks: add only the selected adapter's configured lifecycle backlink; the receipt remains the outcome record and the Ticket remains the work order.",
+        "Unsupported operations: treat every capability absent from the selected document as unsupported; do not invent a fallback operation or lifecycle state.",
+        "",
     ]
-    if args.publication_strategy == "remote-review-pending":
-        publication = remote_publication(
-            args.review_pending_marker, args.publication_marker_prefix
-        )
-    elif args.publication_strategy == "local-staging":
-        publication = staging_publication()
-    elif args.publication_strategy == "local-review-pending":
-        publication = local_publication(
-            args.cancellation_policy,
-            args.local_ticket_representation,
-            args.local_ticket_path,
-        )
-    else:
-        return "\n".join(
-            common
-            + custom_publication(args.custom_policy)
-            + custom_coordination(args.custom_policy)
-        ).rstrip() + "\n"
-    return "\n".join(common + publication + coordination(args.preset)).rstrip() + "\n"
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_contract(args: argparse.Namespace) -> str:
+    """Render the common index; concrete policy is rendered separately."""
+    return shared_contract(args)
 
 
 def managed_block() -> str:
@@ -343,7 +483,7 @@ def managed_block() -> str:
             BLOCK_START,
             "### Ultra tracker extension",
             "",
-            "Ultra review publication, Claim, frontier, resource-link, and Solve Record rules live in `docs/agents/ultra-tracker.md`.",
+            "Ultra review publication, Claim, frontier, resource-link, and Solve Record rules live in the shared index and its selected adapter capability document.",
             BLOCK_END,
         ]
     )
@@ -398,10 +538,15 @@ def main() -> int:
             raise ConfigurationError(f"instructions file does not exist: {args.instructions}")
 
         contract = render_contract(args)
+        capability = render_capability(args)
         updated_instructions = replace_instruction_block(
             instructions.read_text(encoding="utf-8")
         )
-        changes = [(repo / EXTENSION_CONTRACT, contract), (instructions, updated_instructions)]
+        changes = [
+            (repo / EXTENSION_CONTRACT, contract),
+            (repo / capability_path(args.preset), capability),
+            (instructions, updated_instructions),
+        ]
 
         if args.publication_strategy == "local-staging":
             gitignore = repo / ".gitignore"

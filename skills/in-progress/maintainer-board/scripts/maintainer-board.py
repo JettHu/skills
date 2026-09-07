@@ -77,6 +77,25 @@ def find_local_publication_helper():
     return None
 
 
+def find_tracker_contract_helper():
+    for parent in Path(__file__).resolve().parents:
+        helper_path = parent / "skills/engineering/ultra/scripts/tracker_contract.py"
+        if helper_path.is_file():
+            return helper_path
+    return None
+
+
+def load_tracker_contract_helper():
+    helper_path = find_tracker_contract_helper()
+    if not helper_path:
+        return None
+    spec = importlib.util.spec_from_file_location("tracker_contract_helper", helper_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_local_publication_helper():
     helper_path = find_local_publication_helper()
     if not helper_path:
@@ -235,8 +254,20 @@ def local_ticket_contract(repo):
     path = repo / "docs/agents/ultra-tracker.md"
     if not path.is_file():
         return None
+    tracker = load_tracker_contract_helper()
+    if tracker is not None:
+        try:
+            text = tracker.read(repo).capability_text
+        except tracker.TrackerContractError as error:
+            raise RuntimeError(str(error)) from error
+    else:
+        text = path.read_text(encoding="utf-8")
+        if any(line.startswith("Adapter capability document:") for line in text.splitlines()):
+            raise RuntimeError(
+                "Maintainer Board requires the selected tracker capability resolver"
+            )
     fields = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         if ":" not in line:
             continue
         key, value = line.split(":", 1)

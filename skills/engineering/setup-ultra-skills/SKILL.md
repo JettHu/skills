@@ -15,7 +15,8 @@ Record operations.
 ## 1. Read the base
 
 Read `docs/agents/issue-tracker.md`, the existing `## Agent skills` block, and
-any current `docs/agents/ultra-tracker.md`. Select the instruction file the
+any current shared index plus selected capability document under
+`docs/agents/ultra-tracker/`. Select the instruction file the
 base setup uses: prefer the file already containing `## Agent skills`; otherwise
 use its existing `CLAUDE.md` or `AGENTS.md` selection. If the base tracker
 contract is absent, stop with the base-setup prerequisite.
@@ -35,12 +36,13 @@ Use the base contract as evidence for one preset:
   policy: `retain-until-explicit-cleanup` or `delete-on-cancel`. Publication
   exposes only `register`, `inspect`, `promote`, and `cleanup`; frontier alone
   owns whole-tracker discovery, blockers, snapshots, Claim, and execution
-  branch/worktree assignment. Both read their exact contract. Read the
+  branch/worktree assignment. Both read the shared index and its selected
+  capability document. Read the
   [Local Markdown reference](references/local-markdown.md) for path grammar,
   normalization, blocker representation, and publication recovery. The
-  generated Solve Coordination section declares the executable fields consumed
-  by the bundled frontier helper. A `promoting` or `promoted` run is resumed,
-  not cleaned, and publication transaction fallback is prohibited.
+  generated Local Markdown capability document declares the executable fields
+  consumed by the bundled frontier helper. A `promoting` or `promoted` run is resumed,
+  not cleaned, and publication transaction fallback is prohibited. Route Local Markdown publication only through its declared operations: route complete-set registration through the publication adapter. Manual transaction fallback is prohibited.
 - `github` or `gitlab` choose `remote-review-pending` when provisional remote
   Tickets are acceptable, or `local-staging` when the remote must contain only
   reviewed Tickets.
@@ -73,8 +75,10 @@ python3 <skill-dir>/scripts/configure.py \
   [--local-ticket-path <configured-path>] [--custom-prose "..."]
 ```
 
-Show the generated `docs/agents/ultra-tracker.md`, the short managed pointer,
-and any staging ignore entry. Let the user revise the policy before applying.
+Show the generated shared `docs/agents/ultra-tracker.md`, its selected concrete
+capability document under `docs/agents/ultra-tracker/`, the short managed
+pointer, and any staging ignore entry. Let the user revise the policy before
+applying.
 
 Completion: the user has reviewed the exact managed contract and the change
 preserves unrelated instruction text.
@@ -85,10 +89,12 @@ Re-run the same command with `--apply`. The helper replaces its complete
 generated contract and only its marked instruction block, so reconfiguration
 keeps one contract and one pointer.
 
-Verify that the contract points to the base file, includes Ticket Review
-Publication and Solve Coordination, and that the instruction file has exactly
-one `setup-ultra-skills` marker pair. When `local-staging` is selected, verify
-the staging root is ignored and excluded from Ticket discovery.
+Verify that the shared index points to the base file and exactly one selected
+capability document, includes the common Ticket Review Publication and Solve
+Coordination vocabulary, and that the capability document declares supported,
+unsupported, and recovery behavior. Verify that the instruction file has
+exactly one `setup-ultra-skills` marker pair. When `local-staging` is selected,
+verify the staging root is ignored and excluded from Ticket discovery.
 
 Completion: the managed extension, pointer, and chosen backend policy are
 present exactly once; the base tracker contract and unrelated project guidance
