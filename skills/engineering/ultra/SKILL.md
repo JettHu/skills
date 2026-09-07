@@ -98,7 +98,7 @@ For `diagnosing-bugs`, invoke the target first so it can build and run its red-c
 
 ### 4. Invoke the target skill
 
-For `to-tickets`, read [Ticket Review Publication](references/ticket-review-publication.md) and the configured tracker extension before handling its durable artifact. Pass the target the configured draft surface, representation, review-pending state, stable identities, and no-direct-ready rule. Use the configured publication operations and stop on their structured failure; do not create a second publication workflow here.
+For `to-tickets`, first read and follow [Ticket Review Publication](references/ticket-review-publication.md) and the configured tracker extension before handling its durable artifact. Pass the target the configured draft surface, representation, review-pending state, stable identities, source-pointer and blocker fields, and no-direct-ready rule. The reference's **Context Pointer Contract** makes `to-tickets` the sole producer of actionable execution pointers; this wrapper dispatches the target and does not define a second shaping workflow. Use the configured publication operations and stop on their structured failure; do not create a second publication workflow here.
 
 Invoke the target skill unmodified, passing through any remaining arguments (e.g., via Skill tool, or by reading its SKILL.md and following it directly). The conversation now has richer context from step 3 (or from existing conversation context if step 3 was skipped).
 

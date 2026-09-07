@@ -24,6 +24,42 @@ The approved Spec or approved conversation already authorizes ordinary Ticket
 splitting, merging, sizing, validation detail, and blocker repair. Do not repeat
 a default granularity quiz.
 
+## Context Pointer Contract
+
+`to-tickets` is the sole producer of execution context pointers. Before drafting
+each formal Ticket, it selects only the approved source material the executor
+needs: a Spec or PRD, related ADRs, `CONTEXT.md`, `CONTEXT-MAP.md`, or an
+equivalent domain document. The thin `ultra-to-tickets` wrapper only delegates
+to this route; it does not gather context or define a second shaping workflow.
+
+When a Ticket has selected source material, write one optional compact
+`## Context` section. Preserve each actionable pointer with its classification,
+its exact source branch/ref, and why it matters, for example:
+
+```markdown
+## Context
+
+- Source Spec (authoritative; ref: `main`): `docs/prd/publish.md` — defines accepted behavior and validation.
+- Decisions (authoritative; ref: `feature/publish-boundary`): `docs/adr/0042-publish.md` — fixes the permission and recovery boundary.
+- Domain Context (nonessential; ref: `main`): `CONTEXT.md` — names the domain vocabulary used by the changed module.
+```
+
+`Source Spec`, `Decisions`, and `Domain Context` are navigation labels, not a
+new required schema. Keep existing configured source metadata authoritative for
+adapter operations. Omit an empty Context section: a Ticket with no additional
+selected context remains executable. Do not copy source bodies, inject an
+unrelated repository index, or make the section a parser or publication gate.
+
+Mark a pointer `authoritative` when execution must read that exact source to
+honor approved scope or a binding decision. Mark it `nonessential` when it is
+helpful background whose absence does not affect safe execution. A known source
+that cannot be resolved uniquely is not repaired by guessing. Every pointer
+names one document and one source branch/ref; a repository document must not use
+a glob or silently fall back to the executor's current `HEAD`. `to-tickets` must
+not guess, replace, or broaden a pointer with another document or ref. Repair a
+known omission during Ticket review when it preserves the approved scope; route
+any scope or semantic change to its human owner.
+
 ## GitHub and GitLab remote adapter contract
 
 For a configured GitHub or GitLab backend, select exactly the publication

@@ -23,6 +23,8 @@ jobs:
         run: bash tests/ultra-v1-1-catalog.sh
       - name: Test Ultra solve boundaries
         run: bash tests/ultra-solve-boundaries.sh
+      - name: Test Ultra solve context routing
+        run: bash tests/ultra-solve-context-routing.sh
       - name: Test Ultra solve eval harness
         run: bash tests/ultra-solve-eval-harness.sh
       - name: Test Maintainer Board
