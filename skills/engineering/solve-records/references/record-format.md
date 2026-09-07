@@ -45,8 +45,19 @@ head_sha: def5678
 `state` is the receipt lifecycle; `outcome` is the creation-time Attempt result.
 Keep them separate. `tickets` is the authoritative normalized membership.
 `handoff_key` identifies exactly one outcome handoff, and `binding_digest`
-detects changes to its immutable binding. Candidate `head` and `head_sha` are
-derived from the active claimed worktree, never supplied as receipt text.
+detects unsupported changes to its bound facts. Candidate `head` is stable;
+`head_sha` is the mutable current snapshot within that open Candidate review
+container. Both are derived from the claimed or retained worktree, never
+supplied as receipt text.
+
+After a small in-scope review fix on the same solve-owned branch/worktree, call
+`ultra_tracker.py ticket refresh-candidate` with the exact receipt, linked Ticket
+scope, and full SHA observed at the retained worktree. A same-head call is
+idempotent. A descendant head atomically updates this receipt and invalidates
+the previous checks, Candidate Acceptance Review, merge-readiness, and landing
+evidence. A stale or concurrent observation fails without writing. Use a new
+receipt only when Ticket scope, outcome, owner, Attempt, branch, or worktree
+changes; Git remains the revision history.
 
 Candidate gate evidence is late-stage enrichment, not part of the minimum
 creation contract. A compact candidate may initially contain only its derived
@@ -82,9 +93,9 @@ lists. The adapter derives the canonical path, installs a complete Markdown
 file atomically, applies Ticket, backlink, Claim and resource transitions, and
 returns success only after rereading the whole postcondition.
 
-Exact retries use the same handoff key and immutable binding. A partial
+Exact outcome-handoff retries use the same handoff key and stable binding. A partial
 cross-surface transition is retryable handoff attention, not a second receipt
-state. Retry the same key; changed membership, outcome, candidate identity,
+state. Retry the same key; changed membership, outcome, stable candidate identity,
 recovery intent, resources, or predecessor under that key is a conflict.
 
 A resumed Attempt reaching another meaningful outcome uses a new key and new

@@ -75,7 +75,12 @@ When acceptance or landing needs those facts, use the read-only `merge-gate`
 and `landing-plan` indexes, then record bounded late evidence through the
 candidate-gate operation. That operation may enrich the receipt but does not
 merge, land, deploy, or alter the user's worktree. Same-head evidence may be
-reused; a changed head requires the smallest affected-scope revalidation.
+reused. After a bounded in-scope fix on the same retained solve-owned branch
+and worktree, run the explicit Tracker Facade `ticket refresh-candidate`
+operation with the exact linked Ticket scope and full observed head SHA. It
+updates the same open receipt, clears old snapshot evidence, and requires the
+smallest affected-scope revalidation. Never create a Candidate Revision,
+replacement receipt, or new Claim for this path.
 
 Before every candidate acceptance review, merge, ship, land, close, or
 cleanup request, read [candidate-gates.md](references/candidate-gates.md). It

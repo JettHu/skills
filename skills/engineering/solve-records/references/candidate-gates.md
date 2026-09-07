@@ -24,7 +24,12 @@ the requested operation:
   rollout/config disposition is explicit.
 - A remote-primary PR/MR record remains a remote merge artifact.
 
-A changed head SHA requires fresh validation. A changed base SHA can be
+A changed head SHA must first pass the explicit `ticket refresh-candidate`
+operation with the full SHA observed in the retained solve-owned worktree. The
+operation keeps the same open receipt and invalidates the previous snapshot's
+code-specific gate evidence; rerun affected-scope validation and acceptance
+review before recording new gate evidence. Do not create a replacement receipt
+or Claim for a bounded in-scope fix. A changed base SHA can be
 revalidated only when recorded base is an ancestor of live base, head still
 matches, a preflight merge is clean, and checks are rerun or the documented
 low-risk exception is restated.

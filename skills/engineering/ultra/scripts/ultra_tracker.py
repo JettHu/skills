@@ -47,6 +47,8 @@ def handoff_envelope(operation: str, payload: Any) -> int:
     """Project a handoff result onto the facade's success and exit contract."""
     if not isinstance(payload, dict) or payload.get("status") not in {
         "success",
+        "unchanged",
+        "refreshed",
         "retryable",
         "conflict",
         "unavailable",
@@ -58,7 +60,7 @@ def handoff_envelope(operation: str, payload: Any) -> int:
         )
         return INVALID
     status = payload["status"]
-    if status == "success":
+    if status in {"success", "unchanged", "refreshed"}:
         envelope(operation, data=payload)
         return SUCCESS
     result = {
@@ -258,6 +260,14 @@ def parse_args() -> argparse.Namespace:
     handoff.add_argument("--recovery-next-action", help="recovery intent; use resume only when retaining ownership")
     handoff.add_argument("--retained-resource", action="append", default=[], help="complete retained resource declaration")
     handoff.add_argument("--supersedes", help="canonical open recovery predecessor; success preserves its outcome and records the successor relation")
+    refresh = ticket_actions.add_parser(
+        "refresh-candidate",
+        help="refresh one open Candidate receipt to an observed descendant head",
+    )
+    refresh.add_argument("--repo", default=".")
+    refresh.add_argument("--record", required=True, help="exact repository-relative Candidate receipt")
+    refresh.add_argument("--ticket-id", action="append", required=True, help="exact linked Ticket identity; repeatable")
+    refresh.add_argument("--observed-head-sha", required=True, help="full SHA observed at the retained candidate worktree")
 
     records = groups.add_parser("solve-record", help="read-only Attempt and Solve Record inspection and gates")
     record_actions = records.add_subparsers(
@@ -317,6 +327,15 @@ def main() -> int:
                     delegated.extend(["--retained-resource", resource])
                 if args.supersedes is not None:
                     delegated.extend(["--supersedes", args.supersedes])
+                return delegate(operation, "handoff", delegated)
+            if args.action == "refresh-candidate":
+                delegated = [
+                    "--repo", str(repo), "--refresh-candidate",
+                    "--record", args.record,
+                    "--observed-head-sha", args.observed_head_sha,
+                ]
+                for ticket_id in args.ticket_id:
+                    delegated.extend(["--ticket-id", ticket_id])
                 return delegate(operation, "handoff", delegated)
             delegated = [args.action, "--repo", str(repo)]
             if args.action == "frontier":

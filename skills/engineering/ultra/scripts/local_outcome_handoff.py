@@ -2,7 +2,7 @@
 """Converge one Local Markdown Ticket outcome handoff."""
 
 from __future__ import annotations
-import argparse, hashlib, json, os, re, subprocess
+import argparse, hashlib, importlib.util, json, os, re, subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 import local_ticket_frontier as frontier
@@ -168,6 +168,36 @@ def replace_scalar(text, field, value):
     return updated
 
 
+def replace_frontmatter_scalar(text, field, value):
+    end = text.find("\n---", 4)
+    if not text.startswith("---\n") or end == -1:
+        raise HandoffError("canonical receipt frontmatter is malformed")
+    frontmatter = text[:end]
+    updated, count = re.subn(
+        rf"(?m)^{re.escape(field)}:[ \t]*.*$", f"{field}: {value}", frontmatter
+    )
+    if count != 1:
+        raise HandoffError(f"canonical receipt must define exactly one {field}")
+    return updated + text[end:]
+
+
+def remove_section(text, name):
+    pattern = rf"(?ms)\n## {re.escape(name)}[ \t]*\n.*?(?=\n## |\Z)"
+    return re.sub(pattern, "", text, count=1).rstrip() + "\n"
+
+
+def invalidate_legacy_gate_evidence(text, observed):
+    text = replace_frontmatter_scalar(text, "head_sha", observed)
+    text = re.sub(
+        r"(?m)^(Head SHA:[ \t]*`?)[^`\n]+(`?[ \t]*)$",
+        rf"\g<1>{observed}\g<2>",
+        text,
+    )
+    for name in ("Verification", "Checks", "Review", "Merge"):
+        text = remove_section(text, name)
+    return text
+
+
 def relation_value(text, field):
     try:
         return json.loads(scalar(text, field))
@@ -320,6 +350,186 @@ def fail_at_boundary(name, member_number):
         return int(value) == member_number
     except ValueError:
         return value == "1" and member_number == 1
+
+
+def canonical_record(repo, path):
+    parser_path = Path(__file__).resolve().parents[2] / "solve-records/scripts/solve-records.py"
+    spec = importlib.util.spec_from_file_location("ultra_solve_record_parser", parser_path)
+    if spec is None or spec.loader is None:
+        raise UnavailableHandoff("canonical Solve Record parser is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    record = module.parse_record(repo, path)
+    if record.get("malformed"):
+        raise HandoffError(f"candidate receipt is malformed: {record['malformed']}")
+    return record
+
+
+def atomic_write_with_ref_verification(repo, head, observed, path, text):
+    injected_head = os.environ.get("ULTRA_REFRESH_ADVANCE_HEAD_TO")
+    if injected_head:
+        git(repo, "update-ref", f"refs/heads/{head}", injected_head, observed)
+    process = subprocess.Popen(
+        ["git", "-C", str(repo), "update-ref", "--stdin"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        process.stdin.write(f"start\nverify refs/heads/{head} {observed}\nprepare\n")
+        process.stdin.flush()
+        responses = [process.stdout.readline().strip(), process.stdout.readline().strip()]
+        if responses != ["start: ok", "prepare: ok"]:
+            raise HandoffError("candidate head changed while refresh was preparing")
+        publication.atomic_write(path, text)
+        if os.environ.get("ULTRA_REFRESH_FAIL_AFTER_RECEIPT") == "1":
+            raise RetryableHandoff(
+                "candidate receipt updated; retry the same refresh input"
+            )
+        process.stdin.write("commit\n")
+        process.stdin.flush()
+        if process.stdout.readline().strip() != "commit: ok":
+            raise RetryableHandoff("candidate receipt updated but Git ref verification did not commit")
+    finally:
+        if process.stdin and not process.stdin.closed:
+            process.stdin.close()
+        process.wait()
+
+
+def refresh_candidate(repo, ticket_ids, record_name, observed):
+    if not re.fullmatch(r"[0-9a-f]{40}", observed):
+        raise HandoffError("observed head SHA must be one full lowercase Git SHA")
+    record_path = (repo / record_name).resolve()
+    try:
+        relative_record = record_path.relative_to(repo).as_posix()
+    except ValueError as e:
+        raise HandoffError("candidate receipt must be repository-relative") from e
+    if not record_path.is_file() or "/solve-records/" not in f"/{relative_record}":
+        raise HandoffError("candidate receipt is unavailable")
+
+    with frontier.frontier_lock(repo):
+        contract, _contract_text = frontier.read_contract(repo)
+        indexed = {
+            alias: ticket
+            for ticket in frontier.load_tickets(repo, contract)
+            for alias in ticket.aliases
+        }
+        selected = []
+        for ticket_id in ticket_ids:
+            ticket = indexed.get(ticket_id)
+            if ticket is None:
+                raise HandoffError(f"candidate Ticket is unavailable: {ticket_id}")
+            selected.append(ticket)
+        tickets = sorted(
+            {ticket.path.resolve(): ticket for ticket in selected}.values(),
+            key=lambda item: item.path.relative_to(repo).as_posix(),
+        )
+        if not tickets or len(tickets) != len(ticket_ids):
+            raise HandoffError("candidate Ticket scope contains ambiguous duplicate members")
+
+        old = record_path.read_text(encoding="utf-8")
+        record = canonical_record(repo, record_path)
+        membership = record["tickets"]
+        expected_membership = [ticket.path.relative_to(repo).as_posix() for ticket in tickets]
+        if sorted(membership) != expected_membership:
+            raise HandoffError("candidate Ticket scope does not match the receipt")
+        state = record["state"]
+        explicit_outcome = re.findall(r"(?m)^outcome:[ \t]*(\S+)[ \t]*$", old)
+        if state != "open" or record.get("outcome") != "candidate":
+            raise HandoffError("candidate refresh requires one open candidate receipt")
+
+        head, recorded = record["head"], record["head_sha"]
+        if explicit_outcome:
+            stored_key = relation_value(old, "handoff_key")
+            stored_binding = {
+                "repo": str(repo),
+                "handoff_key": stored_key,
+                "tickets": membership,
+                "outcome": "candidate",
+                "head": head,
+                "head_sha": recorded,
+            }
+            if re.search(r"(?m)^supersedes:", old):
+                stored_binding["supersedes"] = relation_value(old, "supersedes")
+            if scalar(old, "binding_digest") != digest(stored_binding):
+                raise HandoffError("candidate receipt binding digest failed verification")
+            if find_receipt(repo, stored_key) != record_path:
+                raise HandoffError("candidate receipt is not canonical for its handoff key")
+        identities = set()
+        for ticket in tickets:
+            if ticket.status != contract.completed_state:
+                raise HandoffError("candidate Ticket is not completed")
+            if contract.claim_value in ticket.flags:
+                raise HandoffError("candidate refresh does not accept an active Claim")
+            identities.add(candidate_identity(repo, ticket))
+            backlink = Path(os.path.relpath(record_path, ticket.path.parent)).as_posix()
+            if backlink_count(ticket.container_text, backlink) != 1:
+                raise HandoffError("candidate Ticket backlink does not identify this receipt")
+        if len(identities) != 1:
+            raise HandoffError("candidate Tickets have mixed retained resource identity")
+        live_head, live_sha = identities.pop()
+        if live_head != head:
+            raise HandoffError("candidate branch does not match the receipt")
+        legacy_path = Path(record["worktree"]) if record.get("worktree") else None
+        if legacy_path is not None and not legacy_path.is_absolute():
+            legacy_path = repo / legacy_path
+        if legacy_path is not None and legacy_path.resolve() != Path(tickets[0].worktree).resolve():
+            raise HandoffError("candidate worktree does not match the receipt")
+        if live_sha != observed:
+            raise HandoffError("observed head conflicts with the current candidate worktree")
+
+        if recorded == observed:
+            return {
+                "schema": SCHEMA,
+                "status": "unchanged",
+                "receipt": relative_record,
+                "head": head,
+                "head_sha": observed,
+            }
+        ancestry = subprocess.run(
+            ["git", "-C", str(repo), "merge-base", "--is-ancestor", recorded, observed],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if ancestry.returncode != 0:
+            raise HandoffError("observed head is not a descendant of the receipt head")
+
+        updated = remove_section(old, "Gate Evidence")
+        if explicit_outcome:
+            updated = replace_frontmatter_scalar(updated, "head_sha", observed)
+            key = relation_value(updated, "handoff_key")
+            binding = {
+                "repo": str(repo),
+                "handoff_key": key,
+                "tickets": membership,
+                "outcome": "candidate",
+                "head": head,
+                "head_sha": observed,
+            }
+            if re.search(r"(?m)^supersedes:", updated):
+                binding["supersedes"] = relation_value(updated, "supersedes")
+            updated = replace_frontmatter_scalar(updated, "binding_digest", digest(binding))
+            if any(
+                re.search(rf"(?m)^## {name}[ \t]*$", updated)
+                for name in ("Verification", "Checks", "Review", "Merge")
+            ):
+                updated = invalidate_legacy_gate_evidence(updated, observed)
+        else:
+            updated = invalidate_legacy_gate_evidence(updated, observed)
+        atomic_write_with_ref_verification(repo, head, observed, record_path, updated)
+        if record_path.read_text(encoding="utf-8") != updated:
+            raise RetryableHandoff("candidate refresh postcondition is incomplete")
+        return {
+            "schema": SCHEMA,
+            "status": "refreshed",
+            "receipt": relative_record,
+            "head": head,
+            "previous_head_sha": recorded,
+            "head_sha": observed,
+            "evidence": "invalidated",
+        }
 
 
 def handoff(repo, ticket_ids, key, outcome, body, next_action, declared, supersedes=""):
@@ -741,28 +951,41 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--ticket-id", action="append", required=True)
     for name in ("handoff-key", "outcome", "summary"):
-        p.add_argument(f"--{name}", required=True)
+        p.add_argument(f"--{name}")
     p.add_argument("--repo", default=".")
+    p.add_argument("--refresh-candidate", action="store_true")
+    p.add_argument("--record", default="")
+    p.add_argument("--observed-head-sha", default="")
     p.add_argument("--recovery-next-action", default="")
     p.add_argument("--retained-resource", action="append", default=[])
     p.add_argument("--supersedes", default="")
     a = p.parse_args()
     try:
-        payload = handoff(
-            Path(a.repo).resolve(),
-            a.ticket_id,
-            a.handoff_key,
-            a.outcome,
-            a.summary,
-            a.recovery_next_action,
-            a.retained_resource,
-            a.supersedes,
-        )
+        repo = Path(a.repo).resolve()
+        if a.refresh_candidate:
+            if any((a.handoff_key, a.outcome, a.summary, a.recovery_next_action, a.retained_resource, a.supersedes)):
+                raise HandoffError("candidate refresh does not accept outcome handoff inputs")
+            if not a.record or not a.observed_head_sha:
+                raise HandoffError("candidate refresh requires record and observed head SHA")
+            payload = refresh_candidate(repo, a.ticket_id, a.record, a.observed_head_sha)
+        else:
+            if not all((a.handoff_key, a.outcome, a.summary)):
+                raise HandoffError("outcome handoff requires handoff key, outcome, and summary")
+            payload = handoff(
+                repo,
+                a.ticket_id,
+                a.handoff_key,
+                a.outcome,
+                a.summary,
+                a.recovery_next_action,
+                a.retained_resource,
+                a.supersedes,
+            )
     except RetryableHandoff as e:
         repo = Path(a.repo).resolve()
-        installed = find_receipt(repo, a.handoff_key)
+        installed = find_receipt(repo, a.handoff_key) if a.handoff_key else None
         receipt = installed.relative_to(repo).as_posix() if installed else ""
-        payload = result("retryable", a.handoff_key, receipt=receipt, reason=str(e))
+        payload = result("retryable", a.handoff_key or "", receipt=receipt, reason=str(e))
     except UnavailableHandoff as e:
         payload = result(
             "unavailable",
@@ -771,7 +994,7 @@ def main():
             next_action="restore the required tracker capability, then retry the same key",
         )
     except (HandoffError, frontier.FrontierError, OSError) as e:
-        payload = result("conflict", a.handoff_key, reason=str(e))
+        payload = result("conflict", a.handoff_key or "", reason=str(e))
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 
