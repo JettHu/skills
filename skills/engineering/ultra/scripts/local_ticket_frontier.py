@@ -219,17 +219,25 @@ def parse_scalar(value: str) -> str | list[str]:
     return value
 
 
-def parse_metadata(text: str) -> tuple[dict[str, str | list[str]], dict[str, str]]:
+def parse_metadata(text: str, *, multiline_lists: bool = False) -> tuple[dict[str, str | list[str]], dict[str, str]]:
     start, end = metadata_region(text)
     values: dict[str, str | list[str]] = {}
     spellings: dict[str, str] = {}
+    previous = None
     for line in text[start:end].splitlines():
+        if multiline_lists and previous and re.match(r"^\s+-\s+", line):
+            if values[previous] == "": values[previous] = []
+            if not isinstance(values[previous], list):
+                raise FrontierError("list items follow a scalar Ticket field")
+            values[previous].append(line.strip()[2:].strip().strip("\"'"))
+            continue
         if not line.strip() or line.lstrip().startswith("-") or ":" not in line:
             continue
         key, value = line.split(":", 1)
         normalized = normalize_key(key)
         if normalized in values:
             raise FrontierError(f"Ticket metadata defines {key.strip()} more than once")
+        previous = normalized
         values[normalized] = parse_scalar(value)
         spellings[normalized] = key.strip()
     return values, spellings
@@ -320,9 +328,10 @@ def parse_ticket(
     inner_end: int,
     contract: FrontierContract,
     marker_id: str = "",
+    *, readonly: bool = False,
 ) -> Ticket:
     inner = container[inner_start:inner_end]
-    values, spellings = parse_metadata(inner)
+    values, spellings = parse_metadata(inner, multiline_lists=readonly)
     configured = {
         normalize_key(alias)
         for aliases in (
@@ -415,61 +424,66 @@ def configured_paths(repo: Path, contract: FrontierContract) -> list[Path]:
     )
 
 
-def load_tickets(repo: Path, contract: FrontierContract) -> list[Ticket]:
+def read_ticket_source(repo: Path, path: Path, contract: FrontierContract, errors=None) -> list[Ticket]:
+    """Parse one source; optional errors localize metadata failures for read-only views."""
+    tickets = []
+    def append_ticket(start, end, marker=""):
+        try:
+            tickets.append(parse_ticket(repo, path, text, start, end, contract, marker, readonly=errors is not None))
+        except FrontierError as error:
+            if errors is None:
+                raise
+            errors.append({"source": path.relative_to(repo).as_posix(), "locator": path.relative_to(repo).as_posix() + ("#" + marker if marker else ""), "message": str(error)})
+    text = path.read_text(encoding="utf-8")
+    if contract.representation == "file-per-ticket":
+        append_ticket(0, len(text))
+        return tickets
+    cursor = 0
+    found = False
+    spans = []
+    while True:
+        begin = BEGIN.search(text, cursor)
+        stray_end = END.search(text, cursor)
+        if stray_end and (not begin or stray_end.start() < begin.start()):
+            raise FrontierError(f"tickets-file has an unmatched end marker: {path.relative_to(repo)}")
+        if not begin:
+            break
+        end = END.search(text, begin.end())
+        nested = BEGIN.search(text, begin.end())
+        if not end or (nested and nested.start() < end.start()):
+            raise FrontierError(f"tickets-file has an ambiguous Ticket section: {path.relative_to(repo)}")
+        spans.append((begin.start(), end.end()))
+        append_ticket(begin.end(), end.start(), begin.group(1))
+        found = True
+        cursor = end.end()
+    if END.search(text, cursor):
+        raise FrontierError(f"tickets-file has an unmatched end marker: {path.relative_to(repo)}")
+    if not found:
+        raise FrontierError(f"configured tickets-file has no safe Ticket sections: {path.relative_to(repo)}")
+    outside = []
+    cursor = 0
+    for begin, end in spans:
+        outside.append(text[cursor:begin])
+        cursor = end
+    outside.append(text[cursor:])
+    if re.search(
+        r"(?mi)^(?:#{1,6}\s+Ticket\b|(?:Status|State|Ticket ID|Publication Run)[ \t]*:)",
+        "".join(outside),
+    ):
+        raise FrontierError(f"tickets-file contains formal Ticket content outside safe section markers: {path.relative_to(repo)}")
+    return tickets
+
+
+def load_tickets(repo: Path, contract: FrontierContract, *, readonly_errors=None) -> list[Ticket]:
     tickets: list[Ticket] = []
     for path in configured_paths(repo, contract):
-        text = path.read_text(encoding="utf-8")
-        if contract.representation == "file-per-ticket":
-            tickets.append(parse_ticket(repo, path, text, 0, len(text), contract))
-            continue
-        cursor = 0
-        found = False
-        while True:
-            begin = BEGIN.search(text, cursor)
-            stray_end = END.search(text, cursor)
-            if stray_end and (not begin or stray_end.start() < begin.start()):
-                raise FrontierError(f"tickets-file has an unmatched end marker: {path.relative_to(repo)}")
-            if not begin:
-                break
-            end = END.search(text, begin.end())
-            nested = BEGIN.search(text, begin.end())
-            if not end or (nested and nested.start() < end.start()):
-                raise FrontierError(f"tickets-file has an ambiguous Ticket section: {path.relative_to(repo)}")
-            tickets.append(
-                parse_ticket(
-                    repo,
-                    path,
-                    text,
-                    begin.end(),
-                    end.start(),
-                    contract,
-                    begin.group(1),
-                )
-            )
-            found = True
-            cursor = end.end()
-        if END.search(text, cursor):
-            raise FrontierError(f"tickets-file has an unmatched end marker: {path.relative_to(repo)}")
-        if not found:
-            raise FrontierError(f"configured tickets-file has no safe Ticket sections: {path.relative_to(repo)}")
-        outside = []
-        cursor = 0
-        for ticket in [item for item in tickets if item.path == path]:
-            marker = BEGIN.search(text, cursor)
-            if marker is None:
-                raise FrontierError(f"tickets-file section index drifted: {path.relative_to(repo)}")
-            outside.append(text[cursor : marker.start()])
-            end = END.search(text, marker.end())
-            if end is None:
-                raise FrontierError(f"tickets-file section index drifted: {path.relative_to(repo)}")
-            cursor = end.end()
-        outside.append(text[cursor:])
-        if re.search(
-            r"(?mi)^(?:#{1,6}\s+Ticket\b|(?:Status|State|Ticket ID|Publication Run)[ \t]*:)",
-            "".join(outside),
-        ):
-            raise FrontierError(f"tickets-file contains formal Ticket content outside safe section markers: {path.relative_to(repo)}")
-    if not tickets:
+        try:
+            tickets.extend(read_ticket_source(repo, path, contract, readonly_errors))
+        except (FrontierError, OSError, UnicodeError) as error:
+            if readonly_errors is None:
+                raise
+            readonly_errors.append({"source": path.relative_to(repo).as_posix(), "locator": path.relative_to(repo).as_posix(), "message": str(error)})
+    if not tickets and readonly_errors is None:
         raise FrontierError("configured Local Ticket surface contains no Tickets")
     aliases: dict[str, str] = {}
     identities: set[str] = set()
@@ -605,6 +619,12 @@ def frontier(repo: Path, selected: list[str]) -> tuple[dict, dict[str, Ticket], 
     contract, contract_text = read_contract(repo)
     tickets = load_tickets(repo, contract)
     apply_publication_gates(repo, tickets, contract)
+    payload, by_id = evaluate_frontier(tickets, contract, contract_text, selected)
+    return payload, by_id, contract, contract_text
+
+
+def evaluate_frontier(tickets: list[Ticket], contract: FrontierContract, contract_text: str, selected: list[str]) -> tuple[dict, dict[str, Ticket]]:
+    """Pure eligibility projection; discovery and mutation continue owning their reads."""
     by_id, edges, missing = resolve_graph(tickets)
     aliases = {alias: ticket.identity for ticket in tickets for alias in ticket.aliases}
     cyclic = cycle_nodes(edges)
@@ -666,7 +686,7 @@ def frontier(repo: Path, selected: list[str]) -> tuple[dict, dict[str, Ticket], 
             if by_id[identity].publication_run
         },
     }
-    return payload, by_id, contract, contract_text
+    return payload, by_id
 
 
 def replace_or_insert_field(
@@ -700,12 +720,13 @@ def replace_or_insert_field(
     return text[:start] + updated + text[end:]
 
 
-def git_lock_path(repo: Path) -> Path:
+def git_lock_path(repo: Path, timeout: float | None = None) -> Path:
     result = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "--git-path", "ultra-frontier.lock"],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        timeout=timeout,
     )
     if result.returncode != 0:
         raise FrontierError(result.stderr.strip() or "cannot resolve Git lock path")
@@ -714,15 +735,18 @@ def git_lock_path(repo: Path) -> Path:
 
 
 @contextmanager
-def frontier_lock(repo: Path):
-    path = git_lock_path(repo)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+def frontier_lock(repo: Path, timeout: float | None = None, readonly: bool = False):
+    try:
+        path = git_lock_path(repo, timeout)
+    except (OSError, FrontierError, subprocess.TimeoutExpired):
+        if not readonly or not (repo / ".git").is_dir():
+            raise
+        path = repo / ".git/ultra-frontier.lock"
+    try:
+        with publication.control_lock(path, timeout, readonly) as observation:
+            yield observation
+    except publication.AdapterError as error:
+        raise FrontierError(str(error)) from error
 
 
 def claim(

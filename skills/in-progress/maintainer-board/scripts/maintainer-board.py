@@ -36,399 +36,24 @@ DEFAULT_VISIBLE_ITEMS = 5
 DEFAULT_HTML_PATH = Path(".scratch/maintainer-board/index.html")
 
 
-def run_git(cwd, *args, check=True):
-    result = subprocess.run(
-        ["git", "-C", str(cwd), *args],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if check and result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "git failed")
-    return result
+def load_snapshot_module():
+    skill = Path(__file__).resolve().parent.parent
+    candidates = [skill.parent / "ultra/scripts"]
+    if len(skill.parents) >= 2:
+        candidates.append(skill.parents[1] / "engineering/ultra/scripts")
+    directory = next((path for path in candidates if (path / "tracker_snapshot.py").is_file()), None)
+    if directory is None:
+        raise RuntimeError("Maintainer Board requires the bundled Tracker Snapshot owner")
+    sys.path.insert(0, str(directory))
+    try:
+        import tracker_snapshot
+    except ImportError as exc:
+        raise RuntimeError(f"Tracker Snapshot helper unavailable: {exc}") from exc
+    return tracker_snapshot
 
 
 def repo_root(path):
-    path = Path(path).resolve()
-    result = run_git(path, "rev-parse", "--show-toplevel", check=False)
-    if result.returncode != 0:
-        raise RuntimeError(f"not a Git repo: {path}")
-    return Path(result.stdout.strip()).resolve()
-
-
-def find_solve_records_helper():
-    script_path = Path(__file__).resolve()
-    for sibling_root in (script_path.parent, script_path.parents[2]):
-        sibling = sibling_root / "solve-records/scripts/solve-records.py"
-        if sibling.is_file():
-            return sibling
-    for parent in script_path.parents:
-        helper_path = parent / "skills/engineering/solve-records/scripts/solve-records.py"
-        if helper_path.is_file():
-            return helper_path
-    return None
-
-
-def find_local_publication_helper():
-    for parent in Path(__file__).resolve().parents:
-        helper_path = parent / "skills/engineering/ultra/scripts/local_ticket_publication.py"
-        if helper_path.is_file():
-            return helper_path
-    return None
-
-
-def find_tracker_contract_helper():
-    for parent in Path(__file__).resolve().parents:
-        helper_path = parent / "skills/engineering/ultra/scripts/tracker_contract.py"
-        if helper_path.is_file():
-            return helper_path
-    return None
-
-
-def load_tracker_contract_helper():
-    helper_path = find_tracker_contract_helper()
-    if not helper_path:
-        return None
-    spec = importlib.util.spec_from_file_location("tracker_contract_helper", helper_path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def load_local_publication_helper():
-    helper_path = find_local_publication_helper()
-    if not helper_path:
-        return None
-    if str(helper_path.parent) not in sys.path:
-        sys.path.insert(0, str(helper_path.parent))
-    spec = importlib.util.spec_from_file_location("local_ticket_publication_helper", helper_path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def normalize_key(key):
-    key = key.strip().lower()
-    key = re.sub(r"[^a-z0-9]+", "_", key)
-    return key.strip("_")
-
-
-def parse_scalar(value):
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        return value[1:-1]
-    if value.startswith("[") and value.endswith("]"):
-        inner = value[1:-1].strip()
-        if not inner:
-            return []
-        return [parse_scalar(part) for part in inner.split(",")]
-    return value
-
-
-def parse_yaml_like(lines):
-    data = {}
-    current_key = None
-    for line in lines:
-        if not line.strip():
-            continue
-        if line.startswith((" ", "\t")) and current_key and line.strip().startswith("- "):
-            existing = data.get(current_key)
-            if not isinstance(existing, list):
-                existing = [] if existing in (None, "") else [existing]
-            existing.append(parse_scalar(line.strip()[2:]))
-            data[current_key] = existing
-            continue
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        current_key = normalize_key(key)
-        value = value.strip()
-        data[current_key] = [] if value == "" else parse_scalar(value)
-    return data
-
-
-def parse_header_metadata(lines):
-    header = []
-    for line in lines:
-        if not line.strip() or line.startswith("#"):
-            break
-        if ":" not in line:
-            break
-        header.append(line)
-    return parse_yaml_like(header)
-
-
-def split_frontmatter(text):
-    if not text.startswith("---\n"):
-        return None, text
-    end = text.find("\n---", 4)
-    if end == -1:
-        return None, text
-    metadata = parse_yaml_like(text[4:end].splitlines())
-    body = text[end + 4 :]
-    if body.startswith("\n"):
-        body = body[1:]
-    return metadata, body
-
-
-def as_list(value, split_words=False):
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    text = str(value).strip()
-    if not text:
-        return []
-    if split_words:
-        return [item for item in re.split(r"[,\s]+", text) if item]
-    return [item.strip() for item in text.split(",") if item.strip()]
-
-
-def first_heading(text):
-    for line in text.splitlines():
-        if line.startswith("# "):
-            return line[2:].strip()
-    return ""
-
-
-def heading_block(text, predicate):
-    lines = text.splitlines()
-    block = []
-    collecting = False
-    current_level = 0
-    for line in lines:
-        match = re.match(r"^(#+)\s+(.*)$", line)
-        if match:
-            level = len(match.group(1))
-            title = match.group(2).strip()
-            if collecting and level <= current_level:
-                break
-            if not collecting and predicate(level, title):
-                collecting = True
-                current_level = level
-                continue
-        if collecting:
-            block.append(line)
-    return block
-
-
-def paths_from_lines(lines):
-    paths = []
-    for line in lines:
-        for value in re.findall(r"`([^`]+)`", line):
-            value = value.strip()
-            if value:
-                paths.append(value)
-        if "`" in line:
-            continue
-        stripped = line.strip()
-        if stripped.startswith("- "):
-            value = stripped[2:].strip()
-            if value:
-                paths.append(value)
-    return paths
-
-
-def checklist_counts(text):
-    total = 0
-    done = 0
-    for line in text.splitlines():
-        match = re.match(r"^\s*-\s+\[([ xX])\]", line)
-        if not match:
-            continue
-        total += 1
-        if match.group(1).lower() == "x":
-            done += 1
-    return {"total": total, "done": done, "open": total - done}
-
-
-def discover_issue_paths(repo):
-    paths = set(repo.glob(".scratch/*/issues/*.md"))
-    paths.update(repo.glob(".scratch/*/issue.md"))
-    return sorted(paths)
-
-
-def local_ticket_contract(repo):
-    path = repo / "docs/agents/ultra-tracker.md"
-    if not path.is_file():
-        return None
-    tracker = load_tracker_contract_helper()
-    if tracker is not None:
-        try:
-            text = tracker.read(repo).capability_text
-        except tracker.TrackerContractError as error:
-            raise RuntimeError(str(error)) from error
-    else:
-        text = path.read_text(encoding="utf-8")
-        if any(line.startswith("Adapter capability document:") for line in text.splitlines()):
-            raise RuntimeError(
-                "Maintainer Board requires the selected tracker capability resolver"
-            )
-    fields = {}
-    for line in text.splitlines():
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        fields[normalize_key(key)] = value.strip().strip("`")
-    if fields.get("publication_strategy") != "local-review-pending":
-        return None
-    representation = fields.get("local_ticket_representation")
-    location = fields.get("local_ticket_path")
-    if representation not in {"file-per-ticket", "tickets-file"} or not location:
-        raise RuntimeError("Local Markdown publication contract lacks a safe representation or path")
-    return {"representation": representation, "location": location}
-
-
-def feature_from_path(repo, path):
-    rel_parts = path.relative_to(repo).parts
-    if len(rel_parts) >= 2 and rel_parts[0] == ".scratch":
-        return rel_parts[1]
-    return ""
-
-
-def parse_issue_text(repo, path, text, identity="", metadata_format_hint=""):
-    frontmatter, body = split_frontmatter(text)
-    metadata = frontmatter if frontmatter is not None else parse_header_metadata(text.splitlines())
-
-    rel = str(path.relative_to(repo)) + (f"#{identity}" if identity else "")
-    parent = as_list(metadata.get("parent"))
-    if not parent:
-        parent = paths_from_lines(
-            heading_block(body, lambda level, title: level == 2 and title.lower() == "parent")
-        )
-
-    blockers = as_list(metadata.get("blocked_by") or metadata.get("blockers"))
-    blockers.extend(
-        paths_from_lines(
-            heading_block(body, lambda level, title: level == 2 and title.lower() == "blocked by")
-        )
-    )
-
-    solve_records = as_list(metadata.get("solve_record") or metadata.get("solve_records"))
-    solve_records.extend(
-        paths_from_lines(
-            heading_block(body, lambda _level, title: title.lower() in {"solve record", "solve records"})
-        )
-    )
-
-    flags = as_list(metadata.get("flags") or metadata.get("labels"), split_words=True)
-    status = str(metadata.get("status") or metadata.get("state") or "").strip()
-    completion_scope = (
-        "Candidate gate complete; completed does not prove merge, deployment, or online smoke."
-        if status == "completed"
-        else ""
-    )
-    issue = {
-        "path": rel,
-        "feature": feature_from_path(repo, path),
-        "title": first_heading(body) or first_heading(text) or path.stem,
-        "status": status,
-        "completion_scope": completion_scope,
-        "ticket_id": str(metadata.get("ticket_id") or metadata.get("id") or identity).strip(),
-        "publication_run": str(metadata.get("publication_run", "")).strip(),
-        "publication_promoted": False,
-        "publication_digest": "",
-        "publication_original_digest": "",
-        "category": str(metadata.get("category", "")).strip(),
-        "flags": flags,
-        "created": str(metadata.get("created", "")).strip(),
-        "solve_branch": str(metadata.get("solve_branch", "")).strip(),
-        "solve_worktree": str(metadata.get("solve_worktree", "")).strip(),
-        "parent": parent[0] if parent else "",
-        "blocked_by": sorted(dict.fromkeys(blockers)),
-        "solve_records": sorted(dict.fromkeys(solve_records)),
-        "checklist": checklist_counts(body),
-        "metadata_format": metadata_format_hint or ("frontmatter" if frontmatter is not None else "header"),
-        "source_path": str(path.relative_to(repo)),
-        "warnings": [],
-    }
-    issue["bucket"] = classify_issue(issue)
-    return issue
-
-
-def parse_issue(repo, path):
-    return parse_issue_text(repo, path, path.read_text(encoding="utf-8"))
-
-
-def discover_issues(repo):
-    contract = local_ticket_contract(repo)
-    paths = set(discover_issue_paths(repo))
-    if contract and contract["representation"] == "file-per-ticket":
-        pattern = re.sub(r"<[^>]+>", "*", contract["location"])
-        pattern_path = Path(pattern)
-        if pattern_path.is_absolute() or ".." in pattern_path.parts:
-            raise RuntimeError("configured Local Ticket path escapes the repository")
-        paths.update(path for path in repo.glob(pattern) if path.is_file())
-    issues = [parse_issue(repo, path) for path in sorted(paths)]
-    if not contract or contract["representation"] != "tickets-file":
-        return issues, contract
-    helper = load_local_publication_helper()
-    if helper is None:
-        raise RuntimeError("Maintainer Board requires the Local Markdown publication adapter for tickets-file discovery")
-    pattern = re.sub(r"<[^>]+>", "*", contract["location"])
-    publication_contract = helper.configured_local_contract(repo)
-    for path in sorted(repo.glob(pattern)):
-        try:
-            tickets = helper.load_tickets_file(path.resolve(), publication_contract)
-        except helper.AdapterError as error:
-            raise RuntimeError(f"unsafe configured tickets-file {path.relative_to(repo)}: {error}") from error
-        for ticket in tickets:
-            issues.append(
-                parse_issue_text(
-                    repo,
-                    path,
-                    ticket.inner,
-                    identity=ticket.ticket_id,
-                    metadata_format_hint="tickets-file-section",
-                )
-            )
-    return issues, contract
-
-
-def apply_publication_gates(repo, issues, contract):
-    helper = load_local_publication_helper()
-    for issue in issues:
-        run_id = issue.get("publication_run")
-        if not run_id:
-            continue
-        if helper is None:
-            issue["warnings"].append(
-                {"code": "publication_adapter_missing", "message": "run-tagged Ticket cannot be verified"}
-            )
-            continue
-        representation = "tickets-file" if issue["metadata_format"] == "tickets-file-section" else "file-per-ticket"
-        source = repo / issue["source_path"]
-        location = source if representation == "tickets-file" else source.parent
-        try:
-            _location, tickets, journal = helper.validate_against_journal(
-                repo, representation, str(location.relative_to(repo)), run_id
-            )
-            selected = helper.run_tickets(tickets, run_id)
-            current_digests = helper.current_publication_snapshot(journal)
-            original_digests = dict(journal.get("body_digests", {}))
-            for audit in helper.repair_audits(journal):
-                old_id = audit.get("ticket_id")
-                repaired_id = audit.get("new_ticket_id", old_id)
-                if repaired_id != old_id:
-                    original_digests[repaired_id] = original_digests.pop(old_id)
-            promoted = journal.get("phase") == "promoted" and all(
-                ticket.status
-                in {"ready-for-agent", "completed", "ready-for-human", "needs-info"}
-                for ticket in selected
-            )
-            issue["publication_promoted"] = promoted
-            issue["publication_digest"] = current_digests.get(issue["ticket_id"], "")
-            issue["publication_original_digest"] = original_digests.get(issue["ticket_id"], "")
-            if not promoted:
-                issue["warnings"].append(
-                    {"code": "publication_not_promoted", "message": "publication run is provisional or incomplete"}
-                )
-        except (helper.AdapterError, OSError) as error:
-            issue["warnings"].append(
-                {"code": "publication_invalid", "message": str(error)}
-            )
+    return load_snapshot_module().repository(path)
 
 
 def classify_issue(issue):
@@ -436,6 +61,9 @@ def classify_issue(issue):
     status = issue["status"]
     warning_codes = {warning.get("code") for warning in issue.get("warnings", [])}
     publication_attention = warning_codes & {
+        "malformed-ticket",
+        "missing-stable-identity",
+        "readonly-metadata-syntax",
         "publication_invalid",
         "publication_not_promoted",
         "publication_adapter_missing",
@@ -446,7 +74,7 @@ def classify_issue(issue):
         issue.get("publication_run") and not issue.get("publication_promoted")
     ):
         return "publication_attention"
-    if status == "completed":
+    if issue.get("completed"):
         if issue["solve_records"]:
             return "completed_with_solve_record"
         return "completed_without_solve_record"
@@ -456,319 +84,84 @@ def classify_issue(issue):
         return "needs_triage"
     if status in {"ready-for-human", "needs-info"}:
         return "needs_human"
-    if "solve-in-progress" in flags:
+    if issue.get("claim_active"):
         return "claimed_or_in_progress"
-    if issue["blocked_by"]:
+    if any(not item.get("satisfied") for item in issue.get("blocker_facts", [])):
         return "blocked_or_dependent"
     if status == "ready-for-agent":
         return "ready_for_agent"
     return "other"
 
 
-def ref_map(repo):
-    refs = {}
-    result = run_git(
-        repo,
-        "for-each-ref",
-        "--format=%(refname)%00%(refname:short)%00%(objectname)",
-        "refs/heads",
-        "refs/remotes",
-        "refs/tags",
-        check=False,
-    )
-    if result.returncode != 0:
-        return refs
-    for line in result.stdout.splitlines():
-        parts = line.split("\0")
-        if len(parts) != 3:
-            continue
-        full_name, short_name, sha = parts
-        refs[full_name] = sha
-        refs[short_name] = sha
-        if full_name.startswith("refs/heads/"):
-            refs[full_name[len("refs/heads/") :]] = sha
-        elif full_name.startswith("refs/remotes/"):
-            refs[full_name[len("refs/remotes/") :]] = sha
-        elif full_name.startswith("refs/tags/"):
-            refs[full_name[len("refs/tags/") :]] = sha
-    return refs
-
-
-def registered_worktrees(repo):
-    result = run_git(repo, "worktree", "list", "--porcelain", check=False)
-    worktrees = {}
-    if result.returncode != 0:
-        return worktrees
-    current = None
-    for line in result.stdout.splitlines():
-        if line.startswith("worktree "):
-            current = Path(line.split(" ", 1)[1]).resolve()
-            worktrees[str(current)] = {"path": str(current), "branch": ""}
-        elif current and line.startswith("branch "):
-            branch = line.split(" ", 1)[1]
-            if branch.startswith("refs/heads/"):
-                branch = branch[len("refs/heads/") :]
-            worktrees[str(current)]["branch"] = branch
-    return worktrees
-
-
-def resolve_worktree(repo, raw_path):
-    path = Path(raw_path)
-    if not path.is_absolute():
-        path = repo / path
-    return path.resolve()
-
-
-def add_issue_git_warnings(repo, issues):
-    refs = ref_map(repo)
-    worktrees = registered_worktrees(repo)
-    all_warnings = []
-
-    for issue in issues:
-        active = issue["bucket"] == "claimed_or_in_progress" or issue["status"] != "completed"
-        if not active:
-            continue
-
-        warning_start = len(issue["warnings"])
-        branch = issue.get("solve_branch")
-        if branch and branch not in refs:
-            warning = {
-                "code": "missing_solve_branch",
-                "message": f"solve branch not found: {branch}",
-            }
-            issue["warnings"].append(warning)
-
-        raw_worktree = issue.get("solve_worktree")
-        if raw_worktree:
-            worktree = resolve_worktree(repo, raw_worktree)
-            registered = worktrees.get(str(worktree))
-            if not worktree.exists():
-                warning = {
-                    "code": "missing_solve_worktree",
-                    "message": f"solve worktree not found: {raw_worktree}",
-                }
-                issue["warnings"].append(warning)
-            elif not registered:
-                warning = {
-                    "code": "unregistered_solve_worktree",
-                    "message": f"solve worktree is not registered: {raw_worktree}",
-                }
-                issue["warnings"].append(warning)
-            elif branch and registered.get("branch") and registered["branch"] != branch:
-                warning = {
-                    "code": "worktree_branch_mismatch",
-                    "message": f"worktree branch is {registered['branch']}, expected {branch}",
-                }
-                issue["warnings"].append(warning)
-
-        for warning in issue["warnings"][warning_start:]:
-            all_warnings.append({"path": issue["path"], **warning})
-
-    return all_warnings
-
-
 def bucket_items(items, buckets):
     result = {bucket: [] for bucket in buckets}
     for item in items:
-        result.setdefault(item["bucket"], []).append(item)
+        result[item["bucket"]].append(item)
     return result
 
 
-def load_solve_records_dashboard(repo):
-    helper_path = find_solve_records_helper()
-    if not helper_path:
-        raise RuntimeError(
-            "Maintainer Board requires the canonical solve-records read helper"
-        )
-    spec = importlib.util.spec_from_file_location("solve_records_helper", helper_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    records = module.discover(repo)
-    dashboard = module.dashboard(repo, records)
-    head_shas = {record.get("path"): record.get("head_sha") for record in records}
-    for bucket in dashboard.get("buckets", {}).values():
-        for record in bucket:
-            record["head_sha"] = head_shas.get(record.get("path"))
-    return dashboard
-
-
 def build_snapshot(repo):
-    issues, contract = discover_issues(repo)
-    apply_publication_gates(repo, issues, contract)
-    for issue in issues:
+    facts = load_snapshot_module().snapshot(repo)
+    issues = []
+    for ticket in facts["tickets"]:
+        claim = ticket.get("claim", {})
+        publication = ticket.get("publication", {})
+        contract = ticket.get("contract", {})
+        issue = dict(path=ticket["locator"], source_path=ticket["source_locator"], ticket_id=ticket.get("ticket_id", ""),
+                     title=ticket["title"], status=ticket.get("state") or "malformed", feature=ticket.get("feature", ""),
+                     category=ticket.get("category", ""), created=ticket.get("created", ""), metadata_format=ticket.get("metadata_format", "unknown"),
+                     flags=claim.get("flags", []), claim_active=claim.get("active", False), completed=contract.get("completed", False), solve_branch=claim.get("branch", ""), solve_worktree=claim.get("worktree", ""),
+                     parent=contract.get("parent", ""), checklist=contract.get("checklist", {"total": 0, "done": 0, "open": 0}),
+                     solve_records=ticket.get("receipt_references", []), blocked_by=[b["reference"] for b in ticket.get("blockers", [])],
+                     blocker_facts=ticket.get("blockers", []), eligibility=ticket["eligibility"],
+                     publication_run=publication.get("run_id", ""), publication_promoted=publication.get("verified") is True,
+                     publication_digest=publication.get("current_digest", ""), publication_original_digest=publication.get("original_digest", ""),
+                     warnings=ticket["diagnostics"], completion_scope="Candidate gate complete; completed does not prove merge, deployment, or online smoke." if contract.get("completed") else "")
         issue["bucket"] = classify_issue(issue)
-    issue_warnings = add_issue_git_warnings(repo, issues)
+        issues.append(issue)
     issue_buckets = bucket_items(issues, ISSUE_BUCKETS)
-    solve_records = load_solve_records_dashboard(repo)
-    solve_buckets = solve_records.get("buckets", {})
-    records_by_path = {
-        record.get("path"): record
-        for records in solve_buckets.values()
-        for record in records
-    }
-    issues_by_path = {issue["path"]: issue for issue in issues}
-    live_worktrees = registered_worktrees(repo)
-    for records in solve_buckets.values():
-        for record in records:
-            outcome = record.get("outcome")
-            if record.get("malformed"):
-                record["handoff_projection"] = "inconsistent_handoff_attention"
-                continue
-            recovery_outcomes = {"blocked", "needs-info", "ready-for-human"}
-            terminal_outcomes = {"abandoned", "superseded"}
-            if outcome not in recovery_outcomes | terminal_outcomes | {"candidate"}:
-                continue
-            linked = [issues_by_path.get(path) for path in record.get("issues", [])]
-            identities = record.get("retained_resource_identities") or []
-            resource_values = {identity["kind"]: identity["value"] for identity in identities}
-            resources_valid = set(resource_values) == {"branch", "worktree"}
-            if resources_valid:
-                declared_worktree = resolve_worktree(repo, resource_values["worktree"])
-                registered = live_worktrees.get(str(declared_worktree))
-                resources_valid = bool(
-                    declared_worktree.exists()
-                    and registered
-                    and registered.get("branch") == resource_values["branch"]
-                    and resource_values["branch"] in ref_map(repo)
-                    and all(
-                        issue
-                        and issue.get("solve_branch") == resource_values["branch"]
-                        and resolve_worktree(repo, issue.get("solve_worktree")) == declared_worktree
-                        for issue in linked
-                    )
-                )
-            backlinks_valid = bool(linked) and all(
-                issue and any(
-                    (repo / issue["path"]).parent.joinpath(backlink).resolve()
-                    == (repo / record["path"]).resolve()
-                    for backlink in issue.get("solve_records", [])
-                )
-                for issue in linked
-            )
-            def relation_backlinks_valid(other):
-                other_linked = [
-                    issues_by_path.get(path) for path in other.get("issues", [])
-                ]
-                return bool(other_linked) and all(
-                    issue and any(
-                        (repo / issue["path"]).parent.joinpath(backlink).resolve()
-                        == (repo / other["path"]).resolve()
-                        for backlink in issue.get("solve_records", [])
-                    )
-                    for issue in other_linked
-                )
-
-            predecessor = records_by_path.get(record.get("supersedes"))
-            relation_consistent = not record.get("supersedes") or bool(
-                predecessor
-                and not predecessor.get("malformed")
-                and predecessor.get("state") == "closed"
-                and predecessor.get("closed_at")
-                and predecessor.get("superseded_by") == record.get("path")
-                and predecessor.get("issues") == record.get("issues")
-                and relation_backlinks_valid(predecessor)
-            )
-            if outcome == "candidate":
-                candidate_consistent = (
-                    record.get("state") == "open"
-                    and backlinks_valid
-                    and all(
-                        issue
-                        and issue.get("status") == "completed"
-                        and "solve-in-progress" not in issue.get("flags", [])
-                        for issue in linked
-                    )
-                    and ref_map(repo).get(record.get("head")) == record.get("head_sha")
-                    and relation_consistent
-                )
-                record["handoff_projection"] = (
-                    "normal_candidate"
-                    if candidate_consistent
-                    else "inconsistent_handoff_attention"
-                )
-                continue
-            if record.get("state") == "closed" and record.get("superseded_by"):
-                successor = records_by_path.get(record.get("superseded_by"))
-                predecessor_consistent = bool(
-                    record.get("closed_at")
-                    and successor
-                    and not successor.get("malformed")
-                    and successor.get("supersedes") == record.get("path")
-                    and successor.get("issues") == record.get("issues")
-                    and backlinks_valid
-                    and relation_backlinks_valid(successor)
-                )
-                record["handoff_projection"] = (
-                    "closed_predecessor_history"
-                    if predecessor_consistent
-                    else "inconsistent_handoff_attention"
-                )
-                continue
-            if outcome in terminal_outcomes:
-                allowed_statuses = (
-                    {"ready-for-agent"}
-                    if outcome == "abandoned"
-                    else {"ready-for-agent", "ready-for-human", "needs-info"}
-                )
-                terminal_consistent = (
-                    record.get("state") == "closed"
-                    and backlinks_valid
-                    and all(
-                        issue
-                        and issue.get("status") in allowed_statuses
-                        and "solve-in-progress" not in issue.get("flags", [])
-                        for issue in linked
-                    )
-                    and relation_consistent
-                )
-                record["handoff_projection"] = (
-                    "closed_terminal_history"
-                    if terminal_consistent
-                    else "inconsistent_handoff_attention"
-                )
-                continue
-
-            expected_status = "needs-info" if outcome == "needs-info" else "ready-for-human"
-            action = record.get("recovery_action")
-            retained = record.get("retained_resources") or []
-            recovery_consistent = (
-                record.get("state") == "open"
-                and backlinks_valid
-                and all(
-                    issue
-                    and issue.get("status") == expected_status
-                    and (("solve-in-progress" in issue.get("flags", [])) == (action == "resume"))
-                    for issue in linked
-                )
-                and (
-                    (action == "resume" and resources_valid)
-                    or (action != "resume" and not retained)
-                )
-                and relation_consistent
-            )
-            if not recovery_consistent:
-                record["handoff_projection"] = "inconsistent_handoff_attention"
-            elif action == "resume":
-                record["handoff_projection"] = "retained_recovery_ownership"
-            else:
-                record["handoff_projection"] = "normal_active_recovery"
-    solve_count = solve_records.get("record_count", sum(len(solve_buckets.get(bucket, [])) for bucket in solve_buckets))
-
-    return {
-        "schema_version": "maintainer-board/v1",
-        "repo": str(repo),
-        "issues": {
-            "count": len(issues),
-            "buckets": issue_buckets,
-            "counts": {bucket: len(issue_buckets.get(bucket, [])) for bucket in ISSUE_BUCKETS},
-            "warnings": issue_warnings,
-        },
-        "solve_records": {
-            "count": solve_count,
-            "buckets": {bucket: solve_buckets.get(bucket, []) for bucket in SOLVE_RECORD_BUCKETS},
-            "counts": {bucket: len(solve_buckets.get(bucket, [])) for bucket in SOLVE_RECORD_BUCKETS},
-        },
-    }
+    buckets = {name: [] for name in SOLVE_RECORD_BUCKETS}
+    recent = []
+    for fact in facts["receipts"]:
+        record = dict(fact)
+        readiness = record.pop("operation_readiness")
+        record["merge_gate"] = readiness["merge"] or {"eligible": False, "reasons": ["readiness unavailable"]}
+        record["cleanup_plan"] = readiness["cleanup"] or {"status": "unavailable"}
+        consistency = record.pop("handoff_consistency")
+        record["handoff_projection"] = "inconsistent_handoff_attention" if consistency["status"] in {"inconsistent", "unavailable"} else consistency["classification"]
+        terminal = record.get("state") == "closed"
+        cleanup_done = str(record.get("cleanup_done")).lower() == "true"
+        outcome = record.get("outcome")
+        if record.get("malformed"):
+            bucket = "stale_or_malformed"
+        elif outcome != "candidate" and terminal and record.get("superseded_by"):
+            bucket = "historical"
+        elif record.get("closed_candidate_terminal"):
+            bucket = "recent" if cleanup_done else "cleanup"
+            record["terminal_view"] = "closed"
+        elif (terminal and outcome != "candidate") or record.get("legacy_terminal_outcome"):
+            bucket = "historical" if cleanup_done else "cleanup"
+            record["terminal_view"] = "closed"
+        elif outcome != "candidate":
+            bucket = "recovery"
+            record["recovery_view"] = "resume" if outcome in {"blocked", "needs-info", "ready-for-human"} else "closed"
+        elif record.get("body_conflict"):
+            bucket = "stale_or_malformed"; record["stale_reason"] = record["body_conflict"]
+        elif not record.get("refs_ok") and record.get("state") == "open":
+            bucket = "stale_or_malformed"; record["stale_reason"] = record.get("ref_reason", "Git unavailable")
+        elif record.get("state") in {"merged", "closed"} and not cleanup_done:
+            bucket = "cleanup"
+        elif record.get("state") == "merged":
+            bucket = "recent"
+        else:
+            bucket = "ready" if record["merge_gate"].get("eligible") else "manual"
+        if bucket == "recent": recent.append(record)
+        else: buckets[bucket].append(record)
+    buckets["recent"] = sorted(recent, key=lambda item: (item.get("merged_at") or item.get("created_at") or "", item.get("id") or "", item["path"]), reverse=True)[:10]
+    return dict(schema_version="maintainer-board/v1", repo=facts["repository"]["root"], source_fingerprint=facts["source_fingerprint"],
+                diagnostics=facts["diagnostics"], incomplete=facts["summary"]["incomplete"],
+                issues=dict(count=len(issues), buckets=issue_buckets, counts={name: len(items) for name, items in issue_buckets.items()}, warnings=[dict(path=issue["path"], **warning) for issue in issues for warning in issue["warnings"]]),
+                solve_records=dict(count=len(facts["receipts"]), buckets=buckets, counts={name: len(items) for name, items in buckets.items()}))
 
 
 def render_pill(value, css_class=""):
@@ -1020,6 +413,11 @@ def render_html(snapshot):
         for bucket in SOLVE_RECORD_BUCKETS
     )
     repo = html.escape(snapshot["repo"])
+    fingerprint = html.escape(snapshot.get("source_fingerprint", ""))
+    global_diagnostics = render_warning_list(snapshot.get("diagnostics", []))
+    observation = "Snapshot incomplete: inspect diagnostics before acting." if snapshot.get("incomplete") else "Read-only observation; readiness does not authorize an operation."
+    provenance = f'<aside class="snapshot-observation"><strong>{observation}</strong>{global_diagnostics}<div>tracker-snapshot/v1 · {fingerprint}</div></aside>'
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1254,6 +652,7 @@ def render_html(snapshot):
     </div>
     <input id="search" type="search" placeholder="Filter cards by title, path, status, branch...">
   </div>
+  {provenance}
   <h2 class="section-title">Issue Summary</h2>
   <div class="summary">{issue_summary}</div>
   <h2 class="section-title">Solve Record Summary</h2>

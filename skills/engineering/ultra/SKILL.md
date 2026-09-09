@@ -134,3 +134,5 @@ This catches committed changes (`git diff <base_sha> HEAD`), unstaged changes (`
 If changes exist, pin and report the review range before starting review. Prefer an explicit fixed point when the user supplied one; otherwise use `base_sha`. Pass the fixed range to the selected reviewer so it inspects the same change set.
 
 Conduct a proportional, findings-first review through the selected target-native or Ultra reviewer. Keep the review read-only and report concrete findings only. The selected review owner defines its detailed axes and output format; Ultra only consumes the result, applies its repairability and decision-ownership rules, and releases review resources when done.
+
+For full read-only tracker diagnostics or View integration, read [Tracker Snapshot](references/tracker-snapshot.md). The bundled facade exposes the complete versioned query; existing mutation operations retain their canonical owners.

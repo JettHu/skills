@@ -198,6 +198,9 @@ def parse_args() -> argparse.Namespace:
         dest="group", required=True, title="command groups", parser_class=FacadeArgumentParser
     )
 
+    snapshot = groups.add_parser("snapshot", help="read the complete versioned Tracker Snapshot")
+    snapshot.add_argument("--repo", default=".", help="explicit canonical tracker repository")
+
     publication = groups.add_parser("publication", help="configured adapter Ticket publication lifecycle")
     publication_actions = publication.add_subparsers(
         dest="action", required=True, title="publication operations", parser_class=FacadeArgumentParser
@@ -288,6 +291,18 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     try:
         args = parse_args()
+        if args.group == "snapshot":
+            try:
+                import tracker_snapshot
+            except ImportError as exc:
+                error("snapshot", "helper-unavailable", str(exc))
+                return UNAVAILABLE
+            try:
+                envelope("snapshot", data=tracker_snapshot.snapshot(args.repo))
+                return SUCCESS
+            except tracker_snapshot.SnapshotError as exc:
+                error("snapshot", exc.code, str(exc))
+                return INVALID
         operation = f"{args.group}.{args.action}"
         repo = Path(args.repo).resolve()
         if args.group == "publication":
