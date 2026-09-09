@@ -21,6 +21,8 @@ jobs:
         run: bash tests/ultra-canonical-routing.sh --contract
       - name: Test Ultra complementary profiles
         run: bash tests/ultra-complementary-profiles.sh
+      - name: Test Ultra routing and review contract
+        run: bash tests/ultra-routing-review.sh
       - name: Test Ultra v1.1 catalog
         run: bash tests/ultra-v1-1-catalog.sh
       - name: Test Ultra solve boundaries

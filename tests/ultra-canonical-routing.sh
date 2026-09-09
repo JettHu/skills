@@ -19,7 +19,7 @@ core = (repo / "skills/engineering/ultra/SKILL.md").read_text(encoding="utf-8")
 profiles = (repo / "skills/engineering/ultra/PROFILES.md").read_text(encoding="utf-8")
 
 for text in (
-    "Examples — /ultra to-spec, /ultra diagnosing-bugs, /ultra to-tickets, /ultra solve --all.",
+    "Dispatch solve only when the user requests Ticket execution through Ultra",
     "take the disposition directly from the profile: `target-native`, `ultra-additive`, or `unavailable`",
     "affected surfaces and governing contracts",
     "Long discussion, message count, broad familiarity",
