@@ -19,12 +19,15 @@ This table is the durable ownership contract for profile-driven Ultra runs. The 
 
 ## Skill aliases
 
-Resolve these aliases before profile lookup. Use the canonical profile for ultra behavior; when invoking the target skill, prefer the requested name only if it resolves to an available installed skill in the current runtime; otherwise use the canonical name.
+Resolve aliases once to the canonical profile below; this does not create a new enhancement profile. For invocation, inspect available installed skills: prefer the exact requested name only when its instructions provide the stated capability; otherwise use the installed canonical target. If the requested installation has conflicting semantics, report the conflict instead of silently substituting. If neither compatible target is installed, report the missing canonical dependency and stop target execution. Do not substitute `skill-creator` or another similarly named skill, or install dependencies without authorization. State the requested name, canonical profile, and selected installed target (or missing dependency).
 
 | Requested name | Canonical profile | Notes |
 |----------------|-------------------|-------|
-| diagnose | diagnosing-bugs | Legacy/local name for Matt Pocock's debugging skill |
-| write-a-skill | writing-great-skills | Legacy/local name for skill-writing guidance; pass through unless a profile is later added |
+| diagnose | diagnosing-bugs | Legacy/local name for debugging guidance |
+| write-a-skill | writing-for-agents | Legacy skill-writing name; pass through with no enhancement profile |
+| writing-great-skills | writing-for-agents | Retired skill-writing name; pass through with no enhancement profile |
+
+`writing-for-agents` is the upstream v1.2.3 skill for writing agent documents, including skills. A legacy-only installation may execute its compatible requested skill directly; a current installation resolves either legacy name to `writing-for-agents`. Resolve direct canonical requests as themselves under the same availability rule.
 
 ## Pre-target pass scheduling
 

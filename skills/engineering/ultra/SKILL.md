@@ -1,6 +1,6 @@
 ---
 name: ultra
-description: Multi-agent enhancement wrapper for agent skills and ultra subcommands. Preserves target-native workflows and adds only profile-declared evidence passes, and supports /ultra solve for AFK-ready Ticket execution with outcome receipts. Use when user says "/ultra skill-name" or "/ultra solve", wants complementary analysis before a skill runs, wants distinct review after, or wants to execute ready-for-agent issues. Examples — /ultra to-spec, /ultra diagnosing-bugs, /ultra to-tickets, /ultra solve --all.
+description: Multi-agent enhancement wrapper for agent skills and ultra subcommands. Preserves target-native workflows and adds only profile-declared evidence passes, and supports /ultra solve for AFK-ready Ticket execution with outcome receipts. Use for an explicit /ultra invocation, an explicit Ultra wrapper delegation, or a request to add complementary analysis or distinct review to a named skill. Dispatch solve only when the user requests Ticket execution through Ultra; explaining Tickets or reviewing work is not a solve request.
 ---
 
 # Ultra
@@ -40,7 +40,7 @@ If the first argument is `solve`, follow [solve.md](solve.md) and stop this wrap
 
 Extract the target skill name from arguments. Look up its profile in [PROFILES.md](PROFILES.md).
 
-Before lookup, resolve compatibility aliases from [PROFILES.md](PROFILES.md) `Skill aliases`. Use the canonical name for profile lookup. When invoking the target skill later, prefer the user's requested name only if it resolves to an available installed skill in the current runtime; otherwise invoke the canonical name. State the alias resolution briefly.
+Before lookup, resolve compatibility aliases using [PROFILES.md](PROFILES.md) `Skill aliases`, including its installed-target and missing-dependency rules. Use the canonical name for profile lookup and report the selected installed target.
 
 Project-local guidance from `AGENTS.md`, `CONTEXT.md`, ADRs, issue briefs, or tracker conventions should guide the actual run when present; profiles provide portable defaults.
 
@@ -115,7 +115,13 @@ For canonical shaping targets `to-spec` and `to-tickets`, review the exact gener
 
 For `to-tickets`, the main Agent then selects the configured promotion operation from [Ticket Review Publication](references/ticket-review-publication.md), accepts only its declared complete-set evidence, and stops on structured failure. Interrupted or cancelled runs remain durably resumable and non-claimable; only verified promotion yields `ready-for-agent`.
 
-For other targets, present findings as a brief checklist of potential gaps. Do not auto-fix them through this generic review step.
+For other targets, the generic reviewer remains read-only and returns concrete findings to the coordinator. The coordinator completes the original request according to its authorization:
+
+- **Implementation request**: repair findings within the requested scope whose resolution follows from authoritative requirements and repository evidence. Run the affected validation and return the changed scope to the selected review owner when needed to resolve its findings. Finish when the requested outcome and required checks are satisfied, or report the precise unresolved finding, unavailable evidence, or human-owned choice. Repair does not authorize merge, push, deployment, or unrelated changes.
+- **Review-only request**: report findings without modifying the reviewed artifacts. Review findings do not grant implementation authority.
+- **Human-owned choice**: ask for unresolved product, API, data, security, architecture, significant UX, ownership, or release-policy decisions; continue independent authorized work. Do not invent such decisions to close findings.
+
+Use the same completion rules when consuming code-review findings below. Target-native review retains its ownership; consume existing evidence for the same goal instead of adding another equivalent review.
 
 **When `code_review: ultra-additive`** — only if the skill produced code changes:
 
