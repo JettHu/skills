@@ -48,7 +48,13 @@ If the skill has no profile or its Ultra additions are unavailable (grill-me, gr
 
 For every native capability and possible Ultra addition, take the disposition directly from the profile: `target-native`, `ultra-additive`, or `unavailable`. Do not rediscover target ownership from the target runbook at runtime. Target-native stages remain owned by the target and run according to its instructions. Ultra-additive stages are eligible only under their declared trigger. Unavailable stages do not run.
 
-Create a small stage ledger keyed by the profile's evidence goals. A goal may have only one owner and must run at most once. If a target-native stage and a possible Ultra stage would collect the same evidence, keep the target-native stage and suppress the Ultra stage. When the profile has `code_review: ultra-additive`, record the current HEAD commit SHA (`base_sha`) now. This is needed in step 5 to detect code changes produced by the target skill.
+Create a small stage ledger keyed by the profile's evidence goals. A goal may have only one owner and must run at most once. If a target-native stage and a possible Ultra stage would collect the same evidence, keep the target-native stage and suppress the Ultra stage. When the profile has `code_review: ultra-additive`, capture the starting commit and untracked inventory now, before any target writes, using [detect_owned_changes.py](scripts/detect_owned_changes.py):
+
+```bash
+python3 <ultra-dir>/scripts/detect_owned_changes.py snapshot --repo <repo> --snapshot <new-path-outside-repo>
+```
+
+Retain this snapshot and its `base_sha` for step 5. Choose a fresh file in the runtime's temporary/evidence directory outside the repository; the helper refuses to overwrite an existing snapshot. If capture fails, report unavailable change-detection evidence and repair the cause before target execution; a later snapshot cannot reconstruct starting ownership.
 
 ### 2. Context sufficiency check
 
@@ -119,18 +125,19 @@ For other targets, present findings as a brief checklist of potential gaps. Do n
 
 **When `code_review: ultra-additive`** — only if the skill produced code changes:
 
-If step 1 did not record `base_sha`, report that the change-detection baseline is missing and use the safest fixed point available (for example, an explicit user-supplied base or the current branch merge-base).
-
-Check for changes using these read-only checks:
+Run the read-only detector with the step 1 snapshot:
 
 ```bash
-git diff <base_sha> HEAD --quiet 2>/dev/null &&
-git diff --quiet &&
-git diff --cached --quiet
+python3 <ultra-dir>/scripts/detect_owned_changes.py detect --repo <repo> --snapshot <snapshot-path>
 ```
 
-This catches committed changes (`git diff <base_sha> HEAD`), unstaged changes (`git diff`), and staged changes (`git diff --cached`). If all three commands succeed (no changes at all), skip the review.
+Consume its JSON path arrays directly, preserving spaces, Unicode, and newlines; avoid line-based shell parsing. The helper covers committed changes since `base_sha`, index and worktree changes, and non-ignored untracked files. It never stages or removes files.
 
-If changes exist, pin and report the review range before starting review. Prefer an explicit fixed point when the user supplied one; otherwise use `base_sha`. Pass the fixed range to the selected reviewer so it inspects the same change set.
+- **`error` / nonzero exit:** change evidence is unavailable, never clean. Report the Git/snapshot failure; recover the original baseline and inventory before retrying. A newly captured snapshot or a substituted merge-base cannot establish which untracked files existed at the start.
+- **`needs-ownership`:** classify every `unclassified_untracked` path against the target's actual edits and task scope. Re-run with repeated `--owned-untracked <path>` for task implementation and `--exclude-untracked <path>` for unrelated output, recording the reason for each exclusion. Newness alone is not ownership. Preserve all `preexisting_untracked` paths, even if subsequently staged or committed. If `changed_preexisting_untracked` is nonempty, reconcile the target's edits with the starting fingerprint and task evidence explicitly; inspect any task-authored delta through a separate read-only review and retain that evidence. The helper deliberately cannot claim these user files. Unresolved ownership is unavailable evidence, never a clean skip.
+- **`review_required: true`:** enter the applicable code-review path even when only `owned_untracked` is populated. Pin `base_sha` and `head_sha`, pass the snapshot/report, `tracked_paths`, and `owned_untracked` to the selected reviewer. The reviewer must inspect each owned untracked file's full content as well as the tracked diffs; a commit-range-only review is incomplete. `starting_dirty` identifies pre-existing tracked work to distinguish from task edits, not automatic task ownership. Omit pre-existing untracked paths from candidate scope and do not stage files to make a reviewer see them.
+- **`clean`:** skip only after successful detection with no unresolved ownership and no task changes requiring review. If the target modified a pre-existing untracked file, use the explicit reconciliation/review evidence above rather than claiming the helper returned clean.
+
+Use the starting commit as the detection baseline even if the user requests a different fixed point for the review lens. Report that requested fixed point separately; it must not suppress newly detected files. If the target or repair pass changes files after detection, rerun detection and refresh affected review evidence before completion.
 
 Conduct a proportional, findings-first review through the selected target-native or Ultra reviewer. Keep the review read-only and report concrete findings only. The selected review owner defines its detailed axes and output format; Ultra only consumes the result, applies its repairability and decision-ownership rules, and releases review resources when done.
