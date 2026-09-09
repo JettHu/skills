@@ -3,6 +3,9 @@
 
 import argparse
 import html
+import hashlib
+import os
+import tempfile
 import importlib.util
 import json
 import re
@@ -33,6 +36,7 @@ SOLVE_RECORD_BUCKETS = [
     "stale_or_malformed",
 ]
 DEFAULT_VISIBLE_ITEMS = 5
+RENDERER_VERSION = "maintainer-board-renderer/v2"
 DEFAULT_HTML_PATH = Path(".scratch/maintainer-board/index.html")
 
 
@@ -100,8 +104,8 @@ def bucket_items(items, buckets):
     return result
 
 
-def build_snapshot(repo):
-    facts = load_snapshot_module().snapshot(repo)
+def build_snapshot(repo, selection=None):
+    facts = load_snapshot_module().snapshot(repo, selection)
     issues = []
     for ticket in facts["tickets"]:
         claim = ticket.get("claim", {})
@@ -159,7 +163,7 @@ def build_snapshot(repo):
         else: buckets[bucket].append(record)
     buckets["recent"] = sorted(recent, key=lambda item: (item.get("merged_at") or item.get("created_at") or "", item.get("id") or "", item["path"]), reverse=True)[:10]
     return dict(schema_version="maintainer-board/v1", repo=facts["repository"]["root"], source_fingerprint=facts["source_fingerprint"],
-                diagnostics=facts["diagnostics"], incomplete=facts["summary"]["incomplete"],
+                selection=facts["selection"], semantic_version=facts["semantic_version"], diagnostics=facts["diagnostics"], incomplete=facts["summary"]["incomplete"],
                 issues=dict(count=len(issues), buckets=issue_buckets, counts={name: len(items) for name, items in issue_buckets.items()}, warnings=[dict(path=issue["path"], **warning) for issue in issues for warning in issue["warnings"]]),
                 solve_records=dict(count=len(facts["receipts"]), buckets=buckets, counts={name: len(items) for name, items in buckets.items()}))
 
@@ -351,13 +355,13 @@ def render_record_card(record, hidden=False):
 """
 
 
-def render_bucket(title, items, renderer):
+def render_bucket(title, items, renderer, visible_items=DEFAULT_VISIBLE_ITEMS):
     cards = "".join(
-        renderer(item, hidden=index >= DEFAULT_VISIBLE_ITEMS)
+        renderer(item, hidden=index >= visible_items)
         for index, item in enumerate(items)
     )
     empty = "<p class='empty'>none</p>" if not items else ""
-    hidden_count = max(0, len(items) - DEFAULT_VISIBLE_ITEMS)
+    hidden_count = max(0, len(items) - visible_items)
     show_more = (
         f"<button class='show-more' type='button' data-hidden-count='{hidden_count}'>Show {hidden_count} more</button>"
         if hidden_count
@@ -389,7 +393,7 @@ def issue_display_items(bucket, items):
     )
 
 
-def render_html(snapshot):
+def render_html(snapshot, visible_items=DEFAULT_VISIBLE_ITEMS):
     issue_counts = snapshot["issues"]["counts"]
     record_counts = snapshot["solve_records"]["counts"]
     issue_summary = "".join(
@@ -404,19 +408,26 @@ def render_html(snapshot):
         render_bucket(
             titleize_bucket(bucket),
             issue_display_items(bucket, snapshot["issues"]["buckets"].get(bucket, [])),
-            render_issue_card,
+            render_issue_card, visible_items,
         )
         for bucket in ISSUE_BUCKETS
     )
     record_sections = "".join(
-        render_bucket(titleize_bucket(bucket), snapshot["solve_records"]["buckets"].get(bucket, []), render_record_card)
+        render_bucket(titleize_bucket(bucket), snapshot["solve_records"]["buckets"].get(bucket, []), render_record_card, visible_items)
         for bucket in SOLVE_RECORD_BUCKETS
     )
     repo = html.escape(snapshot["repo"])
     fingerprint = html.escape(snapshot.get("source_fingerprint", ""))
     global_diagnostics = render_warning_list(snapshot.get("diagnostics", []))
-    observation = "Snapshot incomplete: inspect diagnostics before acting." if snapshot.get("incomplete") else "Read-only observation; readiness does not authorize an operation."
-    provenance = f'<aside class="snapshot-observation"><strong>{observation}</strong>{global_diagnostics}<div>tracker-snapshot/v1 · {fingerprint}</div></aside>'
+    observation = "Snapshot incomplete: inspect diagnostics before acting." if snapshot.get("incomplete") else "Last successful observation; currentness requires a new query. Readiness does not authorize an operation."
+    selection = snapshot.get("selection", {})
+    scope = ""
+    if selection.get("mode") == "exact":
+        requested = ", ".join(selection.get("requested") or []) or "(empty selection)"
+        missing = ", ".join(selection.get("missing") or [])
+        scope = '<p>Selected Tickets: ' + html.escape(requested) + '</p>'
+        if missing: scope += '<p>Exact keys absent from source: ' + html.escape(missing) + '</p>'
+    provenance = f'<aside class="snapshot-observation"><strong>{observation}</strong>{scope}{global_diagnostics}<div>tracker-snapshot/v1 · {fingerprint}</div></aside>'
 
     return f"""<!doctype html>
 <html lang="en">
@@ -706,44 +717,179 @@ def emit_json(snapshot):
     print(json.dumps(snapshot, indent=2, sort_keys=True))
 
 
-def write_html(snapshot, output_path):
-    path = Path(output_path)
+REFRESH_SCHEMA = "maintainer-board-refresh/v1"
+REFRESH_START = "<!-- tracker-refresh:start -->"
+REFRESH_END = "<!-- tracker-refresh:end -->"
+
+
+def effective_options(visible_items=DEFAULT_VISIBLE_ITEMS):
+    if not isinstance(visible_items, int) or isinstance(visible_items, bool) or not 1 <= visible_items <= 100:
+        raise ValueError("visible_items must be an integer in 1..100")
+    return {"visible_items": visible_items}
+
+
+def render_signature(selection=None, options=None):
+    selected = load_snapshot_module().normalize_selection(selection)
+    options = effective_options(**(options or {}))
+    return hashlib.sha256(json.dumps([RENDERER_VERSION, selected, options], sort_keys=True).encode()).hexdigest()
+
+
+def generation(body, success):
+    return hashlib.sha256(json.dumps([body, success.get("source_fingerprint"), success.get("render_signature")], sort_keys=True).encode()).hexdigest()
+
+
+def read_artifact(path):
+    if not path.exists():
+        return None
+    document = path.read_text(encoding="utf-8")
+    if REFRESH_START not in document and REFRESH_END not in document:
+        success = dict(source_fingerprint=None, render_signature=None, selection=None, options=None, provenance="legacy-unknown")
+        success.update(generation=generation(document, success), body_sha256=hashlib.sha256(document.encode()).hexdigest())
+        return document, dict(schema=REFRESH_SCHEMA, last_success=success, latest_refresh=dict(status="unknown", generation=success["generation"]))
+    if document.count(REFRESH_START) != 1 or document.count(REFRESH_END) != 1:
+        raise ValueError("generated artifact has ambiguous refresh boundaries")
+    start = document.index(REFRESH_START); end = document.index(REFRESH_END, start) + len(REFRESH_END)
+    block = document[start:end]
+    match = re.search(r'<script id="tracker-refresh-state" type="application/json">(.*?)</script>', block, re.S)
+    if not match:
+        raise ValueError("generated artifact has no bound refresh state")
+    state = json.loads(match.group(1)); body = document[:start] + document[end:]
+    success = state.get("last_success", {})
+    if (state.get("schema") != REFRESH_SCHEMA
+            or success.get("body_sha256") != hashlib.sha256(body.encode()).hexdigest()
+            or success.get("generation") != generation(body, success)
+            or state.get("latest_refresh", {}).get("generation") != success.get("generation")):
+        raise ValueError("generated artifact body and refresh generation disagree")
+    return body, state
+
+
+def managed_document(body, state):
+    serialized = json.dumps(state, sort_keys=True, separators=(",", ":")).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+    success, latest = state["last_success"], state["latest_refresh"]
+    if success.get("provenance") == "legacy-unknown":
+        label = "Retained previous document; its observation provenance is unknown."
+    else:
+        label = "Last successful observation; currentness requires a new query."
+    detail = "Latest refresh succeeded." if latest["status"] == "success" else "Latest refresh failed; displayed facts may be stale."
+    if latest.get("error"):
+        detail += " " + latest["error"].get("detail", "")
+    block = (REFRESH_START + '<script id="tracker-refresh-state" type="application/json">' + serialized + '</script>'
+             + '<aside id="tracker-refresh-notice" role="status"><strong>' + html.escape(label) + '</strong><p>' + html.escape(detail)
+             + '</p><small>Generation ' + html.escape(success["generation"]) + '</small></aside>' + REFRESH_END)
+    marker = body.find("<body>")
+    if marker < 0:
+        raise ValueError("rendered artifact has no body boundary")
+    marker += len("<body>")
+    return body[:marker] + block + body[marker:]
+
+
+def atomic_document(path, document):
+    """Persist body and refresh state in one replacement; failures keep the prior file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_html(snapshot), encoding="utf-8")
-    return path.resolve()
+    descriptor, temporary = tempfile.mkstemp(prefix="." + path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        content = document.encode("utf-8"); offset = 0
+        while offset < len(content):
+            written = os.write(descriptor, content[offset:])
+            if not written:
+                raise OSError("generated artifact write made no progress")
+            offset += written
+        os.fsync(descriptor)
+        os.close(descriptor); descriptor = None
+        os.replace(temporary, path)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try: os.unlink(temporary)
+        except FileNotFoundError: pass
+
+
+def persist_document(path, body, state):
+    document = managed_document(body, state)
+    if path.exists() and path.read_text(encoding="utf-8") == document:
+        return False
+    atomic_document(path, document)
+    return True
+
+
+def successful_state(snapshot, body, selection, options):
+    success = dict(source_fingerprint=snapshot["source_fingerprint"], semantic_version=snapshot.get("semantic_version"),
+                   render_signature=render_signature(selection, options), renderer_version=RENDERER_VERSION,
+                   selection=selection, options=options, provenance="observed")
+    success.update(generation=generation(body, success), body_sha256=hashlib.sha256(body.encode()).hexdigest())
+    return dict(schema=REFRESH_SCHEMA, last_success=success, latest_refresh=dict(status="success", generation=success["generation"]))
+
+
+def write_html(snapshot, output_path, options=None):
+    options = effective_options(**(options or {}))
+    selection = load_snapshot_module().normalize_selection(snapshot.get("selection", {}).get("requested"))
+    path = Path(output_path).absolute(); body = render_html(snapshot, **options)
+    persist_document(path, body, successful_state(snapshot, body, selection, options))
+    return path
+
+
+def refresh(repo, output_path, selection=None, options=None):
+    """Observe, render and publish one self-contained artifact; report every failure."""
+    path = Path(output_path).absolute()
+    attempted = dict(selection=selection, renderer_version=RENDERER_VERSION, options=options or {})
+    try:
+        selection = load_snapshot_module().normalize_selection(selection)
+        options = effective_options(**(options or {}))
+        attempted.update(selection=selection, options=options)
+        snapshot = build_snapshot(repo, selection)
+        body = render_html(snapshot, **options)
+        state = successful_state(snapshot, body, selection, options)
+    except Exception as error:
+        failure = dict(code=getattr(error, "code", "observation-or-render-failed"), detail=str(error))
+        result = dict(ok=False, status="failed", path=str(path), error=failure, persisted=False)
+        try:
+            previous = read_artifact(path)
+            if previous:
+                body, state = previous
+                state["latest_refresh"] = dict(status="failed", generation=state["last_success"]["generation"], error=failure, attempted=attempted)
+                result["changed"] = persist_document(path, body, state)
+                result.update(persisted=True, generation=state["last_success"]["generation"])
+        except Exception as persistence_error:
+            result["persistence_error"] = dict(code="refresh-status-write-failed", detail=str(persistence_error))
+        return result
+    try:
+        changed = persist_document(path, body, state)
+    except Exception as error:
+        return dict(ok=False, status="failed", path=str(path), persisted=False, error=dict(code="artifact-replace-failed", detail=str(error)))
+    return dict(ok=True, status="updated" if changed else "unchanged", path=str(path), persisted=True,
+                generation=state["last_success"]["generation"], source_fingerprint=snapshot["source_fingerprint"],
+                render_signature=state["last_success"]["render_signature"], snapshot=snapshot)
 
 
 def main(argv):
-    parser = argparse.ArgumentParser(description="Generate a local maintainer board snapshot")
-    parser.add_argument("--repo", default=".", help="repository to scan; defaults to the current Git repo")
+    parser = argparse.ArgumentParser(description="Observe and atomically refresh the local maintainer board")
+    parser.add_argument("--repo", default=".", help="explicit canonical tracker repository")
     parser.add_argument("--json", action="store_true", help="emit JSON to stdout")
-    parser.add_argument(
-        "--html",
-        nargs="?",
-        const="",
-        help="write static HTML; defaults to <repo>/.scratch/maintainer-board/index.html",
-    )
+    parser.add_argument("--ticket-id", action="append", help="exact Ticket key; repeatable")
+    parser.add_argument("--visible-items", type=int, default=DEFAULT_VISIBLE_ITEMS, help="initial cards visible per bucket, 1..100")
+    parser.add_argument("--html", nargs="?", const="", help="refresh one self-contained HTML artifact")
     args = parser.parse_args(argv)
-
     try:
-        repo = repo_root(args.repo)
-        snapshot = build_snapshot(repo)
+        options = effective_options(args.visible_items)
         html_output = None
-        if args.html is not None:
-            html_output = Path(args.html) if args.html else repo / DEFAULT_HTML_PATH
-        elif not args.json:
-            html_output = repo / DEFAULT_HTML_PATH
-
-        if html_output:
-            written_path = write_html(snapshot, html_output)
-            if not args.json:
-                print(written_path)
-        if args.json:
-            emit_json(snapshot)
-    except RuntimeError as exc:
-        print(f"maintainer-board: {exc}", file=sys.stderr)
+        if args.html:
+            html_output = Path(args.html)
+        elif args.html is not None or not args.json:
+            html_output = repo_root(args.repo) / DEFAULT_HTML_PATH
+        if html_output is not None:
+            result = refresh(args.repo, html_output, args.ticket_id, options)
+            if not result["ok"]:
+                print(json.dumps({"schema": REFRESH_SCHEMA, **result}, sort_keys=True))
+                return 2
+            if args.json:
+                emit_json({**result["snapshot"], "refresh": {key: value for key, value in result.items() if key != "snapshot"}})
+            else:
+                print(result["path"])
+        else:
+            emit_json(build_snapshot(args.repo, args.ticket_id))
+    except Exception as error:
+        print(json.dumps(dict(schema=REFRESH_SCHEMA, ok=False, status="failed", persisted=False, error=dict(code=getattr(error, "code", "refresh-failed"), detail=str(error))), sort_keys=True))
         return 2
-
     return 0
 
 

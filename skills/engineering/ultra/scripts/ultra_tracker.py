@@ -200,6 +200,7 @@ def parse_args() -> argparse.Namespace:
 
     snapshot = groups.add_parser("snapshot", help="read the complete versioned Tracker Snapshot")
     snapshot.add_argument("--repo", default=".", help="explicit canonical tracker repository")
+    snapshot.add_argument("--ticket-id", action="append", help="exact Ticket key; repeatable, omission selects the full tracker")
 
     publication = groups.add_parser("publication", help="configured adapter Ticket publication lifecycle")
     publication_actions = publication.add_subparsers(
@@ -298,7 +299,7 @@ def main() -> int:
                 error("snapshot", "helper-unavailable", str(exc))
                 return UNAVAILABLE
             try:
-                envelope("snapshot", data=tracker_snapshot.snapshot(args.repo))
+                envelope("snapshot", data=tracker_snapshot.snapshot(args.repo, args.ticket_id))
                 return SUCCESS
             except tracker_snapshot.SnapshotError as exc:
                 error("snapshot", exc.code, str(exc))

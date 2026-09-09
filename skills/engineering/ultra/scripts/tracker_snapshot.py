@@ -18,6 +18,7 @@ import local_ticket_publication as publication
 import tracker_contract
 
 SCHEMA = "tracker-snapshot/v1"
+SEMANTIC_VERSION = "tracker-snapshot-semantics/v2"
 
 
 class SnapshotError(RuntimeError):
@@ -451,6 +452,7 @@ def reserve_identities(repo, paths, contract):
                 if identity in owners:
                     raise SnapshotError("ambiguous-identity", f"duplicate Ticket identity {identity}: {owners[identity]}, {locator}")
                 owners[identity] = locator
+    return owners
 
 
 def normalize_ticket(issue, item, contract, eligibility, by_id, aliases, receipts):
@@ -500,7 +502,7 @@ def normalize_ticket(issue, item, contract, eligibility, by_id, aliases, receipt
 def _observe(repo, contract, contract_text, paths, observations, git_diagnostics):
     errors = []
     ticket_paths = frontier.configured_paths(repo, contract)
-    reserve_identities(repo, ticket_paths, contract)
+    identity_sources = reserve_identities(repo, ticket_paths, contract)
     tickets = frontier.load_tickets(repo, contract, readonly_errors=errors)
     frontier.apply_publication_gates(repo, tickets, contract)
     eligibility, by_id = frontier.evaluate_frontier(tickets, contract, contract_text, [])
@@ -571,7 +573,7 @@ def _observe(repo, contract, contract_text, paths, observations, git_diagnostics
             if not found or entity["locator"] not in found.get("issues", []):
                 entity["diagnostics"].append(diagnostic("receipt-backlink-inconsistent", f"unresolved or non-reciprocal receipt link: {reference}", entity["locator"]))
     for error in errors:
-        entities.append(dict(key="malformed:" + error["locator"], ticket_id="", locator=error["locator"], source_locator=error["source"], title=Path(error["source"]).stem,
+        entities.append(dict(key="malformed:" + error["locator"], identity_candidates=sorted(identity for identity, locator in identity_sources.items() if locator == error["locator"] or locator.startswith(error["locator"] + ":")), ticket_id="", locator=error["locator"], source_locator=error["source"], title=Path(error["source"]).stem,
                              state=None, eligibility=dict(claimable=False, reasons=["malformed-ticket"]), diagnostics=[diagnostic("malformed-ticket", error["message"], error["locator"], "exclude-from-frontier", "error")]))
     entities.sort(key=lambda item: item["key"]); normalized.sort(key=lambda item: item["key"])
     all_diagnostics = git_diagnostics + [d for entity in entities + normalized for d in entity["diagnostics"]]
@@ -585,8 +587,61 @@ def _observe(repo, contract, contract_text, paths, observations, git_diagnostics
                              states=dict(sorted(Counter(e["state"] or "malformed" for e in entities).items())), diagnostic_severity=dict(sorted(Counter(d["severity"] for d in all_diagnostics).items())), incomplete=incomplete))
 
 
-def snapshot(repo):
+def normalize_selection(selection):
+    """None means full scope; an explicit empty sequence means return no entities."""
+    if selection is None:
+        return None
+    if not isinstance(selection, (list, tuple)) or any(not isinstance(key, str) or not key for key in selection):
+        raise SnapshotError("invalid-selection", "selection must be a sequence of nonempty exact Ticket keys")
+    return sorted(set(selection))
+
+
+def selected_result(full, selection):
+    """Filter only after the full graph and fatal checks; relation facts retain source truth."""
+    result = json.loads(json.dumps(full))
+    tickets = result["tickets"]; receipts = result["receipts"]
+    ticket_index = {token: item for item in tickets for token in [item["key"], item["locator"], *item.get("identity_candidates", [])]}
+    receipt_index = {item["key"]: item for item in receipts}
+    requested = [item["key"] for item in tickets] if selection is None else selection
+    # Stable keys are the selection interface; aliases only resolve source relationships.
+    by_key = {token: item for item in tickets for token in [item["key"], *item.get("identity_candidates", [])]}
+    matched = {by_key[token]["key"] for token in requested if token in by_key}
+    returned_receipts = {item["key"] for item in receipts if selection is None or any(ticket_index.get(reference) and ticket_index[reference]["key"] in matched for reference in item.get("issues", []))}
+    def ticket_relation(reference):
+        entity = ticket_index.get(reference)
+        return dict(reference=reference, ticket_key=entity["key"] if entity else None,
+                    resolution="invalid-source" if entity and entity["key"].startswith("malformed:") else "resolved" if entity else "source-missing",
+                    returned=bool(entity and entity["key"] in matched))
+    def receipt_relation(reference):
+        entity = receipt_index.get(reference)
+        return dict(reference=reference, receipt_key=entity["key"] if entity else None,
+                    resolution="invalid-source" if entity and entity.get("malformed") else "resolved" if entity else "source-missing",
+                    returned=bool(entity and entity["key"] in returned_receipts))
+    for item in tickets:
+        for blocker in item.get("blockers", []):
+            relation = ticket_relation(blocker.get("ticket_key") or blocker["reference"])
+            blocker.update(resolution=relation["resolution"], returned=relation["returned"], source_ticket_key=relation["ticket_key"])
+        item["receipt_relations"] = [receipt_relation(key) for key in item.get("receipt_keys", [])]
+        for reference in item.get("receipt_references", []):
+            resolved = (Path(full["repository"]["root"]) / item["source_locator"]).parent.joinpath(reference).resolve()
+            found = next((receipt for receipt in receipts if (Path(full["repository"]["root"]) / receipt["locator"]).resolve() == resolved), None)
+            relation = receipt_relation(found["key"] if found else reference)
+            relation["reference"] = reference
+            item["receipt_relations"].append(relation)
+    for item in receipts:
+        item["ticket_relations"] = [ticket_relation(reference) for reference in item.get("issues", [])]
+        item["successor_relation"] = {name: receipt_relation(item[field]) if item.get(field) else None for name, field in (("predecessor", "supersedes"), ("successor", "superseded_by"))}
+    result["tickets"] = [item for item in tickets if item["key"] in matched]
+    result["receipts"] = [item for item in receipts if item["key"] in returned_receipts]
+    result["selection"] = dict(mode="all" if selection is None else "exact", requested=selection,
+                               matched=sorted(matched), resolved={token: by_key[token]["key"] for token in requested if token in by_key}, missing=sorted(set(requested) - by_key.keys()),
+                               returned_ticket_count=len(result["tickets"]), returned_receipt_count=len(result["receipts"]))
+    return result
+
+
+def snapshot(repo, selection=None):
     """Observe the complete configured tracker, with bounded owner locks and retries."""
+    selected = normalize_selection(selection)
     repo = repository(repo)
     try:
         for _attempt in range(2):
@@ -606,8 +661,9 @@ def snapshot(repo):
                 after_git, _ = git_observation(repo)
                 if source_paths(repo, contract) != paths or source_digest(repo, paths, after_git) != before or not all(publication.lock_unchanged(lock) for lock in lock_observations): continue
                 # Include all semantic observations, including readiness, but no wall clock.
+                result["semantic_version"] = SEMANTIC_VERSION
                 result["source_fingerprint"] = hashlib.sha256(json.dumps([before, result], sort_keys=True).encode()).hexdigest()
-                return result
+                return selected_result(result, selected)
         raise SnapshotError("incoherent-read", "canonical sources changed during both bounded observation attempts")
     except SnapshotError:
         raise

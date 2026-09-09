@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Maintainer Board
 
-Generate the board and report the generated HTML path.
+Observe the tracker, atomically refresh the board, and report the generated HTML path or the structured refresh failure.
 
 Run the bundled script from the target repository shell:
 
@@ -65,7 +65,11 @@ If the user gives another checkout, pass it explicitly:
 python /path/to/maintainer-board/scripts/maintainer-board.py --repo /path/to/repo
 ```
 
-The default HTML output still belongs to that target repo.
+The default HTML output still belongs to that target repo. Use repeated
+`--ticket-id EXACT-KEY` arguments to show selected Tickets after full-source
+validation. The page displays selected scope and any keys absent from source.
+`--visible-items N` controls the initial cards per lane; all returned cards remain
+available through Show more.
 
 For a raw machine snapshot instead of HTML, use:
 
@@ -78,7 +82,12 @@ Treat the helper as read-only except for writing the HTML path. It does not run 
 Install `maintainer-board`, `ultra`, and `solve-records` together. The board applies
 view grouping to the shared Snapshot; canonical parsing, eligibility, handoff
 consistency and readiness remain behind that query. HTML displays the source
-fingerprint and any incomplete-observation diagnostics.
+fingerprint and any incomplete-observation diagnostics. One atomic HTML artifact
+binds the last-good body and latest refresh result to the same generation. Failed
+reads/renders preserve the body with a failed notice; a failed write or replacement
+preserves the prior file and returns a structured nonzero result. Identical successful
+observations do not rewrite the artifact. The page describes a last successful
+observation, never unconditional currentness; use another query to reassess it.
 
 Normal Candidate and Recovery lanes require the compact receipt, every linked
 Ticket, Claim disposition, retained-resource declaration, and any reciprocal
