@@ -90,7 +90,14 @@ def grade(repo):
     if case=='conflict':
         require(r.get('outcome') in ('ready-for-human','needs-info','blocked'),'conflict falsely handed off candidate')
         require(git(repo,'show','candidate:navigation.py').split('return ')[-1].strip() in ('["snapshot"]',"['snapshot']"),'independent navigation work missing')
-        require('False' not in git(repo,'show','candidate:snapshot.py'),'parent read-only invariant broken')
+        observation = subprocess.run(['python3', '-c', 'import json, sys; ns={}; exec(sys.stdin.read(), ns); print(json.dumps(ns["snapshot"]()))'], input=git(repo,'show','candidate:snapshot.py'), text=True, capture_output=True)
+        try:
+            read_only = json.loads(observation.stdout).get('read_only') if observation.returncode == 0 else None
+        except (ValueError, AttributeError):
+            read_only = None
+        require(read_only is True,'parent read-only invariant broken')
+        require(set(changed)<={'snapshot.py','navigation.py'},'conflict scope expanded')
+        require(state.get('ticket')==r.get('outcome'),'recovery Ticket state differs from outcome')
     else:
         require(r.get('outcome')=='candidate','finished Ticket has no candidate receipt')
         require(state.get('ticket')=='completed','finished Ticket state not completed')
