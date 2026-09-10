@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('snapshot_fixture', ROOT / 'tests/tracker-snapshot.py')
 base = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(base)
-spec = importlib.util.spec_from_file_location('workspace', ROOT / 'scripts/obsidian-workspace.py')
+spec = importlib.util.spec_from_file_location('workspace', ROOT / 'skills/in-progress/setup-obsidian-workspace/scripts/obsidian-workspace.py')
 workspace = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(workspace)
 

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Setup Obsidian Workspace"
+  short_description: "Connect canonical trackers to an Obsidian Kanban workspace"
+  default_prompt: "Use $setup-obsidian-workspace to connect this project's canonical tracker to my selected Obsidian Vault."
+policy:
+  allow_implicit_invocation: true
