@@ -161,7 +161,7 @@ assert "Agent Decision Log" not in solve
 for predicate in (
     "simple, familiar, local, low-risk, fully specified, and obviously verifiable",
     "adaptive read-only subagent fan-out",
-    "relevant modules, constraints, risks, validation paths, and unresolved questions",
+    "concise conclusions with file/symbol locations, relevant contracts, validation paths, and remaining uncertainties",
     "source-verifiable external API, framework, standard, platform, compatibility, or security fact",
     "Complex, delegated, resumable, or digest-worthy Attempts receive a Pre-Edit Plan Review",
 ):
