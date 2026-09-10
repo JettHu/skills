@@ -332,8 +332,12 @@ def refresh(config):
                 entry['last_success'] = generate(root, snapshot, project, good)
             except (OSError, RuntimeError, ValueError) as error:
                 entry.update(status='failed', error=str(error))
-                if good and not intact(root, good):
-                    entry['retained_integrity'] = 'damaged; last-success fingerprint does not certify edited cache'
+                if good:
+                    try:
+                        if not intact(root, good):
+                            entry['retained_integrity'] = 'damaged; last-success fingerprint does not certify edited cache'
+                    except OSError as integrity_error:
+                        entry['retained_integrity'] = 'unreadable; ' + str(integrity_error)
             state['projects'][identity] = entry
         failures = sum(item['status'] == 'failed' for item in state['projects'].values())
         state['result'] = 'success' if not failures else 'failed' if failures == len(projects) else 'partial failure'

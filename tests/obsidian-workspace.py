@@ -179,5 +179,31 @@ class WorkspaceTests(unittest.TestCase):
             self.assertIn(text, views['Attention'])
 
 
+    def test_unreadable_retained_cache_does_not_abort_other_projects(self):
+        self.add('A')
+        second = Path(self.tmp.name).resolve() / 'second'
+        shutil.copytree(self.repo, second)
+        config = self.config()
+        config['projects'].append({'id': 'two', 'repository': str(second)})
+        self.assertTrue(workspace.refresh(config)['ok'])
+        home = Path(config['vault']) / 'tracker-generated/Home.md'
+        good = workspace.read_state(home)['projects']['one']['last_success']
+        unreadable = (home.parent / good['views']['Work']).resolve()
+        (self.repo / 'docs/agents/ultra-tracker.md').unlink()
+        base.write(second, '.tracker/tickets/B.md', base.ticket('B'))
+        read_bytes = Path.read_bytes
+        def denied(path):
+            if path == unreadable:
+                raise PermissionError('retained content unreadable')
+            return read_bytes(path)
+        with patch.object(Path, 'read_bytes', denied):
+            result = workspace.refresh(config)
+        self.assertTrue(result['persisted'])
+        self.assertEqual(result['status'], 'partial failure')
+        state = workspace.read_state(home)
+        self.assertEqual(state['projects']['two']['status'], 'success')
+        self.assertIn('unreadable', state['projects']['one']['retained_integrity'])
+
+
 
 if __name__ == '__main__': unittest.main()
