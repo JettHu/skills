@@ -66,15 +66,18 @@ def result(status, key, receipt="", reason="", next_action=""):
     return data
 
 
+def receipt_directory(repo, representation, ticket_paths):
+    """Canonical outcome location; shared by creation and read-only discovery."""
+    roots = {path.parent.parent for path in ticket_paths}
+    if representation == "file-per-ticket" and len(roots) == 1:
+        return roots.pop() / "solve-records"
+    return repo / ".scratch/solve-records"
+
+
 def receipt_path(repo, tickets, key):
     name = hashlib.sha256(key.encode()).hexdigest() + ".md"
-    roots = {ticket.path.parent.parent for ticket in tickets}
-    if (
-        all(ticket.representation == "file-per-ticket" for ticket in tickets)
-        and len(roots) == 1
-    ):
-        return roots.pop() / "solve-records" / name
-    return repo / ".scratch/solve-records" / name
+    representation = "file-per-ticket" if all(ticket.representation == "file-per-ticket" for ticket in tickets) else "tickets-file"
+    return receipt_directory(repo, representation, [ticket.path for ticket in tickets]) / name
 
 
 def find_receipt(repo, key):

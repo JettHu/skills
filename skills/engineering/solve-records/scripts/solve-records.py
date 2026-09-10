@@ -649,11 +649,13 @@ def parse_record(repo, path):
     return data
 
 
-def discover(repo):
+def discover(repo, extra_locations=()):
     paths = []
     paths.extend(repo.glob(".scratch/solve-records/*.md"))
     paths.extend(repo.glob(".scratch/*/solve-records/*.md"))
-    return [parse_record(repo, path) for path in sorted(paths)]
+    for location in extra_locations:
+        paths.extend(location.glob("*.md"))
+    return [parse_record(repo, path) for path in sorted(set(paths))]
 
 
 def is_true(value):

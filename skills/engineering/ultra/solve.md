@@ -35,7 +35,7 @@ Tracker updates record state-relevant facts. During execution, concrete Attempt 
 - `--all`: repeatedly solve the configured current claimable frontier, re-reading after each completed frontier generation. It never preselects the transitive dependency graph.
 - `--auto-merge`: after finished solve records are created, merge eligible records into the local base branch one by one through the merge gate. It does not fetch, push, deploy, or broaden the selected Ticket set.
 - Free-form message: infer the relevant Tickets from the conversation and tracker, then state the selection before claiming.
-- Merge/apply/ship/land wording: treat as auto-merge intent after the solve pipeline succeeds and the merge gates pass.
+- Landing wording: resolve authorization under [Auto-Merge Solve Records If Requested](#9-auto-merge-solve-records-if-requested).
 
 ## Core Semantics
 
@@ -50,7 +50,7 @@ Tracker updates record state-relevant facts. During execution, concrete Attempt 
 
 Group worktrees produce candidate changes. The coordinator owns integration and merge. A group worktree must not merge directly into the target branch.
 
-Default successful completion, when no `--auto-merge` or merge/apply/ship/land intent is present, is a clean committed candidate branch plus an `outcome: candidate` receipt. `head` is the candidate branch whose current head contains finished work. `base` is the landing branch the candidate is meant to enter later. A meaningful stopped Attempt instead creates the matching recovery receipt; a transient or fully cleaned no-value Attempt releases its Claim without leaving a record. Push, deploy, and cleanup happen only when the user's latest wording explicitly asks for them or when a later solve-record command advances the recorded outcome.
+Default successful completion, when landing is not authorized under [section 9](#9-auto-merge-solve-records-if-requested), is a clean committed candidate branch plus an `outcome: candidate` receipt. `head` is the candidate branch whose current head contains finished work. `base` is the landing branch the candidate is meant to enter later. A meaningful stopped Attempt instead creates the matching recovery receipt; a transient or fully cleaned no-value Attempt releases its Claim without leaving a record. Push, deploy, and cleanup happen only when the user's latest wording explicitly asks for them or when a later solve-record command advances the recorded outcome.
 
 Tickets are assumed AFK-ready when they are in `ready-for-agent`: the Ticket body, acceptance criteria, and any Agent Brief are treated as approved input. Continue the batch unless the Ticket selection or merge target is ambiguous and cannot be inferred safely.
 
@@ -445,7 +445,7 @@ Group Review is complete when the pinned group range has been compared with the 
 
 ### 7. Integrate
 
-Create one integration worktree from the latest target branch. The integration worktree is mandatory whenever more than one group exists, `--auto-merge` is present, or merge/apply/ship/land was requested; it is still recommended for a single non-trivial group.
+Create one integration worktree from the latest target branch. The integration worktree is mandatory whenever more than one group exists or landing is authorized under [section 9](#9-auto-merge-solve-records-if-requested); it is still recommended for a single non-trivial group.
 
 Suggested names:
 
@@ -494,7 +494,7 @@ When a blocked, needs-info, ready-for-human, abandoned, superseded, or retained-
 
 After final validation and before Outcome Finalization, the root re-reads and reviews the integrated candidate against the claimed Tickets, acceptance criteria, source Specs, approved decisions, optional Agent Briefs, applicable living Execution Digests, repository standards, side effects, validation evidence, and receipt readiness. Follow and revalidate the Checkpoint's independent-review disposition. If Group Review already owned the selected independent evidence objective, do not start another independent pass here; otherwise Post-Execution Review may own the one selected uncovered objective. A subagent summary supplements but never replaces the root's integrated-candidate read.
 
-The root now completes the full **requirement-to-evidence audit**. The complete acceptance boundary is every claimed Ticket plus each approved source Spec; context limits, interruptions, execution limits, an easier compatible result, or the available tests never narrow it. Enumerate every explicit requirement, acceptance criterion, named artifact, validation gate, invariant, and required deliverable from that boundary, then map each one to authoritative evidence from the current integrated head. Classify each mapping as:
+The root now completes the full **requirement-to-evidence audit**. The complete acceptance boundary is every claimed Ticket's assigned deliverables and acceptance criteria, together with the applicable constraints, invariants, and validation gates in its approved source Specs and decisions. Reading or referencing a parent Spec does not assign its other project deliverables to this Ticket. A Ticket explicitly assigned global integration or end-to-end acceptance retains that full responsibility. Resolve a material Ticket/source conflict or unclear responsibility from authoritative context; if a human decision remains necessary, name the conflict, continue independent authorized work, and keep the affected unfinished Ticket on the recovery path. Context limits, interruptions, execution limits, an easier compatible result, or the available tests never narrow this boundary. Enumerate every explicit requirement, acceptance criterion, named artifact, validation gate, invariant, and required deliverable from that boundary, then map each one to authoritative evidence from the current integrated head. Classify each mapping as:
 
 - **scope-matched proof**: current, authoritative evidence directly covers the requirement's full stated scope
 - **contradictory evidence**: a current authoritative observation conflicts with the claimed outcome
@@ -514,13 +514,13 @@ Check for:
 - side effects, regressions, or public-contract changes not covered by validation
 - validation gaps, unavailable required checks, or missing manual gates
 - a proposed handoff Summary that would be incomplete or misleading
-- an explicit Ticket or approved source-Spec item without scope-matched current evidence, including a broad criterion supported only by a narrow green check
+- an assigned Ticket item or applicable source constraint within this acceptance boundary without scope-matched current evidence, including a broad criterion supported only by a narrow green check
 
 Apply the same Repairability and Decision Ownership rules as group review. Fix every derivable in-scope finding across P0-P3, rerun the relevant validation, and repeat Post-Execution Review on the corrected candidate. Escalate only genuinely human-owned choices. A clearly out-of-scope non-blocking finding may become a follow-up, but any unresolved acceptance-affecting finding blocks candidate handoff and routes the Attempt to the appropriate recovery outcome regardless of severity. Do not submit a `candidate` outcome for that Ticket. During Outcome Finalization, submit a recovery outcome when the stopped Attempt leaves meaningful decision, evidence, or retained-resource context; a transient Attempt that is fully cleaned up stays recordless. If the candidate is finished but still has human acceptance, merge review, rollout approval, or another manual gate, keep the Ticket completed, state that pending boundary concisely in the handoff Summary, and leave later evidence to its acceptance, landing, or release owner.
 
 Post-Execution Review is complete only when the root's full requirement-to-evidence audit passes, no fixable findings remain, unresolved state-relevant residue is routed to the Ticket or handoff, and every record-worthy Digest item needed by the next owner is ready for the concise Summary request. The root owns this conclusion and the semantic outcome; the adapter owns the Ticket transition and receipt write, while delegated reviews supply evidence but cannot advance either boundary.
 
-If an interruption, context boundary, or execution limit arrives before this pass, preserve the same unabridged acceptance boundary. Meaningful unfinished work follows the existing recovery/resume handoff and remains non-candidate; a fully cleaned transient Attempt with no recovery value remains recordless. Resumption re-reads the complete Ticket and approved source Spec, verifies the live head, and refreshes stale evidence rather than treating the prior partial audit as completion.
+If an interruption, context boundary, or execution limit arrives before this pass, preserve the same unabridged acceptance boundary. Meaningful unfinished work follows the existing recovery/resume handoff and remains non-candidate; a fully cleaned transient Attempt with no recovery value remains recordless. Resumption re-reads the complete Ticket and approved source Spec to reconstruct this same assigned acceptance boundary, verifies the live head, and refreshes stale evidence rather than treating the prior partial audit as completion.
 
 ### 8.5 Outcome Finalization
 
@@ -579,13 +579,13 @@ The Ticket `completed` state means acceptance criteria are implemented and verif
 
 ### 9. Auto-Merge Solve Records If Requested
 
-Auto-merge only when the user explicitly provided `--auto-merge` or asked to merge, apply, ship, land, or equivalent.
+This section owns landing authorization for solve and candidate operations. `--auto-merge` or a request to merge, ship, land, or otherwise integrate the candidate into a target branch authorizes an attempt through the existing gates. “Apply this fix” or “apply the patch” alone authorizes implementation, validation, and candidate handoff; it does not authorize advancing the target branch. Interpret equivalent wording by the requested operation and conversation context, not by a verb alone.
 
-The landing branch must be explicit or safely inferred from tracker/project context. If ambiguous, ask before merging.
+The landing branch must be explicit or uniquely determined by tracker/project context. When landing is authorized and the target is known, continue after the gates pass without requesting the same permission again. If the target remains genuinely ambiguous, finish independent authorized candidate work and ask for the target before merging. Landing authorization grants no push or deployment authority.
 
 In adoption mode, `--auto-merge` means try to land the candidate branch into the landing branch. It never means merge an adopted candidate branch back into itself.
 
-Route requested auto-merge/merge/apply/ship/land wording through the same solve-record landing gate used by `$solve-records`. Merge eligible records one by one, in dependency order. Explicit set wording such as `all ready records` may process the bounded set one record at a time, but ineligible records must be skipped with reasons. Do not silently merge dependencies unless the user explicitly approves the wider operation.
+Route authorized landing through the same solve-record landing gate used by `$solve-records`. Merge eligible records one by one, in dependency order. Explicit set wording such as `all ready records` may process the bounded set one record at a time, but ineligible records must be skipped with reasons. Do not silently merge dependencies unless the user explicitly approves the wider operation.
 
 Apply this section only after the Outcome gate re-reads `outcome: candidate`. Recovery receipts remain on their recovery actions even when they retain branches, worktrees, commits, or PRs.
 

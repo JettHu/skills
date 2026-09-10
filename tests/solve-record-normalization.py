@@ -283,7 +283,13 @@ The later candidate replaced this attempt without rewriting its outcome.""",
     )
     assert "malformed" not in historical, historical
 
-    dashboard = maintainer_board.load_solve_records_dashboard(repo)
+    # The legacy Board read helper was replaced by the shared Snapshot seam.
+    fixture_spec = importlib.util.spec_from_file_location("snapshot_fixture", ROOT / "tests/tracker-snapshot.py")
+    fixture = importlib.util.module_from_spec(fixture_spec)
+    fixture_spec.loader.exec_module(fixture)
+    fixture.write(repo, "docs/agents/ultra-tracker.md", fixture.CONTRACT.replace(
+        ".tracker/tickets/<ticket-file>.md", ".scratch/<feature>/issues/<ticket-file>.md"))
+    dashboard = maintainer_board.build_snapshot(repo)["solve_records"]
     buckets = {
         name: {item["id"] for item in items}
         for name, items in dashboard["buckets"].items()

@@ -147,3 +147,5 @@ Consume its JSON path arrays directly, preserving spaces, Unicode, and newlines;
 Use the starting commit as the detection baseline even if the user requests a different fixed point for the review lens. Report that requested fixed point separately; it must not suppress newly detected files. If the target or repair pass changes files after detection, rerun detection and refresh affected review evidence before completion.
 
 Conduct a proportional, findings-first review through the selected target-native or Ultra reviewer. Keep the review read-only and report concrete findings only. The selected review owner defines its detailed axes and output format; Ultra only consumes the result, applies its repairability and decision-ownership rules, and releases review resources when done.
+
+For full read-only tracker diagnostics or View integration, read [Tracker Snapshot](references/tracker-snapshot.md). The bundled facade exposes the complete versioned query; existing mutation operations retain their canonical owners.

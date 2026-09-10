@@ -56,19 +56,25 @@ EOF
 mkdir -p "$REPO/docs/agents/ultra-tracker"
 cat >"$REPO/docs/agents/ultra-tracker/local-markdown.md" <<'EOF'
 
+Frontier adapter: bundled-local-markdown-v1
 Publication strategy: local-review-pending
-Local Ticket representation: tickets-file
-Local Ticket path: .scratch/feature-a/tickets.md
+Local Ticket representation: file-per-ticket
+Local Ticket path: .scratch/<feature>/issues/<ticket-file>.md
 Cancellation policy: retain-until-explicit-cleanup
 Ticket ID field aliases: Ticket ID, ID
 Publication Run field aliases: Publication Run
 Source field aliases: Source Spec, Parent
 Ticket state fields: Status, State
-Ticket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info
+Ticket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info, needs-triage, wontfix
 Ready state: ready-for-agent
 Completed state: completed
 Human-blocked states: ready-for-human, needs-info
 Blocker metadata fields: Blocked By, Blockers
+Blocker body heading: Blocked by
+Claim field: Flags
+Claim value: solve-in-progress
+Solve branch field: Solve Branch
+Solve worktree field: Solve Worktree
 Claim field aliases: Flags, Labels
 Solve branch field aliases: Solve Branch, Branch
 Solve worktree field aliases: Solve Worktree, Worktree
@@ -193,10 +199,8 @@ Created: 2026-07-02
 # Publication attention issue
 EOF
 
-cat >"$REPO/.scratch/feature-a/tickets.md" <<'EOF'
-# Section Tickets
-
-<!-- ultra-ticket:begin id=TF-1 -->
+mkdir -p "$REPO/.scratch/feature-tf/issues"
+cat >"$REPO/.scratch/feature-tf/issues/TF-1.md" <<'EOF'
 Status: review-pending
 Ticket ID: TF-1
 Publication Run: tickets-file-run
@@ -208,17 +212,17 @@ Created: 2026-07-02
 ## Ticket TF-1
 
 - [ ] section-backed acceptance
-<!-- ultra-ticket:end -->
 EOF
 
 python3 "$LOCAL_PUBLICATION_SCRIPT" register \
-  --repo "$REPO" --representation tickets-file \
-  --location .scratch/feature-a/tickets.md --run-id tickets-file-run >/dev/null
+  --repo "$REPO" --representation file-per-ticket \
+  --location .scratch/feature-tf/issues --run-id tickets-file-run >/dev/null
 python3 "$LOCAL_PUBLICATION_SCRIPT" promote \
-  --repo "$REPO" --representation tickets-file \
-  --location .scratch/feature-a/tickets.md --run-id tickets-file-run >/dev/null
+  --repo "$REPO" --representation file-per-ticket \
+  --location .scratch/feature-tf/issues --run-id tickets-file-run >/dev/null
 
-cat >"$REPO/.scratch/feature-b/issue.md" <<'EOF'
+mkdir -p "$REPO/.scratch/feature-b/issues"
+cat >"$REPO/.scratch/feature-b/issues/issue.md" <<'EOF'
 ---
 status: ready-for-agent
 category: feature
@@ -576,31 +580,39 @@ cleanup_done: false
 EOF
 
 TF_INSPECT="$TMPDIR_ROOT/tf-inspect.json"
-python3 "$LOCAL_PUBLICATION_SCRIPT" inspect --repo "$REPO" --representation tickets-file \
-  --location .scratch/feature-a/tickets.md --run-id tickets-file-run >"$TF_INSPECT"
+python3 "$LOCAL_PUBLICATION_SCRIPT" inspect --repo "$REPO" --representation file-per-ticket \
+  --location .scratch/feature-tf/issues --run-id tickets-file-run >"$TF_INSPECT"
 TF_DIGEST="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["body_digests"]["TF-1"])' "$TF_INSPECT")"
-python3 "$LOCAL_PUBLICATION_SCRIPT" terminal-repair --repo "$REPO" --representation tickets-file \
-  --location .scratch/feature-a/tickets.md --run-id tickets-file-run --ticket-id TF-1 \
+python3 "$LOCAL_PUBLICATION_SCRIPT" terminal-repair --repo "$REPO" --representation file-per-ticket \
+  --location .scratch/feature-tf/issues --run-id tickets-file-run --ticket-id TF-1 \
   --expected-digest "$TF_DIGEST" --repair-type publication-metadata \
   --old-value 'Source Spec' --new-value Parent --reason 'board projection fixture' >/dev/null
+
+# Every fixture Ticket lives on the declared surface; stable IDs preserve claimability.
+python3 - "$REPO" <<'PYIDS'
+from pathlib import Path
+import sys
+for path in Path(sys.argv[1]).glob('.scratch/*/issues/*.md'):
+    text = path.read_text()
+    if 'Ticket ID:' in text or 'ticket_id:' in text: continue
+    identity = path.parent.parent.name + '-' + path.stem
+    text = text.replace('---\n', '---\nticket_id: ' + identity + '\n', 1) if text.startswith('---\n') else 'Ticket ID: ' + identity + '\n' + text
+    path.write_text(text)
+PYIDS
 
 JSON_OUT="$TMPDIR_ROOT/board.json"
 HTML_OUT="$TMPDIR_ROOT/board.html"
 DEFAULT_HTML_OUT="$(git -C "$REPO" rev-parse --show-toplevel)/.scratch/maintainer-board/index.html"
-STANDALONE_SCRIPT="$TMPDIR_ROOT/standalone/maintainer-board.py"
+STANDALONE_SCRIPT="$TMPDIR_ROOT/standalone/skills/in-progress/maintainer-board/scripts/maintainer-board.py"
 
 python3 "$BOARD_SCRIPT" --repo "$REPO" --json >"$JSON_OUT"
 python3 "$BOARD_SCRIPT" --repo "$REPO" --html "$HTML_OUT" >"$TMPDIR_ROOT/html-path.txt"
 DEFAULT_STDOUT="$(cd "$REPO" && python3 "$BOARD_SCRIPT")"
 mkdir -p "$(dirname "$STANDALONE_SCRIPT")"
 cp "$BOARD_SCRIPT" "$STANDALONE_SCRIPT"
-mkdir -p "$(dirname "$STANDALONE_SCRIPT")/solve-records/scripts"
-cp "$REPO_ROOT/skills/engineering/solve-records/scripts/solve-records.py" \
-  "$(dirname "$STANDALONE_SCRIPT")/solve-records/scripts/solve-records.py"
-mkdir -p "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts"
-cp "$LOCAL_PUBLICATION_SCRIPT" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts/local_ticket_publication.py"
-cp "$(dirname "$LOCAL_PUBLICATION_SCRIPT")/tracker_contract.py" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts/tracker_contract.py"
-cp "$(dirname "$LOCAL_PUBLICATION_SCRIPT")/local_ticket_surface.py" "$(dirname "$STANDALONE_SCRIPT")/skills/engineering/ultra/scripts/local_ticket_surface.py"
+mkdir -p "$TMPDIR_ROOT/standalone/skills/engineering/solve-records/scripts" "$TMPDIR_ROOT/standalone/skills/engineering/ultra/scripts"
+cp "$REPO_ROOT/skills/engineering/solve-records/scripts/solve-records.py" "$TMPDIR_ROOT/standalone/skills/engineering/solve-records/scripts/"
+cp "$REPO_ROOT/skills/engineering/ultra/scripts/"*.py "$TMPDIR_ROOT/standalone/skills/engineering/ultra/scripts/"
 python3 "$STANDALONE_SCRIPT" --repo "$REPO" --json >"$TMPDIR_ROOT/standalone-board.json"
 
 if [[ "$DEFAULT_STDOUT" != "$DEFAULT_HTML_OUT" ]]; then
@@ -635,7 +647,7 @@ assert "Execution Digest: Must not be discovered" not in {
 }
 
 ready = data["issues"]["buckets"]["ready_for_agent"]
-assert {issue["metadata_format"] for issue in ready} == {"header", "frontmatter", "tickets-file-section"}
+assert {issue["metadata_format"] for issue in ready} == {"header", "frontmatter"}
 repaired = next(issue for issue in ready if issue["ticket_id"] == "TF-1")
 assert repaired["publication_digest"]
 assert repaired["publication_original_digest"]
@@ -795,6 +807,7 @@ mkdir -p "$CONFIGURED_FILE_REPO/docs/agents" "$CONFIGURED_FILE_REPO/.tracker/tic
 cat >"$CONFIGURED_FILE_REPO/docs/agents/ultra-tracker.md" <<'EOF'
 # Ultra Tracker Extension
 
+Frontier adapter: bundled-local-markdown-v1
 Publication strategy: local-review-pending
 Local Ticket representation: file-per-ticket
 Local Ticket path: .tracker/tickets/<ticket-file>.md
@@ -803,11 +816,16 @@ Ticket ID field aliases: Ticket ID, ID
 Publication Run field aliases: Publication Run
 Source field aliases: Source Spec, Parent
 Ticket state fields: Status, State
-Ticket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info
+Ticket state values: review-pending, ready-for-agent, completed, ready-for-human, needs-info, needs-triage, wontfix
 Ready state: ready-for-agent
 Completed state: completed
 Human-blocked states: ready-for-human, needs-info
 Blocker metadata fields: Blocked By, Blockers
+Blocker body heading: Blocked by
+Claim field: Flags
+Claim value: solve-in-progress
+Solve branch field: Solve Branch
+Solve worktree field: Solve Worktree
 Claim field aliases: Flags, Labels
 Solve branch field aliases: Solve Branch, Branch
 Solve worktree field aliases: Solve Worktree, Worktree
@@ -860,17 +878,14 @@ PY
 
 # A malformed terminal-repair audit is projected through the existing
 # publication-attention lane even when the Ticket is completed.
-python3 - "$REPO/.scratch/feature-a/tickets.md" <<'PY'
+python3 - "$REPO/.scratch/feature-tf/issues/TF-1.md" <<'PY'
 from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
-start = text.index("<!-- ultra-ticket:begin id=TF-1 -->")
-end = text.index("<!-- ultra-ticket:end -->", start)
-section = text[start:end].replace("Status: ready-for-agent", "Status: completed", 1)
-path.write_text(text[:start] + section + text[end:], encoding="utf-8")
+path.write_text(text.replace("Status: ready-for-agent", "Status: completed", 1), encoding="utf-8")
 PY
-python3 - "$REPO/.scratch/feature-a/.ultra-publications/tickets-file-run.json" <<'PY'
+python3 - "$REPO/.scratch/feature-tf/issues/.ultra-publications/tickets-file-run.json" <<'PY'
 import json, sys
 from pathlib import Path
 path = Path(sys.argv[1])

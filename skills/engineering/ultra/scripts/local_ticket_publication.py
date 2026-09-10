@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 import tempfile
 from datetime import datetime, timezone
 
@@ -693,15 +694,52 @@ def write_journal(path: Path, data: dict) -> None:
 
 
 @contextmanager
-def mutation_lock(location: Path, representation: str):
-    lock = journal_dir(location, representation) / ".adapter.lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    with lock.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+def control_lock(lock: Path, timeout: float | None = None, readonly: bool = False):
+    """Use the persistent owner lock; observers never create coordination artifacts."""
+    if not readonly:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        handle = lock.open("r" if readonly else "a+", encoding="utf-8")
+    except FileNotFoundError:
+        if not readonly:
+            raise
+        yield (lock, None)
+        return
+    with handle:
+        mode = fcntl.LOCK_SH if readonly else fcntl.LOCK_EX
+        if timeout is None:
+            fcntl.flock(handle.fileno(), mode)
+        else:
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), mode | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise AdapterError("observation lock timeout")
+                    time.sleep(0.01)
         try:
-            yield
+            stat = os.fstat(handle.fileno())
+            yield (lock, (stat.st_dev, stat.st_ino))
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def lock_unchanged(observation):
+    lock, identity = observation
+    try:
+        stat = lock.stat()
+    except FileNotFoundError:
+        return identity is None
+    return identity == (stat.st_dev, stat.st_ino)
+
+
+@contextmanager
+def mutation_lock(location: Path, representation: str, timeout: float | None = None, readonly: bool = False):
+    lock = journal_dir(location, representation) / ".adapter.lock"
+    with control_lock(lock, timeout, readonly) as observation:
+        yield observation
 
 
 @contextmanager

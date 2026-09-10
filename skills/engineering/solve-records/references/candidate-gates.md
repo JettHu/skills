@@ -58,7 +58,7 @@ action; release smoke and rollback are later-boundary evidence.
 
 ## 3. Merge, ship, or land
 
-Treat merge, ship, and land as the same explicit candidate operation. Process
+Resolve authorization and the target under [the solve landing authorization rule](../../ultra/solve.md#9-auto-merge-solve-records-if-requested). Process
 an approved bounded set one candidate at a time in dependency order.
 
 Use merge-gate for a fact index, then independently live-verify. Construct a

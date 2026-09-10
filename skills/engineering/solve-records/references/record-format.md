@@ -196,7 +196,7 @@ Status: passed | unavailable | stale
 
 ## Review
 Requirement-to-evidence audit: passed
-- Evidence summary: <concise strongest scope-matched current evidence across the full Ticket and approved source Spec>
+- Evidence summary: <concise strongest scope-matched current evidence across all assigned Ticket deliverables and applicable source constraints>
 Post-Execution Review: passed
 - <integrated-candidate review outcome>
 
