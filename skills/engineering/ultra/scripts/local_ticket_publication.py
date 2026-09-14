@@ -256,7 +256,7 @@ def replace_heading_blocker(text: str, heading: str, old: str, new: str) -> str:
                 continue
         if not collecting or not re.match(r"^\s*-\s+", line):
             continue
-        prefix, value = re.match(r"^(\s*-\s+)(.*?)(\r?\n)?$", line).groups()
+        prefix, value, _ = re.match(r"^(\s*-\s+)(.*?)(\r?\n)?$", line).groups()
         newline = line[len(prefix) + len(value) :]
         quoted = value.startswith("`") and value.endswith("`")
         comparable = value[1:-1].strip() if quoted else value.strip()
