@@ -863,25 +863,29 @@ def worktree_clean_check(repo, record):
 
 
 def diff_paths(repo, before, after):
-    result = run_git(repo, "diff", "--name-only", f"{before}..{after}", check=False)
+    # Disable rename collapsing so both the removed and added paths are checked.
+    result = run_git(repo, "diff", "--no-renames", "--name-only", "-z", f"{before}..{after}", check=False)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "git diff failed")
-    return sorted(path for path in set(result.stdout.splitlines()) if path)
+    return sorted(set(filter(None, result.stdout.split("\0"))))
 
 
 def status_paths(repo):
-    result = run_git(repo, "status", "--porcelain=v1", "--untracked-files=all", check=False)
+    result = run_git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all", check=False)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "git status failed")
 
     dirty = []
     untracked = []
-    for line in result.stdout.splitlines():
-        if not line:
+    entries = iter(result.stdout.split("\0"))
+    for entry in entries:
+        if not entry:
             continue
-        status = line[:2]
-        raw_path = line[3:]
-        paths = raw_path.split(" -> ") if " -> " in raw_path else [raw_path]
+        status, path = entry[:2], entry[3:]
+        paths = [path]
+        # Porcelain -z emits the destination followed by the original name.
+        if "R" in status or "C" in status:
+            paths.append(next(entries))
         if status == "??":
             untracked.extend(paths)
         else:

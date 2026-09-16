@@ -238,6 +238,52 @@ class FinalizationTests(unittest.TestCase):
         self.assertFalse(self.call('landing-plan', '--target-repo', second['repo'], check=False)['ok'])
         self.assertEqual(git(second['repo'], 'rev-parse', 'main'), second['base_sha'])
 
+    def test_landing_plan_preserves_index_and_wip(self):
+        self.prepare()
+        (self.repo / 'app.txt').write_text('staged user change')
+        git(self.repo, 'add', 'app.txt')
+        (self.repo / 'app.txt').write_text('unstaged user change')
+        before = (git(self.repo, 'rev-parse', 'main'), git(self.repo, 'diff', '--cached'),
+                  git(self.repo, 'diff'), git(self.repo, 'stash', 'list'))
+        result = json.loads(run(sys.executable, HELPER, 'landing-plan', '--repo', self.repo,
+                                '--record', self.record.relative_to(self.repo), '--json', check=False).stdout)
+        self.assertEqual(result['status'], 'blocked')
+        self.assertEqual(result['dirty_overlap_paths'], ['app.txt'])
+        self.assertEqual(before, (git(self.repo, 'rev-parse', 'main'), git(self.repo, 'diff', '--cached'),
+                                 git(self.repo, 'diff'), git(self.repo, 'stash', 'list')))
+
+    def test_disjoint_wip_survives_landing(self):
+        self.prepare()
+        (self.repo / 'notes.txt').write_text('private notes')
+        self.assertEqual(self.call('landing-plan')['data']['status'], 'ready')
+        self.land()
+        self.assertEqual((self.repo / 'notes.txt').read_text(), 'private notes')
+
+    def test_untracked_directory_collision_and_rename_source(self):
+        # Real filenames containing tabs and non-ASCII must not be Git-quoted
+        # into a different path; rename sources are part of the write surface.
+        wt = Path(self.member['worktree'])
+        name = '目录\told.txt'
+        (self.repo / name).write_text('original')
+        git(self.repo, 'add', name)
+        git(self.repo, 'commit', '-qm', 'baseline filename')
+        git(wt, 'merge', '--no-edit', 'main')
+        git(wt, 'mv', name, 'renamed.txt')
+        (wt / 'new-directory').write_text('candidate file')
+        git(wt, 'add', '.')
+        git(wt, 'commit', '-qm', 'rename and file')
+        self.record.write_text(self.record.read_text().replace(self.member['head_sha'], git(wt, 'rev-parse', 'HEAD'))
+                               .replace(self.member['base_sha'], git(self.repo, 'rev-parse', 'HEAD')))
+        (self.repo / name).write_text('user WIP')
+        (self.repo / 'new-directory').mkdir()
+        (self.repo / 'new-directory' / 'notes.txt').write_text('untracked WIP')
+        result = json.loads(run(sys.executable, HELPER, 'landing-plan', '--repo', self.repo,
+                                '--record', self.record.relative_to(self.repo), '--json', check=False).stdout)
+        self.assertEqual(result['status'], 'blocked')
+        self.assertIn(name, result['dirty_overlap_paths'])
+        self.assertIn('new-directory/notes.txt', result['untracked_overlap_paths'])
+        self.assertEqual((self.repo / name).read_text(), 'user WIP')
+
     def test_disposable_landing_resources_are_in_cleanup_scope(self):
         (self.repo / 'independent.txt').write_text('target advancement')
         git(self.repo, 'add', 'independent.txt')

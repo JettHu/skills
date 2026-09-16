@@ -33,6 +33,8 @@ jobs:
         run: bash tests/ultra-solve-eval-harness.sh
       - name: Test candidate finalization
         run: python3 tests/candidate-finalization.py
+      - name: Test landing WIP eval grader
+        run: python3 tests/landing-wip-eval.py
       - name: Test Maintainer Board
         run: bash tests/maintainer-board.sh
       - name: Test Obsidian workspace

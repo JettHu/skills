@@ -460,6 +460,8 @@ Suggested names:
 - integration branch: `solve/<timestamp>-integration`
 - integration worktree: `worktree-solve-<timestamp>-integration`
 
+Before integration writes, verify the assigned worktree role, resource ownership, exclusive writer and provenance of existing changes under [WIP protection](../solve-records/references/candidate-gates.md#wip-protection-and-delegated-landing). Unknown changes block mutation even in disposable worktrees.
+
 Merge or cherry-pick committed, locally validated group branches into integration in dependency order. Each group worktree must be clean before integration starts. For a declared shared-integration sequence, continue from its named shared branch in declared graph order; the final integrate-and-verify Ticket reopens that branch only after contract is completed and runs the full integration validation there.
 
 - Mechanical conflicts: the coordinator may resolve them.
@@ -610,7 +612,7 @@ All record merge gates must pass:
 
 The landing gate constructs `landing_sha` before touching the user's base worktree. Fast-forward candidates use head as `landing_sha`; non-fast-forward candidates and mechanical conflicts must be merged or resolved in a disposable worktree or equivalent throwaway environment. Semantic conflict resolution still stops as `manual required`.
 
-After `landing_sha` exists, the base worktree may only advance with `git merge --ff-only <landing_sha>` or an equivalent ref-safe fast-forward. Dirty or untracked base paths are allowed only when the final landing write surface is proven disjoint from those paths. `/ultra solve --auto-merge` must not fetch, push, deploy, broaden selected Tickets, or silently merge dependencies.
+After `landing_sha` exists, the base worktree may only advance with `git merge --ff-only <landing_sha>` or an equivalent ref-safe fast-forward. Apply [WIP protection and delegated landing](../solve-records/references/candidate-gates.md#wip-protection-and-delegated-landing) immediately before target mutation, including its self-contained assignment, scoped authorization and executor return evidence. Dirty or untracked base paths are allowed only when the final landing write surface is proven disjoint from those paths. `/ultra solve --auto-merge` must not fetch, push, deploy, broaden selected Tickets, or silently merge dependencies.
 
 Before advancing any target, follow [candidate finalization](../solve-records/references/finalization.md) to prepare the complete selected repository and resource scope through the Tracker Facade. After Git succeeds, use that same `finalization-record --phase reconcile` writer to record verified landing facts in the original receipt, then attempt authorized safe cleanup and reconcile again. Only all-repository landing sets `state: merged`; partial success stays open with per-repository facts and recovery actions. `merged_sha` identifies the primary landed commit and `merged_at` records verified completion, never candidate time. If cleanup fails after the merge, do not roll back the code merge; keep the record merged with `cleanup_done: false` and report cleanup blockers.
 

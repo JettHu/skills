@@ -2,6 +2,8 @@
 
 Read this only after the Outcome gate selected outcome: candidate and the user
 requested acceptance review, merge, ship, land, close, or candidate cleanup.
+Before integration writes, also read the WIP protection subsection below; that
+subsection applies before a candidate receipt exists.
 The record contract itself lives in [record-format.md](record-format.md);
 recovery actions live in [edge-cases.md](edge-cases.md).
 
@@ -84,10 +86,52 @@ landing facts on the original receipt. Cross-repository partial success remains
 open until every selected target is verified landed. A blocked candidate remains open with its actionable
 reason and resources intact.
 
-If the base checkout contains dirty or untracked paths overlapping the
-candidate's final write surface, report the exact paths and stop. Do not
-stash, reapply, overwrite, reset, or otherwise decide how to preserve user
-worktree changes automatically.
+### WIP protection and delegated landing
+
+This gate binds the root and every delegated executor before changing a target
+worktree, index, or Git ref. A landing plan is read-only evidence, not a write
+permit. Keep one active writer per target through the final check and operation.
+
+Classify the exact registered worktree first: user base (including adopted
+worktrees), solve-owned execution, or disposable integration/landing. User bases
+protect all existing tracked and untracked WIP. For execution and disposable
+worktrees, verify resource ownership, writer handoff and provenance of existing
+changes; unknown changes block mutation even in a disposable worktree. Conflicts
+between known committed candidates follow the existing integration rules; they
+are not user WIP and do not authorize discarding unknown changes.
+
+Immediately before mutation, rerun landing-plan against the final validated
+landing SHA and exact target. Compare the live base/head, registered checkout,
+final write surface (including rename sources, destinations and directory/file
+collisions), staged/unstaged paths and untracked paths with the handoff evidence.
+Revalidate any drift, including new WIP after planning or a changed landing
+commit; a prior ready result cannot authorize the new state. If another writer
+can still change the target, stop until exclusive ownership is established.
+
+An overlap without applicable disposition authorization blocks that target:
+leave its contents, index and ref unchanged, report exact paths and the needed
+path-specific decision. Do not automatically stash, overwrite, partially restore,
+or declare user changes obsolete. General merge/cleanup permission is not WIP
+disposition permission. Reuse an existing explicit authorization only for its
+named paths, disposition method and still-valid conditions; do not ask again
+when those match. Perform only that authorized disposition, then rerun the live
+gate before landing. Authorization does not turn a blocked plan into ready.
+Disjoint WIP stays intact while otherwise eligible landing proceeds.
+
+A delegated landing assignment must be self-contained and carry:
+
+- exact repository/common-dir, registered target worktree, role, branch and SHAs;
+- validated landing SHA and allowed final write surface;
+- protected tracked/untracked paths and observed overlap, with live-check evidence;
+- existing merge and path/method-specific WIP authorizations, or their absence;
+- exclusive writer, handoff boundary, required immediate recheck and stop rule.
+
+The executor returns actual before/after refs, check evidence, preserved paths,
+and landed/blocked disposition per target. The root verifies those facts before
+reconciliation; a delegated summary cannot waive this gate. For multiple repos,
+retain completed targets and blocked targets separately on the original receipt
+through finalization reconciliation. Report partial success as partial; never
+roll back a successful target or claim overall completion to hide a WIP blocker.
 
 ## 4. Candidate close and cleanup
 
