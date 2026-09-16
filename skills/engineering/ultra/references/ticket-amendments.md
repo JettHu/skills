@@ -78,7 +78,7 @@ A previously completed Ticket retains its historical completion in the amendment
 and its existing receipts. The same canonical Ticket owns the new unfinished
 work; it must enter a new Claim/Attempt. Existing candidate resources and
 receipts remain unchanged. A candidate made under the new contract records the
-adapter-derived `contract_revisions` in its immutable handoff binding. Old or
+adapter-derived `contract_revisions` (stable Ticket ID to amendment ID) in its immutable handoff binding. Old or
 legacy candidate evidence cannot satisfy the new contract. Candidate refresh
 and late gate enrichment cannot silently rebind that evidence.
 
@@ -107,5 +107,7 @@ A failed publication check returns no effective text and makes
 `contract.completed` false. It is an unresolved contract, even if raw metadata
 still says completed. Re-read after repair; never select a convenient draft or
 old receipt as current truth. Snapshot fingerprints include amendment files.
+A receipt association that cannot resolve to exactly one Ticket blocks acceptance;
+shared `tickets-file` paths are not a substitute for exact section identity.
 Candidate acceptance also uses the current `merge-gate`; a digest/chain conflict
 or revision mismatch blocks readiness and requires current-contract work.

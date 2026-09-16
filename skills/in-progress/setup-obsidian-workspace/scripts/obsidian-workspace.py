@@ -49,7 +49,7 @@ def load_query():
     try:
         module = importlib.import_module('tracker_snapshot')
         if (module.SCHEMA != 'tracker-snapshot/v1'
-                or module.SEMANTIC_VERSION != 'tracker-snapshot-semantics/v2'
+                or module.SEMANTIC_VERSION not in {'tracker-snapshot-semantics/v2', 'tracker-snapshot-semantics/v3'}
                 or not all(callable(getattr(module, name, None))
                            for name in ('snapshot', 'normalize_selection', 'records_helper'))):
             raise RuntimeError('Unsupported Tracker Snapshot contract; install compatible ultra')

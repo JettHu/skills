@@ -92,7 +92,7 @@ def validate(repo, tickets, journal, recovering=None):
             raise pub.AdapterError('amendment conflict: approved file digest changed')
         item = read_json(path)
         required = {'schema', 'id', 'ticket', 'status', 'approval', 'predecessor', 'replaces',
-                    'original_text', 'effective_text', 'old_digest', 'new_digest', 'previous_status', 'execution_ticket'}
+                    'original_text', 'effective_text', 'old_digest', 'new_digest', 'previous_status', 'previously_completed', 'execution_ticket'}
         if not isinstance(item, dict) or not required.issubset(item):
             raise pub.AdapterError('amendment conflict: malformed approved file')
         chain = chains.setdefault(item['ticket'], [])
@@ -101,7 +101,7 @@ def validate(repo, tickets, journal, recovering=None):
                 item['id'] in identities or item['predecessor'] != previous or
                 item['ticket'] != audit['ticket_id'] or item['id'] != audit.get('amendment_id') or
                 item['old_digest'] != audit['old_digest'] or item['new_digest'] != audit['new_digest'] or
-                item['execution_ticket'] != item['ticket']):
+                item['execution_ticket'] != item['ticket'] or type(item['previously_completed']) is not bool):
             raise pub.AdapterError('amendment conflict: fork, cycle, broken chain or unapproved member')
         identities.add(item['id'])
         chain.append(item)
@@ -112,20 +112,27 @@ def validate(repo, tickets, journal, recovering=None):
     return chains
 
 
-def facts(repo, ticket, journal):
-    chain = validate(repo, [ticket], journal).get(ticket.ticket_id, [])
+def facts(repo, tickets, journal):
+    chains = validate(repo, tickets, journal)
     directory = pub.journal_dir(safe_path(repo, journal['location']), journal['representation']) / 'amendments' / journal['run_id']
-    drafts = []
+    drafts = {}
     for path in sorted(directory.glob('*.json')):
         item = read_json(path)
-        if item.get('status') == 'draft' and item.get('ticket') == ticket.ticket_id:
-            drafts.append(dict(id=item.get('id'), path=str(path.relative_to(repo)), status='draft'))
+        if item.get('status') == 'draft' and isinstance(item.get('ticket'), str):
+            drafts.setdefault(item.get('ticket'), []).append(
+                dict(id=item.get('id'), path=str(path.relative_to(repo)), status='draft'))
     paths = {a['amendment_id']: a['path'] for a in journal.get('amendments', [])}
-    return dict(head=chain[-1]['id'] if chain else None, drafts=drafts,
-                chain=[dict(id=a['id'], path=paths[a['id']], predecessor=a['predecessor'], status='effective' if a is chain[-1] else 'superseded',
-                            approval=a['approval'], replaces=list(a['replaces'])) for a in chain],
-                historical_completion=any(a['previous_status'] == 'completed' for a in chain),
-                execution_ticket=ticket.ticket_id)
+    result = {}
+    for ticket in tickets:
+        chain = chains.get(ticket.ticket_id, [])
+        result[ticket.ticket_id] = dict(head=chain[-1]['id'] if chain else None,
+            drafts=drafts.get(ticket.ticket_id, []),
+            chain=[dict(id=a['id'], path=paths[a['id']], predecessor=a['predecessor'],
+                        status='effective' if a is chain[-1] else 'superseded',
+                        approval=a['approval'], replaces=list(a['replaces'])) for a in chain],
+            historical_completion=any(a['previously_completed'] for a in chain),
+            execution_ticket=ticket.ticket_id)
+    return result
 
 
 def apply(repo, representation, raw_location, run_id, ticket_id, expected_digest, request_path):
@@ -212,7 +219,7 @@ def apply(repo, representation, raw_location, run_id, ticket_id, expected_digest
                 raise pub.AdapterError('amendment conflict: Ticket drift during retry')
         item = dict(request, schema=SCHEMA, original_text=original, effective_text=changed,
                     old_digest=expected_digest, new_digest=desired.body_digest,
-                    previous_status=old.status, execution_ticket=ticket_id)
+                    previous_status=old.status, previously_completed=old.status == frontier_contract.completed_state, execution_ticket=ticket_id)
         encoded = json.dumps(item, indent=2, sort_keys=True) + '\n'
         if pending and path.read_text() != encoded:
             raise pub.AdapterError('amendment conflict: pending file does not match derived contract')
@@ -241,7 +248,7 @@ def current_revisions(repo, tickets):
         if not ticket.publication_ready:
             raise pub.AdapterError(f'contract amendment/publication is not verified: {ticket.identity}')
         if ticket.amendment and ticket.amendment['head']:
-            revisions[ticket.path.relative_to(repo).as_posix()] = ticket.amendment['head']
+            revisions[ticket.identity] = ticket.amendment['head']
     return revisions
 
 
@@ -260,17 +267,30 @@ def receipt_revisions(text):
 
 def candidate_reason(repo, record):
     """Old receipts remain history; only a new Attempt binds the revised contract."""
-    if not (repo / pub.CONTRACT).is_file():
-        return ''
     import local_ticket_frontier as frontier
     try:
+        saved = receipt_revisions((repo / record['path']).read_text())
+        if not (repo / pub.CONTRACT).is_file():
+            # Preserve legacy unconfigured receipts, but never lose a known revision gate.
+            amended = bool(saved)
+            for reference in record.get('tickets', record.get('issues', [])):
+                source = repo / reference
+                if source.is_file() and re.search(r'^Contract Amendment:', source.read_text(), re.M):
+                    amended = True
+            return 'contract amendment verification unavailable: tracker contract missing' if amended else ''
         contract, _ = frontier.read_contract(repo)
         tickets = frontier.load_tickets(repo, contract)
         aliases = {a: t for t in tickets for a in t.aliases}
-        linked = [aliases.get(ref) for ref in record.get('tickets', record.get('issues', []))]
-        selected = [t for t in linked if t is not None]
+        selected = []
+        membership = record.get('tickets', record.get('issues', []))
+        if not membership:
+            return 'contract amendment verification unavailable: receipt has no Ticket membership'
+        for ref in membership:
+            matches = [aliases[ref]] if ref in aliases else [t for t in tickets if t.path.relative_to(repo).as_posix() == ref]
+            if len(matches) != 1:
+                return f'contract amendment verification unavailable: unresolved or ambiguous Ticket association {ref}'
+            selected.extend(matches)
         revisions = current_revisions(repo, selected)
-        saved = receipt_revisions((repo / record['path']).read_text())
         if revisions != saved:
             return 'contract amendment invalidates old candidate evidence; execute the current Ticket contract in a new Attempt'
     except (pub.AdapterError, frontier.FrontierError, OSError, ValueError) as error:

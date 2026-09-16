@@ -520,7 +520,7 @@ def apply_publication_gates(repo: Path, tickets: list[Ticket], contract: Frontie
             )
             selected = publication.run_tickets(published, run_id)
             import ticket_amendments
-            amendments = {item.ticket_id: ticket_amendments.facts(repo, item, journal) for item in selected}
+            amendments = ticket_amendments.facts(repo, selected, journal)
             current_digests = publication.current_publication_snapshot(journal)
             original_digests = dict(journal.get("body_digests", {}))
             for audit in publication.repair_audits(journal):

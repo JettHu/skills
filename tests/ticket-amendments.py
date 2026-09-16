@@ -96,6 +96,9 @@ class Amendments(unittest.TestCase):
         self.assertFalse(current['contract']['completed'])
         gate = self.cli('solve-record', 'merge-gate', '--record', '.scratch/solve-records/old.md', ok=False)
         self.assertIn('contract amendment', json.dumps(gate))
+        (self.repo / 'docs/agents/ultra-tracker.md').unlink()
+        gate = self.cli('solve-record', 'merge-gate', '--record', '.scratch/solve-records/old.md', ok=False)
+        self.assertIn('contract amendment', json.dumps(gate))
 
     def test_draft_is_visible_but_not_effective_and_can_be_approved(self):
         draft = json.loads(self.request().read_text())
@@ -106,6 +109,10 @@ class Amendments(unittest.TestCase):
         self.assertTrue(current['eligibility']['claimable'])
         self.assertEqual(current['contract']['amendment']['drafts'][0]['id'], 'A1')
         self.assertIn('Allow deletion without references.', current['contract']['effective_text'])
+        malformed = dict(draft, ticket=[])
+        fixtures.write(self.repo, '.scratch/feature/issues/.ultra-publications/amendments/run/UNASSOCIATED.json', json.dumps(malformed))
+        self.assertTrue(self.observed()['eligibility']['claimable'])
+        self.assertIn('T', self.cli('ticket', 'frontier')['claimable'])
         self.apply(self.request())
         self.assertEqual(self.observed()['contract']['amendment']['head'], 'A1')
 
@@ -198,6 +205,11 @@ class Amendments(unittest.TestCase):
         self.assertEqual(path.read_text().split('<!-- ultra-ticket:begin id=D -->')[1], before)
         self.assertEqual(self.observed()['contract']['amendment']['head'], 'A1')
         self.assertFalse(self.observed()['eligibility']['claimable'])
+        fixtures.write(self.repo, '.scratch/solve-records/sections.md',
+            '---\nstate: open\noutcome: candidate\ntickets:\n  - .scratch/feature/tickets.md\nhead: main\nhead_sha: ' +
+            'a' * 40 + '\n---\n\n## Summary\nOld section candidate.\n')
+        gate = self.cli('solve-record', 'merge-gate', '--record', '.scratch/solve-records/sections.md', ok=False)
+        self.assertIn('ambiguous Ticket association', json.dumps(gate))
 
     def test_integrity_repair_and_amendment_preserve_ordered_publication_history(self):
         self.pub('terminal-repair', '--ticket-id', 'T', '--expected-digest', self.observed()['publication']['current_digest'],
@@ -210,6 +222,14 @@ class Amendments(unittest.TestCase):
         self.pub('terminal-repair', '--ticket-id', 'T', '--expected-digest', self.observed()['publication']['current_digest'],
                  '--repair-type', 'ticket-identity', '--old-value', 'T', '--new-value', 'RENAMED', '--reason', 'Cannot erase history', ok=False)
         self.assertEqual(self.ticket.read_bytes(), before)
+
+    def test_historical_completion_uses_configured_completed_state(self):
+        contract = self.repo / 'docs/agents/ultra-tracker.md'
+        contract.write_text(contract.read_text().replace('completed', 'done'))
+        self.ticket.write_text(self.ticket.read_text().replace('Status: ready-for-agent', 'Status: done'))
+        self.assertTrue(self.observed()['contract']['completed'])
+        self.apply(self.request())
+        self.assertTrue(self.observed()['contract']['amendment']['historical_completion'])
 
 
 if __name__ == '__main__':

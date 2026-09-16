@@ -256,6 +256,9 @@ def observe_additional_resource(helper, repo, member, extra, landed):
 
 
 def landing_plan(helper, repo, record, landing_sha=None, target_repo=None):
+    amendment_reason = helper.amendment_gate_reason(repo, record)
+    if amendment_reason:
+        return dict(status='blocked', reasons=[amendment_reason])
     data = read(helper, record)
     target = str(Path(target_repo).resolve()) if target_repo else str(repo)
     matches = [m for m in data['binding']['repositories'] if m['repo'] == target]
@@ -269,7 +272,7 @@ def landing_plan(helper, repo, record, landing_sha=None, target_repo=None):
         return dict(status='blocked', reasons=['prepared landing already completed; reconcile, never merge again'])
     if observed.get('evidence_conflict'):
         return dict(status='blocked', reasons=observed['blockers'])
-    projected = dict(member['gate_record'], state='open', outcome='candidate', path=record['path'],
+    projected = dict(member['gate_record'], state='open', outcome='candidate', path=record['path'], tickets=record.get('tickets', []),
                      **{key: member[key] for key in ('base', 'base_sha', 'head', 'head_sha', 'worktree')})
     return helper.landing_plan(Path(target), projected, member['landing_sha'])
 

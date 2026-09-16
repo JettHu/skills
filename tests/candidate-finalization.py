@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Public facade/Git integration fixtures for canonical candidate finalization."""
 import json
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -86,6 +87,30 @@ class FinalizationTests(unittest.TestCase):
 
     def reconcile(self, **kwargs):
         return self.call('finalization-record', '--phase', 'reconcile', **kwargs)
+
+    def test_prepared_landing_blocks_new_ticket_contract(self):
+        spec = importlib.util.spec_from_file_location('snapshot_fixtures', ROOT / 'tests/tracker-snapshot.py')
+        fixtures = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fixtures)
+        contract = fixtures.CONTRACT.replace('.tracker/tickets/', '.scratch/feature/issues/')
+        fixtures.write(self.repo, 'docs/agents/ultra-tracker.md', contract)
+        ticket = fixtures.write(self.repo, '.scratch/feature/issues/01.md', fixtures.ticket('T', 'review-pending',
+            'Publication Run: run\nSource Spec: spec.md', '## Acceptance criteria\n\n- [ ] Old criterion.'))
+        def publication(action, *args):
+            return json.loads(run(sys.executable, FACADE, 'publication', action, '--repo', self.repo,
+                '--location', '.scratch/feature/issues', '--run-id', 'run', *args).stdout)['data']
+        publication('register')
+        publication('promote')
+        ticket.write_text(ticket.read_text().replace('Status: ready-for-agent', 'Status: completed'))
+        self.prepare()
+        old_digest = publication('inspect')['body_digests']['T']
+        request = self.root / 'amend.json'
+        request.write_text(json.dumps(dict(id='A1', ticket='T', status='approved', approval='Approved scope change',
+            predecessor=None, replaces={'Acceptance criteria': '- [ ] New criterion.'})))
+        publication('amend', '--ticket-id', 'T', '--expected-digest', old_digest, '--amendment', str(request))
+        plan = self.call('landing-plan', check=False)
+        self.assertIn('contract amendment', json.dumps(plan))
+        self.assertFalse(plan['ok'])
 
     def land(self, member=None):
         m = member or self.member
