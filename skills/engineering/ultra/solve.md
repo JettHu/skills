@@ -281,7 +281,7 @@ The root Agent records, without requesting approval, only the selected preparati
 - exploration disposition when exploration is needed: `direct root exploration`, `narrow root exploration`, `adaptive read-only subagent fan-out`, `exploration by assigned implementation subagent`, or `conditional external research`
 - implementation disposition: `direct root implementation`, `one bounded implementation subagent`, or `objective root implementation fallback`, with current evidence for every required predicate or fallback
 - bounded analysis, verification, or independent-review dispositions only when those stages are enabled
-- validation plan: commands, manual evidence, check-run links, or why no meaningful automated check exists
+- validation plan: discover the project validation entrypoint through project guidance (such as `AGENTS.md` or the README) and its linked docs/scripts; cite its path and applicable environment, prerequisites, commands, coverage, and versioned or conditional baselines. Prefer existing project scripts. If no entrypoint exists, infer meaningful checks from the project and continue without an initialization gate. Retain commands, manual evidence, check-run links, or the reason no meaningful automated check exists
 - Digest disposition: `none` or `digest-worthy`, using the conditional rule below
 
 #### Bounded Exploration
@@ -388,7 +388,7 @@ Every delegated implementation receives a self-contained stage assignment that n
 - exclusive write ownership and the explicit handoff boundary
 - relevant Execution Digest decisions and deviations
 - the bounded stage outcome and acceptance criteria
-- validation expectations and post-handoff revalidation requirements
+- validation expectations, the discovered project entrypoint path (or its absence), selected commands and coverage, environment prerequisites and applicable baseline conditions, and post-handoff revalidation requirements
 
 The assignment must be sufficient without inherited conversation history. Inherited history is advisory and never supplies missing requirements, constraints, ownership, acceptance criteria, or validation obligations. The implementation subagent must run and report this same Pre-Execute Gate before editing. If the assigned worktree cannot be verified, use the recorded objective root fallback; do not relax the gate or silently redirect the subagent.
 
@@ -472,7 +472,7 @@ The integration stage exists to catch hidden coupling between parallel work: sha
 
 ### 8. Final Validate
 
-Follow and revalidate the Checkpoint's verification disposition, then run the repo-appropriate validation commands in the integration worktree. The root owns the final validation conclusion even when a bounded verification pass is delegated. Prefer the project's documented commands; otherwise use the narrowest meaningful test/build/lint set first and expand when risk requires it.
+Follow and revalidate the Checkpoint's verification disposition, then run the repo-appropriate validation commands in the integration worktree. The root owns the final validation conclusion even when a bounded verification pass is delegated. Use the entrypoint selected in the validation plan when present; otherwise use the narrowest meaningful test/build/lint set first and expand when risk requires it. Recheck its environment and baseline applicability against the current candidate. Rerun affected checks when code, environment, or validation scope changes: reusable environment knowledge does not make stale results current, and a known failure is not a permanent exemption. Keep project-specific setup and reusable helpers in the project's docs or scripts, discoverable from project guidance; report actual coverage and unavailable checks without presenting a targeted check as a full build.
 
 Final Validate proves executable validation facts: the required commands/checks, integration result, clean committed candidate, and current evidence status. It does not redo Group Review's local Spec/Standards comparison or decide whether the Ticket was well-shaped.
 
