@@ -611,7 +611,7 @@ DEFAULT_STDOUT="$(cd "$REPO" && python3 "$BOARD_SCRIPT")"
 mkdir -p "$(dirname "$STANDALONE_SCRIPT")"
 cp "$BOARD_SCRIPT" "$STANDALONE_SCRIPT"
 mkdir -p "$TMPDIR_ROOT/standalone/skills/engineering/solve-records/scripts" "$TMPDIR_ROOT/standalone/skills/engineering/ultra/scripts"
-cp "$REPO_ROOT/skills/engineering/solve-records/scripts/solve-records.py" "$TMPDIR_ROOT/standalone/skills/engineering/solve-records/scripts/"
+cp "$REPO_ROOT/skills/engineering/solve-records/scripts/"*.py "$TMPDIR_ROOT/standalone/skills/engineering/solve-records/scripts/"
 cp "$REPO_ROOT/skills/engineering/ultra/scripts/"*.py "$TMPDIR_ROOT/standalone/skills/engineering/ultra/scripts/"
 python3 "$STANDALONE_SCRIPT" --repo "$REPO" --json >"$TMPDIR_ROOT/standalone-board.json"
 

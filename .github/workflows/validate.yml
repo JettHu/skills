@@ -31,6 +31,8 @@ jobs:
         run: bash tests/ultra-solve-context-routing.sh
       - name: Test Ultra solve eval harness
         run: bash tests/ultra-solve-eval-harness.sh
+      - name: Test candidate finalization
+        run: python3 tests/candidate-finalization.py
       - name: Test Maintainer Board
         run: bash tests/maintainer-board.sh
       - name: Test Obsidian workspace

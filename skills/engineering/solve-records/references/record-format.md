@@ -64,7 +64,7 @@ creation contract. A compact candidate may initially contain only its derived
 head identity; the acceptance/landing owner records the current base, base
 worktree, checks, review, merge, and rollout/config disposition in a
 `## Gate Evidence` section. The candidate-gate operation is the only writer
-for this enrichment and writes it atomically after live verification. The
+for this enrichment and writes it atomically after live verification.
 For `post-merge activation required`, it records one explicit `Activation`
 action. Merge readiness does not require a duplicate merge-safety rationale,
 smoke plan, or rollback plan; those belong to the activation/release owner.
@@ -305,3 +305,14 @@ adapter writes and verifies it; callers do not append or edit it themselves.
 
 If a Ticket has multiple records, use `### Solve Records` with one path-only
 bullet per receipt.
+
+## Landing and cleanup evidence
+
+The shared Tracker Facade finalization writer owns `## Finalization` and the
+existing terminal fields `state`, `merged_sha`, `merged_at`, and `cleanup_done`.
+Read [finalization.md](finalization.md) before authorized landing, cleanup, or
+interruption recovery. Its versioned JSON block freezes the complete selected
+repository/resource binding and keeps per-repository facts on this same receipt.
+It adds no lifecycle state, receipt identity, or Ticket transition. Old single-
+repository receipts remain readable; insufficient historical evidence is pending
+verification, not automatic migration or inferred cleanup.

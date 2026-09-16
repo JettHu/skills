@@ -273,19 +273,23 @@ def parse_args() -> argparse.Namespace:
     refresh.add_argument("--ticket-id", action="append", required=True, help="exact linked Ticket identity; repeatable")
     refresh.add_argument("--observed-head-sha", required=True, help="full SHA observed at the retained candidate worktree")
 
-    records = groups.add_parser("solve-record", help="read-only Attempt and Solve Record inspection and gates")
+    records = groups.add_parser("solve-record", help="Solve Record inspection, gates, and evidence-only finalization")
     record_actions = records.add_subparsers(
         dest="action", required=True, title="Solve Record operations", parser_class=FacadeArgumentParser
     )
-    for action in ("dashboard", "list", "select", "merge-gate", "landing-plan", "cleanup-plan"):
+    for action in ("dashboard", "list", "select", "merge-gate", "landing-plan", "cleanup-plan", "finalization-plan", "finalization-record"):
         child = record_actions.add_parser(action, help=f"delegate Solve Record {action}")
         child.add_argument("--repo", default=".")
         if action == "select":
             child.add_argument("--query", required=True)
-        if action in {"merge-gate", "landing-plan", "cleanup-plan"}:
+        if action in {"merge-gate", "landing-plan", "cleanup-plan", "finalization-plan", "finalization-record"}:
             child.add_argument("--record", required=True)
         if action == "landing-plan":
             child.add_argument("--landing-sha")
+            child.add_argument("--target-repo")
+        if action == "finalization-record":
+            child.add_argument("--phase", choices=("prepare", "reconcile"), required=True)
+            child.add_argument("--evidence")
     return parser.parse_args()
 
 
@@ -363,10 +367,16 @@ def main() -> int:
         delegated = [args.action, "--repo", str(repo), "--json"]
         if args.action == "select":
             delegated.extend(["--query", args.query])
-        if args.action in {"merge-gate", "landing-plan", "cleanup-plan"}:
+        if args.action in {"merge-gate", "landing-plan", "cleanup-plan", "finalization-plan", "finalization-record"}:
             delegated.extend(["--record", args.record])
         if args.action == "landing-plan" and args.landing_sha:
             delegated.extend(["--landing-sha", args.landing_sha])
+        if args.action == "landing-plan" and args.target_repo:
+            delegated.extend(["--target-repo", args.target_repo])
+        if args.action == "finalization-record":
+            delegated.extend(["--phase", args.phase])
+            if args.evidence:
+                delegated.extend(["--evidence", args.evidence])
         return delegate(operation, "solve-record", delegated)
     except FacadeError as exc:
         operation = locals().get("operation", "parse")

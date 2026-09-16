@@ -2,6 +2,8 @@
 """Read-only helpers for local outcome-aware Attempt Receipts."""
 
 import argparse
+import importlib.util
+from types import SimpleNamespace
 import json
 import os
 import subprocess
@@ -121,6 +123,14 @@ POST_EXECUTION_REVIEW_STATUSES = {
     "manual gate",
     "blocked",
 }
+
+
+def finalization_call(operation, *args):
+    path = Path(__file__).with_name("candidate_finalization.py")
+    spec = importlib.util.spec_from_file_location("candidate_finalization", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return getattr(module, operation)(SimpleNamespace(**globals()), *args)
 
 
 def run_git(cwd, *args, check=True):
@@ -646,6 +656,12 @@ def parse_record(repo, path):
         "cleanup_done",
     ):
         data.setdefault(optional, None)
+    try:
+        data["finalization"] = finalization_call("read", data) if has_section(text, "Finalization") else None
+        if data["finalization"] and data["state"] == "merged":
+            data["merge"] = "auto-merged"
+    except RuntimeError as exc:
+        data["malformed"] = str(exc)
     return data
 
 
@@ -994,6 +1010,8 @@ def candidate_worktree(repo, record):
 def candidate_gate_record(repo, record, base, checks, review, merge, rollout, activation):
     if record.get("malformed"):
         raise RuntimeError(record["malformed"])
+    if record.get("finalization"):
+        raise RuntimeError("prepared finalization freezes gate evidence; reconcile the selected scope")
     if record.get("outcome") != "candidate":
         raise RuntimeError("candidate gate evidence requires outcome: candidate")
     if record.get("state") != "open":
@@ -1063,6 +1081,8 @@ def merge_gate(repo, record):
 
     if record.get("malformed"):
         reasons.append(record["malformed"])
+    elif record.get("finalization"):
+        reasons.append("prepared finalization: use finalization-plan and reconcile; do not repeat completed merges")
     elif candidate_operation_refusal(record):
         reasons.append(candidate_operation_refusal(record))
     elif body_frontmatter_conflict(record):
@@ -1104,7 +1124,11 @@ def merge_gate(repo, record):
     }
 
 
-def landing_plan(repo, record, landing_sha=None):
+def landing_plan(repo, record, landing_sha=None, target_repo=None):
+    if record.get("finalization"):
+        return finalization_call("landing_plan", repo, record, landing_sha, target_repo)
+    if target_repo and Path(target_repo).resolve() != repo:
+        raise RuntimeError("target repository requires prepared scope")
     gate = merge_gate(repo, record)
     result = {
         "id": record.get("id"),
@@ -1264,6 +1288,8 @@ def cleanup_refusal(repo, record):
 
 
 def cleanup_plan(repo, record):
+    if record.get("finalization") and not record.get("malformed"):
+        return finalization_call("plan", record)
     if record.get("malformed"):
         return {
             "id": record.get("id"),
@@ -1339,6 +1365,7 @@ def record_summary(repo, record, include_merge_gate=False):
         "created_at": record.get("created_at"),
         "merged_at": record.get("merged_at"),
         "merged_sha": record.get("merged_sha"),
+        "finalization": record.get("finalization"),
         "base": record.get("base"),
         "head": record.get("head"),
         "issues": record.get("issues", []),
@@ -1456,6 +1483,10 @@ def dashboard(repo, records):
         if conflict:
             summary["stale_reason"] = conflict
             buckets["stale_or_malformed"].append(summary)
+            continue
+        if record.get("finalization") and record["state"] == "open":
+            summary["finalization_plan"] = finalization_call("plan", record)
+            buckets["manual"].append(summary)
             continue
         refs_ok, ref_reason = ref_check(repo, record)
         if not refs_ok and record["state"] == "open":
@@ -1592,6 +1623,7 @@ def main(argv):
     landing_parser = subparsers.add_parser("landing-plan")
     landing_parser.add_argument("--record", required=True)
     landing_parser.add_argument("--landing-sha")
+    landing_parser.add_argument("--target-repo", help="exact prepared repository to live-check")
     add_common(landing_parser)
 
     gate_record_parser = subparsers.add_parser("candidate-gate-record")
@@ -1610,6 +1642,14 @@ def main(argv):
         help="post-merge activation action; defaults to none",
     )
     add_common(gate_record_parser)
+
+    for name in ("finalization-plan", "finalization-record"):
+        child = subparsers.add_parser(name)
+        child.add_argument("--record", required=True)
+        add_common(child)
+        if name == "finalization-record":
+            child.add_argument("--phase", choices=("prepare", "reconcile"), required=True)
+            child.add_argument("--evidence", help="JSON evidence input for complete selected scope; prepare only")
 
     args = parser.parse_args(argv)
 
@@ -1630,7 +1670,13 @@ def main(argv):
             emit(cleanup_plan(repo, record), args.json)
         elif args.command == "landing-plan":
             record = find_record(records, args.record)
-            emit(landing_plan(repo, record, args.landing_sha), args.json)
+            emit(landing_plan(repo, record, args.landing_sha, args.target_repo), args.json)
+        elif args.command == "finalization-plan":
+            record = find_record(records, args.record)
+            emit(finalization_call("plan", record), args.json)
+        elif args.command == "finalization-record":
+            record = find_record(records, args.record)
+            emit(finalization_call("write", repo, record, args.phase, args.evidence), args.json)
         elif args.command == "candidate-gate-record":
             record = find_record(records, args.record)
             emit(

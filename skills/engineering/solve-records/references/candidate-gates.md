@@ -71,14 +71,17 @@ landing SHA before touching the user base worktree:
   and record the result.
 - Semantic conflict: retain the candidate as manual required.
 
+Before advancing any target, read [finalization.md](finalization.md) and prepare
+the complete selected repository/resource scope through the Tracker Facade.
 Use landing-plan, then verify the base checkout, ancestry, final write surface,
 dirty and untracked paths, and hard-stop paths. Advance base only with:
 
     git merge --ff-only <landing_sha>
 
 Completion: the recorded landing SHA is validated, the base fast-forward
-succeeds, and the receipt records merged state, merged timestamp, merged SHA,
-and landing rationale. A blocked candidate remains open with its actionable
+succeeds, and Tracker Facade `finalization-record --phase reconcile` records the verified
+landing facts on the original receipt. Cross-repository partial success remains
+open until every selected target is verified landed. A blocked candidate remains open with its actionable
 reason and resources intact.
 
 If the base checkout contains dirty or untracked paths overlapping the
@@ -102,6 +105,9 @@ verify every applicable safeguard:
 
 Use cleanup-plan as a fact index, verify its result, remove the worktree,
 prune registrations, and delete the branch with git branch -d.
+
+Reconcile through [finalization.md](finalization.md) after each cleanup attempt,
+including when earlier Git success outlived an interrupted receipt write.
 
 Completion: every solve-owned resource is either safely removed and marked
 done, or remains listed with its exact safety blocker; user-owned resources

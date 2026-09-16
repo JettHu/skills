@@ -84,7 +84,9 @@ replacement receipt, or new Claim for this path.
 
 Before every candidate acceptance review, merge, ship, land, close, or
 cleanup request, read [candidate-gates.md](references/candidate-gates.md). It
-owns the live verification, landing, closure, and cleanup steps.
+owns the live verification, landing, closure, and cleanup steps. Before authorized
+landing, cleanup, or interrupted-operation recovery, use the shared Tracker
+Facade writer described in [finalization.md](references/finalization.md).
 
 Completion: the candidate is either advanced through the applicable candidate
 gate with current evidence, or remains an open receipt with its smallest

@@ -433,6 +433,8 @@ def refresh_candidate(repo, ticket_ids, record_name, observed):
 
         old = record_path.read_text(encoding="utf-8")
         record = canonical_record(repo, record_path)
+        if record.get("finalization"):
+            raise HandoffError("prepared finalization freezes candidate identity; reconcile before further candidate work")
         membership = record["tickets"]
         expected_membership = [ticket.path.relative_to(repo).as_posix() for ticket in tickets]
         if sorted(membership) != expected_membership:

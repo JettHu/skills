@@ -151,6 +151,8 @@ def build_snapshot(repo, selection=None):
             record["recovery_view"] = "resume" if outcome in {"blocked", "needs-info", "ready-for-human"} else "closed"
         elif record.get("body_conflict"):
             bucket = "stale_or_malformed"; record["stale_reason"] = record["body_conflict"]
+        elif record.get("finalization") and record.get("state") == "open":
+            bucket = "manual"
         elif not record.get("refs_ok") and record.get("state") == "open":
             bucket = "stale_or_malformed"; record["stale_reason"] = record.get("ref_reason", "Git unavailable")
         elif record.get("state") in {"merged", "closed"} and not cleanup_done:
@@ -341,6 +343,12 @@ def render_record_card(record, hidden=False):
         ("Malformed", record.get("malformed")),
         ("Refs", record.get("ref_reason")),
     ]
+    finalization = record.get("cleanup_plan", {})
+    for member in finalization.get("repositories", []):
+        detail_rows.append((f"Finalization: {member['repo']}",
+                            [f"{member['base']}: {member['landing']} ({member['landing_sha']})",
+                             *[f"{kind}: {status}" for kind, status in member.get("resources", {}).items()],
+                             *member.get("blockers", [])]))
     hidden_attr = " data-overflow='true' hidden" if hidden else ""
     return f"""
 <article class="card record-card" data-search="{html.escape(search.lower())}"{hidden_attr}>

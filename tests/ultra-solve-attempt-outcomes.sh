@@ -91,7 +91,9 @@ for outcome in ("blocked", "needs-info", "ready-for-human", "abandoned", "supers
 
 for text in (agents, readme, ultra_meta, wrapper, wrapper_meta):
     assert "outcome" in text.lower()
-assert "Claim itself creates no receipt" in agents
+assert "When changing solve outcomes or finalization, read" in agents
+assert "skills/engineering/ultra/solve.md" in agents
+assert "skills/engineering/solve-records/SKILL.md" in agents
 assert "Claim itself creates no receipt" in wrapper_meta
 assert eval_fixture.is_file(), "reusable outcome eval fixture must remain in the tracked test surface"
 
