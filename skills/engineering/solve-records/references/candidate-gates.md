@@ -13,6 +13,10 @@ Re-read the exact receipt and linked Ticket. Verify the live facts required by
 the requested operation:
 
 - Candidate record parses and remains outcome: candidate.
+- When linked Tickets have amendments, read [the amendment contract](../../ultra/references/ticket-amendments.md).
+  Compare the receipt's immutable contract revisions with the verified effective
+  Ticket chain. Historical completion is not evidence for newly approved work;
+  a mismatch requires a new Attempt, not candidate refresh or gate enrichment.
 - A compact candidate receipt with `head` and `head_sha` is valid at handoff;
   missing later gate facts are pending evidence, not a malformed receipt.
 - Base and head refs exist and match base_sha and head_sha, or the narrow

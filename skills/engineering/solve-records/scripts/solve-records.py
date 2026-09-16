@@ -1011,7 +1011,18 @@ def candidate_worktree(repo, record):
     return matches[0]
 
 
+def amendment_gate_reason(repo, record):
+    scripts = Path(__file__).resolve().parents[2] / "ultra/scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    import ticket_amendments
+    return ticket_amendments.candidate_reason(repo, record)
+
+
 def candidate_gate_record(repo, record, base, checks, review, merge, rollout, activation):
+    amendment_reason = amendment_gate_reason(repo, record)
+    if amendment_reason:
+        raise RuntimeError(amendment_reason)
     if record.get("malformed"):
         raise RuntimeError(record["malformed"])
     if record.get("finalization"):
@@ -1081,7 +1092,8 @@ def candidate_gate_record(repo, record, base, checks, review, merge, rollout, ac
 
 
 def merge_gate(repo, record):
-    reasons = []
+    amendment_reason = amendment_gate_reason(repo, record)
+    reasons = [amendment_reason] if amendment_reason else []
 
     if record.get("malformed"):
         reasons.append(record["malformed"])

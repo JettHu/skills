@@ -206,7 +206,7 @@ def parse_args() -> argparse.Namespace:
     publication_actions = publication.add_subparsers(
         dest="action", required=True, title="publication operations", parser_class=FacadeArgumentParser
     )
-    for action in ("register", "inspect", "promote", "cleanup", "terminal-repair"):
+    for action in ("register", "inspect", "promote", "cleanup", "terminal-repair", "amend"):
         child = publication_actions.add_parser(action, help=f"delegate Ticket publication {action}")
         child.add_argument("--repo", default=".", help="repository containing the shared tracker index and selected adapter capability document")
         child.add_argument("--run-id", required=True, help="publication run identity")
@@ -218,6 +218,10 @@ def parse_args() -> argparse.Namespace:
             child.add_argument("--allow-membership-change", action="store_true")
         if action == "cleanup":
             child.add_argument("--explicit", action="store_true")
+        if action == "amend":
+            child.add_argument("--ticket-id", required=True)
+            child.add_argument("--expected-digest", required=True)
+            child.add_argument("--amendment", required=True, help="approved amendment JSON request")
         if action == "terminal-repair":
             child.add_argument("--ticket-id", required=True, help="exact current Ticket identity")
             child.add_argument("--expected-digest", required=True, help="current Ticket SHA-256 digest")
@@ -322,6 +326,9 @@ def main() -> int:
                 delegated.append("--allow-membership-change")
             if getattr(args, "explicit", False):
                 delegated.append("--explicit")
+            if args.action == "amend":
+                delegated.extend(["--ticket-id", args.ticket_id, "--expected-digest", args.expected_digest,
+                                  "--amendment", args.amendment])
             if args.action == "terminal-repair":
                 delegated.extend([
                     "--ticket-id", args.ticket_id,

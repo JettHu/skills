@@ -18,6 +18,7 @@ INPUTS = (
     "skills/engineering/ultra/scripts/ultra_tracker.py",
     "skills/engineering/ultra/scripts/tracker_contract.py",
     "skills/engineering/ultra/scripts/local_ticket_publication.py",
+    "skills/engineering/ultra/scripts/ticket_amendments.py",
     "skills/engineering/ultra/scripts/local_ticket_surface.py",
 )
 

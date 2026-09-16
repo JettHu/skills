@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import local_ticket_frontier as frontier
 import local_ticket_publication as publication
+import ticket_amendments
 
 SCHEMA = "ultra-local-outcome-handoff/v1"
 RECOVERY = {"blocked", "needs-info", "ready-for-human"}
@@ -137,6 +138,8 @@ def render(binding, body):
         f"handoff_key: {json.dumps(key)}",
         f"binding_digest: {digest(binding)}",
     ]
+    if binding.get("contract_revisions"):
+        lines.append(f"contract_revisions: {json.dumps(binding['contract_revisions'], sort_keys=True)}")
     if binding.get("supersedes"):
         lines.append(f"supersedes: {json.dumps(binding['supersedes'])}")
     if outcome == "candidate":
@@ -435,6 +438,9 @@ def refresh_candidate(repo, ticket_ids, record_name, observed):
         record = canonical_record(repo, record_path)
         if record.get("finalization"):
             raise HandoffError("prepared finalization freezes candidate identity; reconcile before further candidate work")
+        reason = ticket_amendments.candidate_reason(repo, record)
+        if reason:
+            raise HandoffError(reason)
         membership = record["tickets"]
         expected_membership = [ticket.path.relative_to(repo).as_posix() for ticket in tickets]
         if sorted(membership) != expected_membership:
@@ -457,6 +463,8 @@ def refresh_candidate(repo, ticket_ids, record_name, observed):
             }
             if re.search(r"(?m)^supersedes:", old):
                 stored_binding["supersedes"] = relation_value(old, "supersedes")
+            if ticket_amendments.receipt_revisions(old):
+                stored_binding['contract_revisions'] = ticket_amendments.receipt_revisions(old)
             if scalar(old, "binding_digest") != digest(stored_binding):
                 raise HandoffError("candidate receipt binding digest failed verification")
             if find_receipt(repo, stored_key) != record_path:
@@ -515,6 +523,8 @@ def refresh_candidate(repo, ticket_ids, record_name, observed):
             }
             if re.search(r"(?m)^supersedes:", updated):
                 binding["supersedes"] = relation_value(updated, "supersedes")
+            if ticket_amendments.receipt_revisions(old):
+                binding['contract_revisions'] = ticket_amendments.receipt_revisions(old)
             updated = replace_frontmatter_scalar(updated, "binding_digest", digest(binding))
             if any(
                 re.search(rf"(?m)^## {name}[ \t]*$", updated)
@@ -652,6 +662,9 @@ def handoff(repo, ticket_ids, key, outcome, body, next_action, declared, superse
             binding["supersedes"] = predecessor_rel
             allowed.add(predecessor_rel)
         if candidate:
+            revisions = ticket_amendments.current_revisions(repo, tickets)
+            if revisions:
+                binding['contract_revisions'] = revisions
             identities = {
                 candidate_identity(repo, ticket, allowed if path.is_file() else set())
                 for ticket in tickets
@@ -699,6 +712,8 @@ def handoff(repo, ticket_ids, key, outcome, body, next_action, declared, superse
                     ),
                     retained_resources=list_field(old, "retained_resources"),
                 )
+            if ticket_amendments.receipt_revisions(old):
+                stored['contract_revisions'] = ticket_amendments.receipt_revisions(old)
             if scalar(old, "binding_digest") != digest(stored):
                 return result(
                     "conflict",
@@ -998,7 +1013,7 @@ def main():
             reason=str(e),
             next_action="restore the required tracker capability, then retry the same key",
         )
-    except (HandoffError, frontier.FrontierError, OSError) as e:
+    except (HandoffError, frontier.FrontierError, publication.AdapterError, OSError) as e:
         payload = result("conflict", a.handoff_key or "", reason=str(e))
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0

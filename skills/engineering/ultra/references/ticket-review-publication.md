@@ -6,6 +6,10 @@ one selected adapter capability document. The selected capability owns the
 representation, draft surface, promotion operation, recovery policy, and Claim
 gate. This reference does not replace either project document.
 
+For approved semantic changes after promotion, read
+[ticket-amendments.md](ticket-amendments.md) and use `publication amend`.
+In-place review repair and re-registration below apply to unpromoted drafts.
+
 ## Before target invocation
 
 1. Read the base tracker contract, the shared index, and its selected adapter

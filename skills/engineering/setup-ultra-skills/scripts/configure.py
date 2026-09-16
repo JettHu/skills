@@ -226,7 +226,7 @@ def local_publication(
         )
     lines.extend(
         [
-            "Publication journal: `.ultra-publications/<run-id>.json` beside the configured surface records only complete-set membership, reviewed body digests, representation, location, and phase; it is not a Ticket draft.",
+            "Publication journal: `.ultra-publications/<run-id>.json` beside the configured surface records complete-set membership, reviewed body digests, representation, location, phase, and append-only repair/amendment audits; it is not a Ticket draft.",
             "Publication operation `register`: stage=after formal draft creation and after every semantic repair; inputs=repository, configured representation/location, run ID, and explicit membership-change authorization when needed; success evidence=review-pending phase plus exact member IDs and body digests; errors=structured fail-closed refusal with no Ticket mutation; resume=re-run after repairing the reported contract or artifact; manual fallback=prohibited.",
             "Publication operation `inspect`: stage=review and recovery diagnosis; inputs=repository, configured representation/location, and run ID; success evidence=phase, exact members, canonical statuses, and current bodies matching the registered digests; errors=structured fail-closed refusal with no mutation, including body-digest drift; resume=repair the reported contract or artifact and re-run; manual fallback=prohibited.",
             "Publication operation `promote`: stage=only after semantic review passes; inputs=repository, configured representation/location, and registered run ID; success evidence=promoted phase after complete-set re-verification; errors=structured fail-closed refusal retaining resumable state; resume=re-run the same operation after resolving the reported error; manual fallback=prohibited.",
@@ -337,6 +337,8 @@ def capability_scope(preset: str, strategy: str) -> list[str]:
             "- `frontier` reads the configured Ticket surface, validates blockers and publication state, and returns ready, unclaimed Tickets.",
             "- `claim` re-reads the selected Ticket and snapshot, then atomically records the configured branch/worktree assignment.",
             "- `publication register`, `inspect`, `promote`, and `cleanup` manage the local review-pending publication set; `terminal-repair` handles only its declared integrity repairs.",
+            "- `publication amend` applies an explicitly approved section replacement with an expected digest, immutable amendment file and managed Ticket head. Read Ultra's `references/ticket-amendments.md` for request, draft and retry semantics. Active Claims refuse revision; completed Tickets retain historical evidence and reopen for a new Attempt under the same Ticket.",
+            "- Snapshot exposes the verified effective contract and amendment chain. Candidate acceptance compares immutable `contract_revisions` with that chain; old evidence cannot satisfy new work.",
             "- Outcome handoff and Solve Record operations remain delegated to their owning bundled helpers or facade.",
         ]
         unsupported = [

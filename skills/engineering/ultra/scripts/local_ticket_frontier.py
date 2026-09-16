@@ -80,6 +80,7 @@ class Ticket:
     publication_reason: str = ""
     publication_digest: str = ""
     publication_original_digest: str = ""
+    amendment: dict | None = None
 
     @property
     def inner(self) -> str:
@@ -502,6 +503,9 @@ def apply_publication_gates(repo: Path, tickets: list[Ticket], contract: Frontie
     groups: dict[tuple[str, str], list[Ticket]] = {}
     for ticket in tickets:
         if not ticket.publication_run:
+            if publication.one(publication.parse_metadata(ticket.inner), 'contract_amendment'):
+                ticket.publication_ready = False
+                ticket.publication_reason = 'amendment-conflict:missing-publication'
             continue
         raw_location = (
             ticket.path.relative_to(repo).as_posix()
@@ -515,6 +519,8 @@ def apply_publication_gates(repo: Path, tickets: list[Ticket], contract: Frontie
                 repo, contract.representation, raw_location, run_id
             )
             selected = publication.run_tickets(published, run_id)
+            import ticket_amendments
+            amendments = {item.ticket_id: ticket_amendments.facts(repo, item, journal) for item in selected}
             current_digests = publication.current_publication_snapshot(journal)
             original_digests = dict(journal.get("body_digests", {}))
             for audit in publication.repair_audits(journal):
@@ -538,6 +544,7 @@ def apply_publication_gates(repo: Path, tickets: list[Ticket], contract: Frontie
             ticket.publication_ready = ready
             ticket.publication_reason = reason
             if ready:
+                ticket.amendment = amendments.get(ticket.identity)
                 ticket.publication_digest = current_digests.get(ticket.identity, "")
                 ticket.publication_original_digest = original_digests.get(ticket.identity, "")
 
@@ -660,7 +667,7 @@ def evaluate_frontier(tickets: list[Ticket], contract: FrontierContract, contrac
             item_reasons.append("dependency-cycle")
         for blocker_id in edges[identity]:
             blocker = by_id[blocker_id]
-            if blocker.status != contract.completed_state:
+            if blocker.status != contract.completed_state or not blocker.publication_ready:
                 item_reasons.append(f"blocked-by:{blocker_id}:{blocker.status}")
         if item_reasons:
             reasons[identity] = sorted(dict.fromkeys(item_reasons))

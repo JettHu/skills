@@ -791,6 +791,29 @@ def repair_audits(data: dict) -> list[dict]:
     return audits
 
 
+def publication_audits(data: dict) -> list[dict]:
+    repairs = repair_audits(data)
+    amendments = data.get("amendments", [])
+    if not isinstance(amendments, list) or any(not isinstance(a, dict) for a in amendments):
+        raise AdapterError("malformed amendment audit history")
+    events = data.get("publication_events", [["terminal_repairs", i] for i in range(len(repairs))])
+    expected = {("terminal_repairs", i) for i in range(len(repairs))} | {("amendments", i) for i in range(len(amendments))}
+    if (not isinstance(events, list) or any(not isinstance(e, list) or len(e) != 2 or
+            not isinstance(e[0], str) or type(e[1]) is not int for e in events)):
+        raise AdapterError("malformed publication event order")
+    if len(events) != len(expected) or {tuple(e) for e in events} != expected:
+        raise AdapterError("incomplete or ambiguous publication event order")
+    return [data[k][i] for k, i in events]
+
+
+def append_audit(data: dict, collection: str, audit: dict) -> None:
+    publication_audits(data)
+    events = data.setdefault("publication_events", [["terminal_repairs", i] for i in range(len(repair_audits(data)))])
+    items = data.setdefault(collection, [])
+    events.append([collection, len(items)])
+    items.append(audit)
+
+
 def current_publication_snapshot(data: dict) -> dict[str, str]:
     """Project immutable registration digests through append-only terminal audits."""
     original = data.get("body_digests")
@@ -800,9 +823,9 @@ def current_publication_snapshot(data: dict) -> dict[str, str]:
     ):
         raise AdapterError("publication journal has malformed body_digests")
     current = dict(original)
-    for audit in repair_audits(data):
+    for audit in publication_audits(data):
         required = {"operation", "ticket_id", "old_digest", "new_digest", "reason", "timestamp"}
-        if not required.issubset(audit) or audit.get("operation") != "terminal-repair":
+        if not required.issubset(audit) or audit.get("operation") not in {"terminal-repair", "amendment"}:
             raise AdapterError("publication journal has malformed terminal repair audit entry")
         ticket_id = audit["ticket_id"]
         related = audit.get("related_digests", [])
@@ -888,6 +911,8 @@ def validate_against_journal_at(
         raise AdapterError("publication membership drifted")
     if current_publication_snapshot(data) != snapshot(selected):
         raise AdapterError("Ticket content changed after review registration")
+    import ticket_amendments
+    ticket_amendments.validate(repo, selected, data)
     return location, tickets, data
 
 
@@ -1043,6 +1068,8 @@ def terminal_repair(repo: Path, representation: str, raw_location: str, run_id: 
                 target = next((item for item in selected if item.ticket_id == new), None)
         if target is None:
             raise AdapterError("terminal repair Ticket identity is ambiguous or absent")
+        if repair_type == "ticket-identity" and data.get("amendments"):
+            raise AdapterError("terminal repair conflict: amended publication identities require a new Ticket; amendment history is immutable")
         desired_text = typed_repair_text(target, contract, repair_type, old, new)
         # Parse the desired bytes independently without exposing a general editor.
         if representation == "file-per-ticket":
@@ -1183,7 +1210,7 @@ def terminal_repair(repo: Path, representation: str, raw_location: str, run_id: 
             audit["new_ticket_id"] = desired.ticket_id
         if related_digest_audit:
             audit["related_digests"] = related_digest_audit
-        data.setdefault("terminal_repairs", []).append(audit)
+        append_audit(data, "terminal_repairs", audit)
         write_journal(path, data)
         if os.environ.get("ULTRA_TERMINAL_REPAIR_FAIL_AFTER") == "journal":
             raise AdapterError("injected terminal repair interruption after journal write")
@@ -1286,6 +1313,7 @@ def inspect(repo: Path, representation: str, raw_location: str, run_id: str) -> 
         "body_digests": snapshot(selected),
         "original_body_digests": data.get("body_digests", {}) if data else {},
         "terminal_repairs": repair_audits(data) if data else [],
+        "amendments": data.get("amendments", []) if data else [],
     }
 
 
@@ -1344,6 +1372,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--old-value", default="")
     parser.add_argument("--new-value", default="")
     parser.add_argument("--reason")
+    parser.add_argument("--amendment")
     parser.add_argument("--allow-membership-change", action="store_true")
     parser.add_argument("--explicit", action="store_true")
     return parser.parse_args()
@@ -1353,7 +1382,7 @@ def main() -> int:
     args = parse_args()
     repo = Path(args.repo).resolve()
     try:
-        if args.action not in {"register", "inspect", "promote", "cleanup", "terminal-repair"}:
+        if args.action not in {"register", "inspect", "promote", "cleanup", "terminal-repair", "amend"}:
             raise AdapterError(f"unsupported operation: {args.action}")
         if args.action == "register":
             payload = register(repo, args.representation, args.location, args.run_id, args.allow_membership_change)
@@ -1361,6 +1390,10 @@ def main() -> int:
             payload = promote(repo, args.representation, args.location, args.run_id)
         elif args.action == "cleanup":
             payload = cleanup(repo, args.representation, args.location, args.run_id, args.explicit)
+        elif args.action == "amend":
+            import ticket_amendments
+            payload = ticket_amendments.apply(repo, args.representation, args.location, args.run_id,
+                                              args.ticket_id, args.expected_digest, args.amendment)
         elif args.action == "terminal-repair":
             payload = terminal_repair(
                 repo, args.representation, args.location, args.run_id,
@@ -1371,10 +1404,11 @@ def main() -> int:
             payload = inspect(repo, args.representation, args.location, args.run_id)
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
-    except (AdapterError, OSError) as error:
+    except (AdapterError, OSError, RuntimeError) as error:
         print(f"local-ticket-publication: {error}", file=sys.stderr)
         return 2
 
 
 if __name__ == "__main__":
+    sys.modules["local_ticket_publication"] = sys.modules[__name__]
     raise SystemExit(main())

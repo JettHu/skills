@@ -82,3 +82,12 @@ The static page always describes the last successful observation; only another
 query can assess freshness. Atomic replacement prevents mixed body/status
 generations, not concurrent-writer ordering or a transaction across arbitrary
 source edits. There is no authoritative status sidecar.
+
+
+For Tickets with approved revisions, `contract.effective_text` is available only
+when publication and the complete amendment chain verify. `contract.amendment`
+contains the head, linked effective/superseded history, unapproved drafts,
+historical-completion fact and current execution Ticket. Amendment files
+participate in the full-source fingerprint. Conflicts suppress effective text
+and completion rather than selecting a version. See
+[ticket-amendments.md](ticket-amendments.md) for producer and consumer rules.

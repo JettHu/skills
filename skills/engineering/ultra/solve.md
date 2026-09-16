@@ -23,6 +23,11 @@ Read the shared index `docs/agents/ultra-tracker.md` and its selected adapter ca
 
 For `Frontier adapter: bundled-local-markdown-v1` in the selected adapter capability document, prefer the bundled `scripts/ultra_tracker.py` facade for both explicit and `--all` discovery and Claim (`ticket frontier` and `ticket claim`). The facade delegates to frontier, which exclusively owns whole-tracker discovery, blocker and publication gates, snapshots, conflict detection, and execution branch/worktree assignment. Treat its structured result as authoritative; never rebuild the graph or Claim with Markdown edits. If the facade itself is unavailable, make one explicit handoff to the capability-equivalent bundled direct helper; preserve the completed-operation result and never repeat a completed mutation. Neither route requires a global executable on `PATH`.
 
+When a Ticket carries `Contract Amendment`, or its approved scope changes after
+publication, read [approved amendments](references/ticket-amendments.md).
+Use snapshot's verified effective contract for planning and the full-boundary
+evidence audit; unresolved amendment/publication conflicts block execution.
+
 Tracker updates record state-relevant facts. During execution, concrete Attempt branch/worktree identities enter only the configured Claim or tracker metadata. At handoff, resource identities, ownership, cleanup, commits, and PR/MR details remain authoritative in the Solve Record or native PR/MR. A concise Ticket note may add a lifecycle backlink, but must not duplicate those resource facts. Keep batch logs and large command output in validation artifacts or the final summary.
 
 ## Invocation
@@ -641,7 +646,7 @@ This is a feedback loop, not a schema gate: `to-tickets -> solve notices missing
 
 Current mutation support is Local Markdown trackers. The following compatibility API identifiers retain their established spellings while operating on Tickets; the conceptual contract for future remote tracker support is:
 
-For Local Markdown, prefer `scripts/ultra_tracker.py` for configured publication, frontier, Claim, and Solve Record helper operations. It centralizes configured publication discovery and result envelopes while the owning adapter or helper retains all semantics. Outcome handoff has no direct-helper or manual fallback: an unavailable facade or configured handoff helper returns `unavailable` before lifecycle mutation. Other operations may make one explicit capability-equivalent direct-helper choice only before the operation begins; never retry or repeat a completed operation through the other route. Contract-bounded normalization applies only to declared presentation aliases; identities remain exact. When an adapter is unavailable or does not cover an ordinary Local Markdown Ticket edit, make the smallest direct edit on the canonical surface, inspect the diff, and re-read the result. Do not use this fallback for Claim, Solve Record, outcome handoff, publication, or terminal-repair transitions.
+For Local Markdown, prefer `scripts/ultra_tracker.py` for configured publication, frontier, Claim, and Solve Record helper operations. It centralizes configured publication discovery and result envelopes while the owning adapter or helper retains all semantics. Outcome handoff has no direct-helper or manual fallback: an unavailable facade or configured handoff helper returns `unavailable` before lifecycle mutation. Other operations may make one explicit capability-equivalent direct-helper choice only before the operation begins; never retry or repeat a completed operation through the other route. Contract-bounded normalization applies only to declared presentation aliases; identities remain exact. When an adapter is unavailable or does not cover an ordinary Local Markdown Ticket edit, make the smallest direct edit on the canonical surface, inspect the diff, and re-read the result. Do not use this fallback for Claim, Solve Record, outcome handoff, publication, amendment, or terminal-repair transitions.
 
 - `list_ready_for_agent(filter)`
 - `read_issue(issue_id)`

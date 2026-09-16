@@ -18,7 +18,7 @@ import local_ticket_publication as publication
 import tracker_contract
 
 SCHEMA = "tracker-snapshot/v1"
-SEMANTIC_VERSION = "tracker-snapshot-semantics/v2"
+SEMANTIC_VERSION = "tracker-snapshot-semantics/v3"
 
 
 class SnapshotError(RuntimeError):
@@ -148,7 +148,7 @@ def source_paths(repo, contract):
     for location in surfaces(repo, contract):
         directory = publication.journal_dir(location, contract.representation)
         safe_path(repo, directory)
-        for path in directory.glob("*.json"):
+        for path in directory.rglob("*.json"):
             sources.add(safe_path(repo, path))
     return sorted(sources)
 
@@ -476,7 +476,7 @@ def normalize_ticket(issue, item, contract, eligibility, by_id, aliases, receipt
     blockers = []
     for reference in item.blockers:
         target = aliases.get(reference); linked = by_id.get(target)
-        satisfied = bool(linked and linked.status == contract.completed_state)
+        satisfied = bool(linked and linked.status == contract.completed_state and linked.publication_ready)
         blockers.append(dict(reference=reference, ticket_key=target, state=linked.status if linked else None, satisfied=satisfied))
     for reason in reasons:
         if reason.startswith(("missing-blocker", "dependency-cycle", "blocked-by")):
@@ -491,7 +491,7 @@ def normalize_ticket(issue, item, contract, eligibility, by_id, aliases, receipt
     return dict(key=item.identity, ticket_id="" if legacy else item.identity, identity_quality="legacy-locator" if legacy else "stable-id",
                 locator=issue["path"], source_locator=issue["source_path"], title=issue["title"], feature=issue["feature"],
                 category=issue["category"], created=issue["created"], state=item.status, metadata_format=issue["metadata_format"],
-                contract=dict(parent=issue["parent"], source_spec=issue["source_spec"], checklist=issue["checklist"], completed=item.status == contract.completed_state),
+                contract=dict(effective_text=item.inner if item.publication_ready else None, amendment=item.amendment, parent=issue["parent"], source_spec=issue["source_spec"], checklist=issue["checklist"], completed=item.status == contract.completed_state and item.publication_ready),
                 publication=dict(run_id=item.publication_run, phase=issue["publication_phase"], status=publication_status, verified=item.publication_ready if item.publication_run else None,
                                  current_digest=item.publication_digest, original_digest=item.publication_original_digest, reason=item.publication_reason),
                 blockers=blockers, claim=dict(active=contract.claim_value in item.flags, flags=item.flags, branch=item.branch, worktree=item.worktree),
