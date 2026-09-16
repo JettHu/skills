@@ -225,6 +225,11 @@ def predecessor_binding(repo, path):
             "recovery_next_action": relation_value(text, "recovery_next_action"),
             "retained_resources": list_field(text, "retained_resources"),
         }
+        if re.search(r"(?m)^supersedes:", text):
+            binding["supersedes"] = relation_value(text, "supersedes")
+        revisions = ticket_amendments.receipt_revisions(text)
+        if revisions:
+            binding["contract_revisions"] = revisions
         if outcome not in RECOVERY:
             raise HandoffError("predecessor is not a recovery receipt")
         if scalar(text, "binding_digest") != digest(binding):
@@ -629,6 +634,9 @@ def handoff(repo, ticket_ids, key, outcome, body, next_action, declared, superse
             "tickets": rel_tickets,
             "outcome": outcome,
         }
+        revisions = ticket_amendments.current_revisions(repo, tickets)
+        if revisions:
+            binding['contract_revisions'] = revisions
         predecessor_path = None
         predecessor_text = ""
         if supersedes:
@@ -662,9 +670,6 @@ def handoff(repo, ticket_ids, key, outcome, body, next_action, declared, superse
             binding["supersedes"] = predecessor_rel
             allowed.add(predecessor_rel)
         if candidate:
-            revisions = ticket_amendments.current_revisions(repo, tickets)
-            if revisions:
-                binding['contract_revisions'] = revisions
             identities = {
                 candidate_identity(repo, ticket, allowed if path.is_file() else set())
                 for ticket in tickets

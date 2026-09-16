@@ -166,7 +166,7 @@ def prepare(helper, repo, record, request):
                 raise RuntimeError('ownership contradicts the canonical user-owned resource evidence')
             # Canonical gate facts cannot be upgraded through a manifest assertion.
             projected = record
-        plan = helper.landing_plan(root, projected, m['landing_sha'])
+        plan = helper.landing_plan(root, projected, m['landing_sha'], canonical_context=(repo, record))
         if plan['status'] != 'ready':
             raise RuntimeError(f'{root}: landing gate: {plan["reasons"]}')
         m['gate_record'] = {key: projected.get(key) for key in ('checks', 'review', 'merge', 'notes')}
@@ -274,7 +274,7 @@ def landing_plan(helper, repo, record, landing_sha=None, target_repo=None):
         return dict(status='blocked', reasons=observed['blockers'])
     projected = dict(member['gate_record'], state='open', outcome='candidate', path=record['path'], tickets=record.get('tickets', []),
                      **{key: member[key] for key in ('base', 'base_sha', 'head', 'head_sha', 'worktree')})
-    return helper.landing_plan(Path(target), projected, member['landing_sha'])
+    return helper.landing_plan(Path(target), projected, member['landing_sha'], canonical_context=(repo, record))
 
 
 def observe_member(helper, member, previous):

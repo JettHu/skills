@@ -77,10 +77,15 @@ state. Blocker gates still decide whether it can actually be claimed.
 A previously completed Ticket retains its historical completion in the amendment
 and its existing receipts. The same canonical Ticket owns the new unfinished
 work; it must enter a new Claim/Attempt. Existing candidate resources and
-receipts remain unchanged. A candidate made under the new contract records the
-adapter-derived `contract_revisions` (stable Ticket ID to amendment ID) in its immutable handoff binding. Old or
-legacy candidate evidence cannot satisfy the new contract. Candidate refresh
-and late gate enrichment cannot silently rebind that evidence.
+receipts remain unchanged. Every handoff outcome under an amended contract binds
+adapter-derived `contract_revisions` (stable Ticket ID to amendment ID). A retry
+compares this immutable binding with the current contract before any receipt,
+Ticket, backlink or Claim write. Old recovery and terminal requests cannot reset
+new-contract state or release its Claim. Same-version interrupted handoffs still
+converge with their original key; a meaningful new Attempt uses a new key and the
+existing successor workflow. A legacy receipt without revisions proves only an
+unamended contract. Old candidate evidence cannot satisfy the new contract;
+candidate refresh and late gate enrichment cannot silently rebind it.
 
 On interruption, retry the **same request, ID, predecessor and expected old
 digest**. The stored intent lets the adapter converge after either the amendment

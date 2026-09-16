@@ -223,6 +223,89 @@ class Amendments(unittest.TestCase):
                  '--repair-type', 'ticket-identity', '--old-value', 'T', '--new-value', 'RENAMED', '--reason', 'Cannot erase history', ok=False)
         self.assertEqual(self.ticket.read_bytes(), before)
 
+    def recovery(self, key, outcome='blocked', **kwargs):
+        args = ['ticket', 'handoff', '--ticket-id', 'T', '--handoff-key', key,
+                '--outcome', outcome, '--summary', 'Stopped Attempt with durable evidence.']
+        if outcome in {'blocked', 'needs-info', 'ready-for-human'}:
+            args += ['--recovery-next-action', 'inspect']
+        return self.cli(*args, **kwargs)
+
+    def test_old_recovery_replay_cannot_change_amended_ticket_or_new_claim(self):
+        self.claim()
+        old = self.recovery('old-attempt')
+        receipt = self.repo / old['receipt']
+        saved = receipt.read_bytes()
+        self.apply(self.request())
+        for active in (False, True):
+            with self.subTest(active_new_claim=active):
+                if active:
+                    self.claim()
+                before = self.ticket.read_bytes()
+                refusal = self.recovery('old-attempt', ok=False)
+                self.assertEqual(refusal['data']['status'], 'conflict')
+                self.assertEqual(self.ticket.read_bytes(), before)
+                self.assertEqual(receipt.read_bytes(), saved)
+
+    def test_revised_non_candidate_handoffs_bind_contract_and_reject_later_replay(self):
+        predecessor = None
+        for outcome in ('blocked', 'needs-info', 'ready-for-human', 'abandoned', 'superseded'):
+            with self.subTest(outcome=outcome):
+                amendment = 'before-' + outcome
+                self.apply(self.request(amendment, predecessor))
+                self.claim()
+                old = self.recovery('key-' + outcome, outcome)
+                # Successful same-version retry remains supported.
+                self.assertEqual(self.recovery('key-' + outcome, outcome)['receipt'], old['receipt'])
+                saved = (self.repo / old['receipt']).read_bytes()
+                predecessor = 'after-' + outcome
+                self.apply(self.request(predecessor, amendment))
+                self.claim()
+                before = self.ticket.read_bytes()
+                refusal = self.recovery('key-' + outcome, outcome, ok=False)
+                self.assertEqual(refusal['data']['status'], 'conflict')
+                self.assertEqual(self.ticket.read_bytes(), before)
+                self.assertEqual((self.repo / old['receipt']).read_bytes(), saved)
+                self.recovery('release-' + outcome, 'abandoned')
+
+    def test_same_revision_recovery_interruptions_converge(self):
+        predecessor = None
+        for index, boundary in enumerate(('ULTRA_HANDOFF_FAIL_AFTER_RECEIPT',
+                                          'ULTRA_HANDOFF_FAIL_AFTER_BACKLINK',
+                                          'ULTRA_HANDOFF_FAIL_DURING_CLAIM')):
+            with self.subTest(boundary=boundary):
+                amendment = 'retry-' + str(index)
+                self.apply(self.request(amendment, predecessor))
+                predecessor = amendment
+                self.claim()
+                key = 'recovery-' + str(index)
+                failed = self.recovery(key, ok=False, env={boundary: '1'})
+                self.assertEqual(failed['data']['status'], 'retryable')
+                receipt = failed['data']['receipt']
+                completed = self.recovery(key)
+                self.assertEqual(completed['receipt'], receipt)
+                current = self.observed()
+                self.assertFalse(current['claim']['active'])
+                self.assertEqual(current['state'], 'ready-for-human')
+                self.assertEqual(self.ticket.read_text().count(Path(receipt).name), 1)
+
+    def test_recovery_successors_preserve_revised_predecessor_binding(self):
+        self.apply(self.request())
+        self.claim()
+        previous = self.recovery('first')['receipt']
+        amendment = 'A1'
+        for index in (2, 3):
+            self.apply(self.request('A' + str(index), amendment))
+            amendment = 'A' + str(index)
+            self.claim()
+            successor = self.cli('ticket', 'handoff', '--ticket-id', 'T', '--handoff-key', 'successor-' + str(index),
+                '--outcome', 'blocked', '--summary', 'Recovery under revised contract.',
+                '--recovery-next-action', 'inspect', '--supersedes', previous)
+            history = (self.repo / previous).read_text()
+            self.assertIn('outcome: blocked', history)
+            self.assertIn('state: closed', history)
+            self.assertIn(successor['receipt'], history)
+            previous = successor['receipt']
+
     def test_historical_completion_uses_configured_completed_state(self):
         contract = self.repo / 'docs/agents/ultra-tracker.md'
         contract.write_text(contract.read_text().replace('completed', 'done'))

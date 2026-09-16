@@ -50,6 +50,13 @@ detects unsupported changes to its bound facts. Candidate `head` is stable;
 container. Both are derived from the claimed or retained worktree, never
 supplied as receipt text.
 
+For amended Tickets, every outcome's immutable binding also includes
+adapter-derived `contract_revisions`, keyed by stable Ticket ID. This optional
+field is omitted when no linked Ticket is amended. Recovery and terminal replay
+must verify the same contract version before writes, just as candidate replay
+does. A successor preserves its predecessor's original revision binding and
+outcome; a new key binds the successor to the current approved contract.
+
 After a small in-scope review fix on the same solve-owned branch/worktree, call
 `ultra_tracker.py ticket refresh-candidate` with the exact receipt, linked Ticket
 scope, and full SHA observed at the retained worktree. A same-head call is

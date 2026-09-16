@@ -1091,8 +1091,10 @@ def candidate_gate_record(repo, record, base, checks, review, merge, rollout, ac
     }
 
 
-def merge_gate(repo, record):
-    amendment_reason = amendment_gate_reason(repo, record)
+def merge_gate(repo, record, *, canonical_context=None):
+    # Contract/receipt authority can differ from the repository supplying Git facts.
+    canonical_repo, canonical_record = canonical_context or (repo, record)
+    amendment_reason = amendment_gate_reason(canonical_repo, canonical_record)
     reasons = [amendment_reason] if amendment_reason else []
 
     if record.get("malformed"):
@@ -1140,12 +1142,12 @@ def merge_gate(repo, record):
     }
 
 
-def landing_plan(repo, record, landing_sha=None, target_repo=None):
+def landing_plan(repo, record, landing_sha=None, target_repo=None, *, canonical_context=None):
     if record.get("finalization"):
         return finalization_call("landing_plan", repo, record, landing_sha, target_repo)
     if target_repo and Path(target_repo).resolve() != repo:
         raise RuntimeError("target repository requires prepared scope")
-    gate = merge_gate(repo, record)
+    gate = merge_gate(repo, record, canonical_context=canonical_context)
     result = {
         "id": record.get("id"),
         "path": record.get("path"),

@@ -12,7 +12,11 @@ acceptance, live landing, WIP, and cleanup safeguards.
 After constructing and validating the landing commit, and before advancing any
 selected target or deleting a resource, collect one JSON input with the complete
 selected repository set. Include the canonical receipt repository exactly once;
-each Git common directory may occur once. Example single-repository input:
+each Git common directory may occur once. Contract, amendment and receipt
+verification always use the canonical repository. Each member supplies only its
+own Git refs, worktree, ancestry and WIP observations; companion repositories
+need no receipt copy. The same boundary applies at prepare and at every later
+landing-plan recheck. Example single-repository input:
 
 ```json
 {

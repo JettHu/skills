@@ -25,7 +25,7 @@ def git(repo, *args):
     return run('git', '-C', repo, *args).stdout.strip()
 
 
-def fixture(root, name='one'):
+def fixture(root, name='one', *, with_receipt=True):
     repo = root / name
     repo.mkdir()
     git(repo, 'init', '-qb', 'main')
@@ -42,8 +42,9 @@ def fixture(root, name='one'):
     git(wt, 'commit', '-qam', 'candidate')
     head = git(wt, 'rev-parse', 'HEAD')
     record = repo / '.scratch/feature/solve-records/candidate.md'
-    record.parent.mkdir(parents=True)
-    record.write_text(f'''---
+    if with_receipt:
+        record.parent.mkdir(parents=True)
+        record.write_text(f'''---
 state: open
 outcome: candidate
 tickets:
@@ -55,7 +56,7 @@ head_sha: {head}
 ## Summary
 Implemented app change; validation and requirement audit passed.
 ''')
-    run(sys.executable, HELPER, 'candidate-gate-record', '--repo', repo, '--record', str(record.relative_to(repo)), '--base', 'main', '--checks', 'passed', '--review', 'passed', '--merge', 'ready', '--rollout-config', 'none', '--json')
+        run(sys.executable, HELPER, 'candidate-gate-record', '--repo', repo, '--record', str(record.relative_to(repo)), '--base', 'main', '--checks', 'passed', '--review', 'passed', '--merge', 'ready', '--rollout-config', 'none', '--json')
     member = dict(repo=str(repo), base='main', base_sha=base, head='solve/candidate', head_sha=head,
                   worktree=str(wt), landing_sha=head, ownership={'branch': 'solve-owned', 'worktree': 'solve-owned'},
                   ownership_evidence='Fixture created this branch and worktree for the selected Ticket.',
@@ -102,7 +103,10 @@ class FinalizationTests(unittest.TestCase):
         publication('register')
         publication('promote')
         ticket.write_text(ticket.read_text().replace('Status: ready-for-agent', 'Status: completed'))
+        companion, _, member = fixture(self.root, 'companion', with_receipt=False)
+        self.write_evidence([self.member, member])
         self.prepare()
+        self.assertEqual(self.call('landing-plan', '--target-repo', str(companion))['data']['status'], 'ready')
         old_digest = publication('inspect')['body_digests']['T']
         request = self.root / 'amend.json'
         request.write_text(json.dumps(dict(id='A1', ticket='T', status='approved', approval='Approved scope change',
@@ -111,6 +115,9 @@ class FinalizationTests(unittest.TestCase):
         plan = self.call('landing-plan', check=False)
         self.assertIn('contract amendment', json.dumps(plan))
         self.assertFalse(plan['ok'])
+        companion_plan = self.call('landing-plan', '--target-repo', str(companion), check=False)
+        self.assertFalse(companion_plan['ok'])
+        self.assertIn('contract amendment', json.dumps(companion_plan))
 
     def land(self, member=None):
         m = member or self.member
@@ -124,8 +131,26 @@ class FinalizationTests(unittest.TestCase):
     def dashboard(self):
         return json.loads(run(sys.executable, FACADE, 'solve-record', 'dashboard', '--repo', self.repo).stdout)['data']['buckets']
 
+    def test_companion_landing_uses_only_canonical_receipt(self):
+        other, mirror, member = fixture(self.root, 'companion', with_receipt=False)
+        self.assertFalse((other / self.record.relative_to(self.repo)).exists())
+        self.write_evidence([self.member, member])
+        self.prepare()
+        plan = self.call('landing-plan', '--target-repo', str(other))
+        self.assertEqual(plan['data']['status'], 'ready')
+        # Even an unrelated same-path artifact is never receipt authority.
+        mirror.parent.mkdir(parents=True)
+        mirror.write_text('unrelated companion file\n')
+        self.assertEqual(self.call('landing-plan', '--target-repo', str(other))['data']['status'], 'ready')
+        # Git and WIP checks must still inspect the companion, not the canonical repo.
+        (other / 'app.txt').write_text('user WIP\n')
+        blocked = self.call('landing-plan', '--target-repo', str(other), check=False)
+        self.assertFalse(blocked['ok'])
+        self.assertIn('app.txt', json.dumps(blocked))
+        self.assertEqual((other / 'app.txt').read_text(), 'user WIP\n')
+
     def test_two_repositories_partial_landing_and_retry(self):
-        other, _, member = fixture(self.root, 'two')
+        other, _, member = fixture(self.root, 'two', with_receipt=False)
         self.write_evidence([self.member, member])
         self.prepare()
         self.land()
@@ -250,7 +275,7 @@ class FinalizationTests(unittest.TestCase):
         self.assertFalse(result['ok'])
 
     def test_prepared_landing_plan_rechecks_wip_for_pending_repo(self):
-        _, _, second = fixture(self.root, 'two')
+        _, _, second = fixture(self.root, 'two', with_receipt=False)
         self.write_evidence([self.member, second])
         self.prepare()
         ready = self.call('landing-plan')['data']
