@@ -37,5 +37,9 @@ jobs:
         run: bash tests/maintainer-board.sh
       - name: Test Obsidian workspace
         run: python3 tests/obsidian-workspace.py
+      - name: Test installed Obsidian workspace
+        run: python3 tests/obsidian-workspace-install.py
+      - name: Test Obsidian setup
+        run: python3 tests/obsidian-workspace-setup.py
       - name: Test agent-worktree
         run: tests/agent-worktree.sh
