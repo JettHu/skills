@@ -91,17 +91,25 @@ reason and resources intact.
 This gate binds the root and every delegated executor before changing a target
 worktree, index, or Git ref. A landing plan is read-only evidence, not a write
 permit. Keep one active writer per target through the final check and operation.
+Immediate rechecks and writer coordination are Agent obligations; the helper
+does not provide an atomic merge lock against concurrent external changes.
 
-Classify the exact registered worktree first: user base (including adopted
-worktrees), solve-owned execution, or disposable integration/landing. User bases
+For both stages, classify the exact registered worktree first: user base
+(including adopted worktrees), solve-owned execution, or disposable integration/landing. User bases
 protect all existing tracked and untracked WIP. For execution and disposable
 worktrees, verify resource ownership, writer handoff and provenance of existing
 changes; unknown changes block mutation even in a disposable worktree. Conflicts
 between known committed candidates follow the existing integration rules; they
 are not user WIP and do not authorize discarding unknown changes.
 
-Immediately before mutation, rerun landing-plan against the final validated
-landing SHA and exact target. Compare the live base/head, registered checkout,
+**Before integration writes:** check the planned integration write scope against existing tracked and untracked changes
+before writing. This stage needs neither a candidate receipt nor a final landing
+SHA; do not run landing-plan as a prerequisite to constructing the candidate.
+
+**Before final landing:** once the candidate receipt and validated landing SHA
+exist, rerun landing-plan immediately before changing the target base worktree,
+index or ref, using that final landing SHA and exact target. Compare the live
+base/head, registered checkout,
 final write surface (including rename sources, destinations and directory/file
 collisions), staged/unstaged paths and untracked paths with the handoff evidence.
 Revalidate any drift, including new WIP after planning or a changed landing

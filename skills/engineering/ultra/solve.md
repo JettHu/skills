@@ -460,7 +460,7 @@ Suggested names:
 - integration branch: `solve/<timestamp>-integration`
 - integration worktree: `worktree-solve-<timestamp>-integration`
 
-Before integration writes, verify the assigned worktree role, resource ownership, exclusive writer and provenance of existing changes under [WIP protection](../solve-records/references/candidate-gates.md#wip-protection-and-delegated-landing). Unknown changes block mutation even in disposable worktrees.
+Before integration writes, verify the assigned worktree role, resource ownership, exclusive writer and provenance of existing changes under the **Before integration writes** branch of [WIP protection](../solve-records/references/candidate-gates.md#wip-protection-and-delegated-landing), including tracked/untracked WIP against the planned integration write scope. Unknown changes block mutation even in disposable worktrees. The receipt and final landing SHA are outputs of later stages; the **Before final landing** branch and landing-plan are not integration prerequisites.
 
 Merge or cherry-pick committed, locally validated group branches into integration in dependency order. Each group worktree must be clean before integration starts. For a declared shared-integration sequence, continue from its named shared branch in declared graph order; the final integrate-and-verify Ticket reopens that branch only after contract is completed and runs the full integration validation there.
 
