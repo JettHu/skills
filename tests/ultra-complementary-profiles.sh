@@ -118,7 +118,7 @@ assert serial == [{
 # The portable runbook binds routing to the parsed profile contract.
 required_contract = (
     "take the disposition directly from the profile",
-    "A goal may have only one owner and must run at most once",
+    "A goal has one owner. Reuse its evidence while valid; repeat only the affected scope after changes or findings invalidate it.",
     "suppress the Ultra stage",
     "Missing evidence in conversation context is not, by itself, a trigger",
     "current, traceable to an approved artifact or repository observation",

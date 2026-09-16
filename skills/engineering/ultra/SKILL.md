@@ -1,6 +1,6 @@
 ---
 name: ultra
-description: Multi-agent enhancement wrapper for agent skills and ultra subcommands. Preserves target-native workflows and adds only profile-declared evidence passes, and supports /ultra solve for AFK-ready Ticket execution with outcome receipts. Use for an explicit /ultra invocation, an explicit Ultra wrapper delegation, or a request to add complementary analysis or distinct review to a named skill. Dispatch solve only when the user requests Ticket execution through Ultra; explaining Tickets or reviewing work is not a solve request.
+description: Add complementary analysis or review to a named skill when requested through Ultra or its wrappers. Run /ultra solve only for explicitly requested Ticket execution.
 ---
 
 # Ultra
@@ -21,7 +21,7 @@ This skill is capability-oriented. The workflow describes outcomes; parenthetica
 
 Delegation availability and parallel scheduling are separate. A pass may use a delegated Agent even when it must run serially. When a declared review goal requires an independent lens, available delegation cannot be replaced by root self-review.
 
-If a named tool is unavailable, use the nearest equivalent workflow (serial passes, direct file reads, manual diff inspection) and state the substitution briefly. A missing specific tool is never by itself a blocker.
+If a named tool is unavailable, use an available equivalent that preserves the operation's authority, permissions, and guarantees. Report the substitution. If no such equivalent exists, block only the affected operation and continue independent authorized work.
 
 Fallback examples:
 - Parallel exploration or review -> delegate the same passes serially when delegation is available; use root read/search tools only when delegation is unavailable.
@@ -48,7 +48,7 @@ If the skill has no profile or its Ultra additions are unavailable (grill-me, gr
 
 For every native capability and possible Ultra addition, take the disposition directly from the profile: `target-native`, `ultra-additive`, or `unavailable`. Do not rediscover target ownership from the target runbook at runtime. Target-native stages remain owned by the target and run according to its instructions. Ultra-additive stages are eligible only under their declared trigger. Unavailable stages do not run.
 
-Create a small stage ledger keyed by the profile's evidence goals. A goal may have only one owner and must run at most once. If a target-native stage and a possible Ultra stage would collect the same evidence, keep the target-native stage and suppress the Ultra stage. When the profile has `code_review: ultra-additive`, capture the starting commit and untracked inventory now, before any target writes, using [detect_owned_changes.py](scripts/detect_owned_changes.py):
+Create a small stage ledger keyed by the profile's evidence goals. A goal has one owner. Reuse its evidence while valid; repeat only the affected scope after changes or findings invalidate it. If a target-native stage and a possible Ultra stage would collect the same evidence, keep the target-native stage and suppress the Ultra stage. When the profile has `code_review: ultra-additive`, capture the starting commit and untracked inventory now, before any target writes, using [detect_owned_changes.py](scripts/detect_owned_changes.py):
 
 ```bash
 python3 <ultra-dir>/scripts/detect_owned_changes.py snapshot --repo <repo> --snapshot <new-path-outside-repo>
@@ -91,7 +91,7 @@ These are default exploration roles, not a fixed taxonomy. For tasks with a clea
 
 **When the profile declares an Ultra-additive research pass** — spawn one additional agent only after its objective trigger matches:
 
-- **Industry agent** (with web search): Search for how similar problems are solved elsewhere — established patterns, common pitfalls, design trade-offs. Focus on actionable insights, not surveys, and cite sources when available.
+- **Research agent** (with web search): Answer the unresolved external question that triggered this pass. Prefer primary sources; return the supported answer, source links, and remaining uncertainty.
 
 Within the total cap, adapt the exploration roles to the specific task — don't limit yourself to the default profile template. For example:
 - A debugging task might benefit from a "similar bug patterns" search agent

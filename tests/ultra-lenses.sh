@@ -14,14 +14,14 @@ profiles = (repo / "skills/engineering/ultra/PROFILES.md").read_text(encoding="u
 core_lenses = {
     "Architecture agent": "**Architecture agent** (parallel codebase exploration):",
     "Risk agent": "**Risk agent** (parallel codebase exploration):",
-    "Industry agent": "**Industry agent** (with web search):",
+    "Research agent": "**Research agent** (with web search):",
     "Completeness reviewer": "**Completeness reviewer**:",
     "Consistency reviewer": "**Consistency reviewer**:",
 }
 core_requirements = (
     "When cited `CONTEXT.md` or `docs/adr/` files are absent",
     "patterns to follow",
-    "cite sources when available",
+    "Prefer primary sources; return the supported answer, source links, and remaining uncertainty",
     "Flag only concrete omissions",
     "Flag only real *convention drift*",
 )

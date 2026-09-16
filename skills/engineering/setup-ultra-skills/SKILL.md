@@ -77,11 +77,12 @@ python3 <skill-dir>/scripts/configure.py \
 
 Show the generated shared `docs/agents/ultra-tracker.md`, its selected concrete
 capability document under `docs/agents/ultra-tracker/`, the short managed
-pointer, and any staging ignore entry. Let the user revise the policy before
-applying.
+pointer, and any staging ignore entry. Apply when the requested setup and
+existing configuration determine the policy. Ask before applying only when
+a material policy choice remains unresolved or the user requested preview only.
 
-Completion: the user has reviewed the exact managed contract and the change
-preserves unrelated instruction text.
+Completion: the exact managed diff matches the authorized policy and preserves
+unrelated instruction text; any unresolved policy choice is identified.
 
 ## 4. Apply and verify
 
