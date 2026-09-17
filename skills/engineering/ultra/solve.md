@@ -291,6 +291,8 @@ The root Agent records, without requesting approval, only the selected preparati
 
 #### Bounded Exploration
 
+When the plan introduces or reshapes a capability, interface, data model, helper, or workflow, apply [Existing Capabilities](references/existing-capabilities.md) within this exploration and carry the choice evidence into any enabled Pre-Edit Plan Review. Routine edits use nearby evidence at their existing preparation tier.
+
 Reuse the Design Context and current evidence to identify what still needs answering. When available and permitted by the active runtime, delegate independently answerable questions if doing so is expected to save time or improve quality. Dispatch from the known task boundary rather than completing the same investigation first. Parallelize independent questions; keep dependent work ordered. Choose the number and scope of assignments from the unresolved questions, not a fixed role roster.
 
 Each assignment names the question, relevant source/ref pointers, scope and read/write boundary, and completion evidence. Return concise conclusions with file/symbol locations, relevant contracts, validation paths, and remaining uncertainties. Return conflicting evidence explicitly. Raw search results remain in the worker context; they are not copied into the Ticket, Execution Digest, or Solve Record.
@@ -449,6 +451,8 @@ For implementation groups, pin the group review range against the group branch b
 
 - Spec: compare the committed group diff with the originating Ticket body, acceptance criteria, PRD, or Agent Brief. Flag missing requirements, partial implementations, scope creep, and behavior that appears wrong against the spec.
 - Standards: compare the committed group diff with documented repo standards, project conventions, ADRs, and nearby code patterns. Flag hard violations separately from judgment calls.
+
+For introduced or reshaped capabilities, or overlapping responsibilities found in the diff, apply the review criteria in [Existing Capabilities](references/existing-capabilities.md), consuming the plan evidence and checking the resulting responsibility boundaries.
 
 Also check supporting engineering risks only when relevant to the changed files or risk: side effects and regression risk, test/validation coverage, and dependency or compatibility concerns.
 

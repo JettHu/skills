@@ -17,6 +17,19 @@ This table is the durable ownership contract for profile-driven Ultra runs. The 
 | grill-with-docs | Interview, decision sharpening, and document updates are `target-native`; exploration, research, review, and code review are `unavailable`. | Preserve the target's interactive sequence. | No Ultra addition. | Pass through. | unavailable |
 | handoff | Handoff synthesis is `target-native`; exploration, research, review, and code review are `unavailable`. | No delegation requirement. | No Ultra addition. | Pass through. | unavailable |
 
+## Existing-capability evidence
+
+For `to-spec`, `to-tickets`, and `improve-codebase-architecture`, when a proposed
+artifact introduces or reshapes a capability, interface, data model, helper, or
+workflow, read [Existing Capabilities](references/existing-capabilities.md).
+Include its decision evidence in an already eligible code lens or artifact
+review. Spec review checks the implementation choice; Ticket review checks that
+the approved reuse and migration boundaries survive decomposition; architecture
+review checks the proposed responsibility changes against existing consumers.
+Reuse target-native evidence for the same objective. This reference expands the
+content of an eligible pass, not its trigger: preserve the profile's scheduling,
+stage ownership, and skip conditions.
+
 ## Skill aliases
 
 Resolve aliases once to the canonical profile below; this does not create a new enhancement profile. For invocation, inspect available installed skills: prefer the exact requested name only when its instructions provide the stated capability; otherwise use the installed canonical target. If the requested installation has conflicting semantics, report the conflict instead of silently substituting. If neither compatible target is installed, report the missing canonical dependency and stop target execution. Do not substitute `skill-creator` or another similarly named skill, or install dependencies without authorization. State the requested name, canonical profile, and selected installed target (or missing dependency).
@@ -45,6 +58,7 @@ An eligible Ultra-additive stage may narrow or skip only when current, traceable
 | A target owns unconditional exploration | Run the target-native stage regardless of prior context |
 | A conditional shaping target has no prior exploration, but no objective additive trigger matches | Let the target decide its native exploration; do not add Ultra exploration |
 
-The profile rows above contain the complete normative target conditions and evidence
-goals. Apply the evidence-sufficiency examples only to narrow or cover an eligible
+The profile rows above contain the complete normative target conditions and stage
+ownership. Existing-capability evidence supplies conditional review criteria
+within those eligible evidence goals. Apply the evidence-sufficiency examples only to narrow or cover an eligible
 goal; they never create another trigger or routing rule.
