@@ -25,7 +25,8 @@ for predicate in (
     "narrower-than-required evidence",
     "plan, Execution Digest, delegated summary, manifest, search result, green narrow check, or absence of errors",
     "The audit passes only when every enumerated item has scope-matched proof",
-    "context boundary, or execution limit",
+    "Context compaction alone does not end an Attempt or trigger Claim or receipt mutations",
+    "actually stops the Attempt or transfers responsibility",
     "remains non-candidate",
     "full requirement-to-evidence audit passed, validated, and Post-Execution Review passed",
 ):

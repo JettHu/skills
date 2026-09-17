@@ -340,7 +340,9 @@ Evidence:
 Follow-up:
 ```
 
-Record only a non-obvious decision or deviation that is not settled by the Ticket or source Spec and affects acceptance, observable behavior, compatibility, validation, rollout, or recovery. Do not copy exploration transcripts, raw command output, routine implementation choices, or progress logs into it.
+Record material decisions and deviations when they arise, rather than waiting for a pre-compaction notification. Keep exploration transcripts, raw command output, routine implementation choices, and progress logs out of the Digest.
+
+When the user requests a pause or handoff, or a known interruption requires resumable context, keep a compact resume entry in the same Digest under the creation rules above: unfinished work, evidence pointers, facts needing live revalidation, and the next action. Reference the canonical Ticket and resource metadata instead of duplicating them. Update this entry when the recovery context changes; it is not a per-turn reporting requirement.
 
 When the same retained branch, worktree, and recovery context resume, reopen and update the same Digest path. At any meaningful outcome handoff, distill only the durable conclusion or deviation needed by the next owner into the concise Summary handoff request; do not author fixed receipt sections. Retain the Digest only while it has resume value or repository policy requires it; otherwise delete it after that durable transfer. If a required Digest cannot be written durably, keep the same compact fields in the active conversation and report the reduced interruption-recovery guarantee.
 
@@ -430,6 +432,10 @@ For each Ticket in a group:
 4. Verify each acceptance criterion. In a declared shared-integration sequence, a migration batch verifies its scoped mechanical acceptance; only the named final integrate-and-verify Ticket verifies the full integrated green result.
 5. Record validation evidence as a PR, commit, CI/check, tracker pointer, or final solve summary entry.
 6. Commit verified work to the group branch before leaving the group worktree.
+
+When execution establishes a non-obvious project fact that future tasks will reuse, update the project's existing documentation or helper only within the approved scope and assigned write boundary. Include supporting evidence and applicability conditions; keep task-local progress and unverified hypotheses in the Attempt context. Such edits follow the same commit, review, and validation flow as other changes.
+
+If the fact is not already documented and recording it requires a new documentation convention or broader authorization, include a concise candidate and suggested destination in the existing handoff or final summary. This does not block otherwise complete work. When no reusable fact emerges, no additional scan, artifact, or report is required.
 
 Commit rules:
 
@@ -539,7 +545,9 @@ Apply the same Repairability and Decision Ownership rules as group review. Fix e
 
 Post-Execution Review is complete only when the root's full requirement-to-evidence audit passes, no fixable findings remain, unresolved state-relevant residue is routed to the Ticket or handoff, and every record-worthy Digest item needed by the next owner is ready for the concise Summary request. The root owns this conclusion and the semantic outcome; the adapter owns the Ticket transition and receipt write, while delegated reviews supply evidence but cannot advance either boundary.
 
-If an interruption, context boundary, or execution limit arrives before this pass, preserve the same unabridged acceptance boundary. Meaningful unfinished work follows the existing recovery/resume handoff and remains non-candidate; a fully cleaned transient Attempt with no recovery value remains recordless. Resumption re-reads the complete Ticket and approved source Spec to reconstruct this same assigned acceptance boundary, verifies the live head, and refreshes stale evidence rather than treating the prior partial audit as completion.
+Context compaction alone does not end an Attempt or trigger Claim or receipt mutations. Continue from the existing evidence pointers and restore missing context. If an interruption or execution limit actually stops the Attempt or transfers responsibility, preserve the same unabridged acceptance boundary and use the existing Outcome Finalization rules: meaningful unfinished work remains non-candidate; a fully cleaned transient Attempt with no recovery value remains recordless.
+
+On resumption, re-read the complete effective Ticket contract and applicable approved source Spec, verify live Claim/worktree/head identity, and refresh stale evidence. A resume summary locates the work; it does not replace the acceptance boundary, current authorization, or live gates.
 
 ### 8.5 Outcome Finalization
 
